@@ -18,11 +18,14 @@ public class PlayerSetting {
     public static final int MPV = 3;
     public static final int NONE = -1;
     /**
-     * 内核优先级顺序：EXO → IJK → MPV → 系统。下标是位次，元素是内核常量。
+     * 内核优先级顺序：EXO → IJK → 系统。下标是位次，元素是内核常量。
      * 常量数值本身是持久化值（也是 select_player_kernel 等数组的下标），不能重排，
      * 所以顺序只在这张表里表达：选择菜单按它排列，播放失败的内核回退也按它推进。
+     * <p>
+     * MPV 已停用（见 {@link #isPlayer(int)}）：常量 {@link #MPV} 仅为兼容旧持久化值保留，
+     * 它不在本表内，因此既不会出现在内核选择菜单，也不会被手动轮换或失败回退选中。
      */
-    public static final int[] KERNEL_ORDER = {EXO, IJK, MPV, SYSTEM};
+    public static final int[] KERNEL_ORDER = {EXO, IJK, SYSTEM};
     public static final int RENDER_SURFACE = 0;
     public static final int RENDER_TEXTURE = 1;
     public static final int MPV_RENDER_OPENGL = 0;
@@ -85,6 +88,11 @@ public class PlayerSetting {
 
     public static int getPlayer() {
         int player = Prefers.getInt("player", EXO);
+        // MPV 内核已停用：旧版本残留的持久化值一律回落 EXO，并顺手纠正存储，避免每次都读到脏值。
+        if (player == MPV) {
+            putPlayer(EXO);
+            return EXO;
+        }
         if (isPlayer(player)) return player;
         putPlayer(EXO);
         return EXO;
@@ -177,8 +185,15 @@ public class PlayerSetting {
         Prefers.put("audio_background_light_effect", enabled);
     }
 
+    /**
+     * 是否为当前版本可用的内核。
+     * <p>
+     * MPV 已停用：常量 {@link #MPV} 仍然保留，因为历史记录、旧 Intent 以及按内核分键的设置里
+     * 仍可能出现这个值；但它不再算「可用内核」，于是 sanitizePlayer / resolvePlayer / putActivePlayer
+     * 这些既有归一入口会把它统一压回 EXO，不必在每个调用点单独判断。
+     */
     public static boolean isPlayer(int player) {
-        return player == EXO || player == IJK || player == SYSTEM || player == MPV;
+        return player == EXO || player == IJK || player == SYSTEM;
     }
 
     public static int sanitizePlayer(int player) {

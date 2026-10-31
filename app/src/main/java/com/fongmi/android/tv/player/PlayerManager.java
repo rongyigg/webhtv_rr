@@ -4150,8 +4150,10 @@ public void resetTrack(int type) {
 
     private static int playerTypeForIjkRuntimePath(
             IjkRuntimeProfilePolicy.Path path) {
+        // MPV 内核已停用：IJK 运行期回退策略仍会给出 MPV 这一档位，这里直接落到 EXO，
+        // 否则会出现 playerType=MPV 与引擎类型不一致（buildEngine 已把 MPV 建成 Exo 引擎）。
         if (path == IjkRuntimeProfilePolicy.Path.MPV) {
-            return PlayerSetting.MPV;
+            return PlayerSetting.EXO;
         }
         if (path == IjkRuntimeProfilePolicy.Path.EXO) {
             return PlayerSetting.EXO;
@@ -5935,6 +5937,9 @@ public void resetTrack(int type) {
     }
 
     private PlayerEngine buildEngine(int type, int decode) {
+        // MPV 内核已停用：这里是最后一道归一。任何来源的 MPV（旧配置、旧历史、内部自动路由）
+        // 都先压回 EXO 再建引擎，避免出现 playerType=MPV 而引擎实际是 ExoPlayerEngine 的错位状态。
+        type = PlayerSetting.sanitizePlayer(type);
         // Every engine build discards the AudioSink that carried the PCM tap, so the next
         // one deserves a fresh attempt budget. rebuildAudioPipeline() itself does not come
         // through here, which is what keeps the cap meaningful.
@@ -5944,13 +5949,11 @@ public void resetTrack(int type) {
             mediaSignals.detachPipeline();
             adAudioRuntime.suspend();
         }
-        PlayerEngine next = switch (type) {
+        return switch (type) {
             case PlayerSetting.IJK -> new IjkPlayerEngine(decode, listener);
             case PlayerSetting.SYSTEM -> new SystemPlayerEngine(decode, listener);
-            case PlayerSetting.MPV -> new MpvPlayerEngine(decode, lutAllowed, listener, this::onMpvVideoSizeProbed);
             default -> new ExoPlayerEngine(decode, listener, mediaSignals, mediaClock);
         };
-        return next;
     }
 
     private final class AdAudioPlaybackPort implements AdAudioRuntimeController.PlaybackPort {

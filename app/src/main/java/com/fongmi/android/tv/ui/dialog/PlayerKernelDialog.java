@@ -45,7 +45,13 @@ public final class PlayerKernelDialog {
         ChoiceDialog.showSingleNoCancel(fragment, R.string.player_kernel, items, PlayerSetting.kernelRank(current), which -> notifySelected(kernel.length, current, which, listener, external));
     }
 
-    /** 内核标签，按 EXO → IJK → MPV → 系统 的优先级顺序排列。 */
+    /**
+     * 内核标签，按 EXO → IJK → 系统 的优先级顺序排列。
+     * <p>
+     * 列表完全由 {@link PlayerSetting#KERNEL_ORDER} 推导，MPV 已停用且不在该表中，
+     * 所以这里不需要再叠一层过滤：多加一层会让「列表下标 → 内核常量」的映射错位，
+     * 而调用方（如 {@link PlayerSetting#kernelAt(int)}）正是按常数表下标取内核的。
+     */
     public static String[] kernels(Resources resources) {
         return PlayerSetting.orderKernels(resources.getStringArray(R.array.select_player_kernel));
     }

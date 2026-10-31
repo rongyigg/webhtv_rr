@@ -27,18 +27,19 @@ public class PlayerSettingTest {
     @Test
     public void nextPlayer_cyclesInKernelPriorityOrder() {
         assertEquals(PlayerSetting.IJK, PlayerSetting.nextPlayer(PlayerSetting.EXO));
-        assertEquals(PlayerSetting.MPV, PlayerSetting.nextPlayer(PlayerSetting.IJK));
-        assertEquals(PlayerSetting.SYSTEM, PlayerSetting.nextPlayer(PlayerSetting.MPV));
+        assertEquals(PlayerSetting.SYSTEM, PlayerSetting.nextPlayer(PlayerSetting.IJK));
         assertEquals(PlayerSetting.EXO, PlayerSetting.nextPlayer(PlayerSetting.SYSTEM));
+        // 已停用的 MPV 读进来先归一为 EXO，再按顺序前进，不会再被轮换到。
+        assertEquals(PlayerSetting.IJK, PlayerSetting.nextPlayer(PlayerSetting.MPV));
     }
 
     @Test
     public void kernelOrder_rankAndPositionRoundTrip() {
-        assertArrayEquals(new int[]{PlayerSetting.EXO, PlayerSetting.IJK, PlayerSetting.MPV, PlayerSetting.SYSTEM}, PlayerSetting.KERNEL_ORDER);
+        assertArrayEquals(new int[]{PlayerSetting.EXO, PlayerSetting.IJK, PlayerSetting.SYSTEM}, PlayerSetting.KERNEL_ORDER);
         assertEquals(0, PlayerSetting.kernelRank(PlayerSetting.EXO));
         assertEquals(1, PlayerSetting.kernelRank(PlayerSetting.IJK));
-        assertEquals(2, PlayerSetting.kernelRank(PlayerSetting.MPV));
-        assertEquals(3, PlayerSetting.kernelRank(PlayerSetting.SYSTEM));
+        assertEquals(2, PlayerSetting.kernelRank(PlayerSetting.SYSTEM));
+        assertEquals(0, PlayerSetting.kernelRank(PlayerSetting.MPV));
         for (int rank = 0; rank < PlayerSetting.kernelCount(); rank++) {
             assertEquals(rank, PlayerSetting.kernelRank(PlayerSetting.kernelAt(rank)));
         }
@@ -52,8 +53,16 @@ public class PlayerSettingTest {
 
     @Test
     public void orderKernels_reordersConstantIndexedLabels() {
+        // 标签数组仍以内核常量作下标：MPV 的标签留在第 3 位，但不再进入菜单。
         String[] labels = {"EXO", "IJK", "系统", "MPV"};
-        assertArrayEquals(new String[]{"EXO", "IJK", "MPV", "系统"}, PlayerSetting.orderKernels(labels));
+        assertArrayEquals(new String[]{"EXO", "IJK", "系统"}, PlayerSetting.orderKernels(labels));
+    }
+
+    @Test
+    public void mpvKernelIsRetiredAndFallsBackToExo() {
+        assertFalse(PlayerSetting.isPlayer(PlayerSetting.MPV));
+        assertEquals(PlayerSetting.EXO, PlayerSetting.sanitizePlayer(PlayerSetting.MPV));
+        assertEquals(PlayerSetting.EXO, PlayerSetting.sanitizePlayer(PlayerSetting.NONE));
     }
 
     @Test
