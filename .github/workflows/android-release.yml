@@ -185,13 +185,11 @@ jobs:
           fi
           mkdir -p app/signing
           printf '%s' "$KS_BASE64" | base64 --decode > app/signing/release.jks
-          {
-            echo "storeFile=$GITHUB_WORKSPACE/app/signing/release.jks"
-            echo "keyAlias=$ALIAS"
-            echo "storePassword=$STORE_PASSWORD"
-            echo "keyPassword=$KEY_PASS"
-          } > local.properties
-          echo "Release signing configured"
+          export ORG_GRADLE_PROJECT_RELEASE_STORE_FILE="$GITHUB_WORKSPACE/app/signing/release.jks"
+          export ORG_GRADLE_PROJECT_RELEASE_STORE_PASSWORD="$STORE_PASSWORD"
+          export ORG_GRADLE_PROJECT_RELEASE_KEY_ALIAS="$ALIAS"
+          export ORG_GRADLE_PROJECT_RELEASE_KEY_PASSWORD="$KEY_PASS"
+          echo "Release signing configured via Gradle properties"
 
       - name: Build four release APKs
         env:
