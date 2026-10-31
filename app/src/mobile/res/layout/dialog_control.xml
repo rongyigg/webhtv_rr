@@ -53,11 +53,6 @@
                 android:orientation="horizontal">
 
                 <com.google.android.material.textview.MaterialTextView
-                    android:id="@+id/lut"
-                    style="@style/ControlSheetButton"
-                    android:text="@string/play_lut" />
-
-                <com.google.android.material.textview.MaterialTextView
                     android:id="@+id/reset"
                     style="@style/ControlSheetButton"
                     android:text="@string/play_reset" />
@@ -109,12 +104,6 @@
                     android:id="@+id/codecCapability"
                     style="@style/ControlSheetButton"
                     android:text="@string/codec_capability_short" />
-
-                <com.google.android.material.textview.MaterialTextView
-                    android:id="@+id/panDiagnostic"
-                    style="@style/ControlSheetButton"
-                    android:contentDescription="@string/pan_diagnostic_title"
-                    android:text="@string/pan_diagnostic_entry" />
 
             </androidx.appcompat.widget.LinearLayoutCompat>
 

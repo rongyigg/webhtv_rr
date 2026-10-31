@@ -50,9 +50,6 @@ public interface VodPlayerUiHost {
     default void cycleScale() {
     }
 
-    default void showLut() {
-    }
-
     default void refreshPlayback() {
     }
 

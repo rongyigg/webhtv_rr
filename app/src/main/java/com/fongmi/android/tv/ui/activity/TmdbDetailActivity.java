@@ -224,8 +224,6 @@ import com.fongmi.android.tv.utils.Traffic;
 import com.fongmi.android.tv.utils.Util;
 import com.fongmi.android.tv.utils.Clock;
 import com.fongmi.android.tv.utils.FileChooser;
-import com.fongmi.android.tv.player.lut.LutPreset;
-import com.fongmi.android.tv.player.lut.LutStore;
 import com.fongmi.android.tv.player.PlayerManager;
 import com.fongmi.android.tv.web.WebHomeInlineVodStore;
 import com.google.android.flexbox.FlexboxLayout;
@@ -290,9 +288,6 @@ public class TmdbDetailActivity extends PlaybackActivity implements TrackDialog.
     private static final int STANDALONE_MOBILE_EPISODE_CARD_PAGE_MAX_SIZE = 36;
     private static final long LEANBACK_FUSION_EXIT_DISPLAY_SUPPRESS_MS = 800;
     private static final Pattern SOURCE_SEASON = Pattern.compile("(?i)(?:第\\s*([零〇一二三四五六七八九十两0-9]+)\\s*[季部]|season\\s*([0-9]{1,2})|s([0-9]{1,2})(?:[-._\\s]*e[0-9]{1,3})?)");
-
-    private ActivityResultLauncher<Intent> inlineLutDir;
-    private ActivityResultLauncher<Intent> inlineLutFile;
 
     private final TmdbService tmdbService = new TmdbService();
     private final Task.Scope detailTasks = new Task.Scope(Task.executor());
@@ -400,7 +395,6 @@ public class TmdbDetailActivity extends PlaybackActivity implements TrackDialog.
     private boolean inlinePauseInfo;
     private boolean inlinePlaybackReconnectPending;
     private boolean savingTmdbPhoto;
-    private boolean pendingInlineLutImport;
     private PlayerGesture inlineGestureDetector;
     private VodPlayerUiController inlinePlayerUi;
     private Clock inlineClock;
@@ -1038,42 +1032,7 @@ public class TmdbDetailActivity extends PlaybackActivity implements TrackDialog.
         insets.setAppearanceLightNavigationBars(lightBars);
     }
 
-    private void initInlineLutLaunchers() {
-        inlineLutDir = registerForActivityResult(new ActivityResultContracts.StartActivityForResult(), result -> {
-            if (result.getResultCode() != Activity.RESULT_OK || result.getData() == null || result.getData().getData() == null) return;
-            LutStore.setUserDir(result.getData().getData(), result.getData().getFlags());
-            Notify.show(R.string.lut_directory_selected);
-            binding.lutQuick.refreshList();
-            if (pendingInlineLutImport) {
-                pendingInlineLutImport = false;
-                chooseInlineLutFile();
-            }
-        });
-
-        inlineLutFile = registerForActivityResult(new ActivityResultContracts.StartActivityForResult(), result -> {
-            if (result.getResultCode() != Activity.RESULT_OK || result.getData() == null || result.getData().getData() == null) return;
-            String path = FileChooser.getPathFromUri(result.getData().getData());
-            if (TextUtils.isEmpty(path)) {
-                Notify.show(R.string.lut_import_failed);
-                return;
-            }
-            detailTasks.submit(() -> {
-                try {
-                    LutPreset preset = LutStore.importFile(path);
-                    App.post(() -> {
-                        Notify.show(R.string.lut_imported);
-                        binding.lutQuick.selectImported(preset, player(), binding.exo, this::onInlineLutChanged);
-                    });
-                } catch (Exception e) {
-                    if (SpiderDebug.isEnabled()) SpiderDebug.log("lut", "import failed path=%s error=%s", path, e.getMessage());
-                    App.post(() -> Notify.show(Notify.getError(R.string.lut_import_failed, e)));
-                }
-            });
-        });
-    }
-
     private void initFusionPlayer() {
-        initInlineLutLaunchers();
         inlinePlayerUi = new VodPlayerUiController(new VodPlayerUiHost() {
             @Override
             public PlayerManager player() {
@@ -1139,11 +1098,6 @@ public class TmdbDetailActivity extends PlaybackActivity implements TrackDialog.
             @Override
             public void cycleScale() {
                 TmdbDetailActivity.this.cycleInlineScale();
-            }
-
-            @Override
-            public void showLut() {
-                TmdbDetailActivity.this.onInlineLut();
             }
 
             @Override
@@ -1318,7 +1272,6 @@ public class TmdbDetailActivity extends PlaybackActivity implements TrackDialog.
         detailActionView(R.id.decode, View.class).setOnClickListener(guarded(this::toggleInlineDecode));
         detailActionView(R.id.playParams, View.class).setOnClickListener(guarded(this::toggleInlinePlayParams));
         detailActionView(R.id.codecCapability, View.class).setOnClickListener(guarded(this::showInlineCodecCapability));
-        detailActionView(R.id.lut, View.class).setOnClickListener(guarded(this::onInlineLut));
         detailActionView(R.id.speed, View.class).setOnClickListener(guarded(this::changeInlineSpeed));
         detailActionView(R.id.speed, View.class).setOnLongClickListener(view -> resetInlineSpeed());
         detailActionView(R.id.scale, View.class).setOnClickListener(guarded(this::cycleInlineScale));
@@ -1490,7 +1443,6 @@ public class TmdbDetailActivity extends PlaybackActivity implements TrackDialog.
         binding.playerCodecCapability.setNextFocusUpId(R.id.playerCodecCapability);
         binding.playerSpeed.setNextFocusUpId(R.id.playerSpeed);
         binding.playerScale.setNextFocusUpId(R.id.playerScale);
-        binding.playerLut.setNextFocusUpId(R.id.playerLut);
         binding.playerQuality.setNextFocusUpId(R.id.playerQuality);
         binding.playerParse.setNextFocusUpId(R.id.playerParse);
         binding.playerTextTrack.setNextFocusUpId(R.id.playerTextTrack);
@@ -1511,7 +1463,7 @@ public class TmdbDetailActivity extends PlaybackActivity implements TrackDialog.
 
     private void setupHorizontalFocusChain() {
         // 按钮顺序：Next → Prev → Episodes → Refresh → ChangeSource → Fullscreen →
-        // External → Decode → PlayParams → Speed → Scale → Quality → Lut → Parse →
+        // External → Decode → PlayParams → Speed → Scale → Quality → Parse →
         // TextTrack → AudioTrack → VideoTrack → Opening → Ending → Danmaku → AdFeedback →
         // Chapter → Display → Repeat
 
@@ -1520,7 +1472,7 @@ public class TmdbDetailActivity extends PlaybackActivity implements TrackDialog.
             binding.playerRefresh, binding.playerChangeSource, binding.playerSearch, binding.playerFullscreenAction,
             binding.playerExternal, binding.playerDecode, binding.playerPlayParams,
             binding.playerSpeed, binding.playerScale, binding.playerQuality,
-            binding.playerLut, binding.playerParse, binding.playerTextTrack,
+            binding.playerParse, binding.playerTextTrack,
             binding.playerAudioTrack, binding.playerVideoTrack, binding.playerOpening,
             binding.playerEnding, binding.playerDanmaku, binding.playerAdFeedback,
             binding.playerChapter,
@@ -1562,7 +1514,6 @@ public class TmdbDetailActivity extends PlaybackActivity implements TrackDialog.
         setupInlineControl(binding.playerCodecCapability);
         setupInlineControl(binding.playerSpeed);
         setupInlineControl(binding.playerScale);
-        setupInlineControl(binding.playerLut);
         setupInlineControl(binding.playerRefresh);
         setupInlineControl(binding.playerChangeSource);
         setupInlineControl(binding.playerSearch);
@@ -1598,7 +1549,6 @@ public class TmdbDetailActivity extends PlaybackActivity implements TrackDialog.
         binding.playerCodecCapability.setTextColor(white);
         binding.playerSpeed.setTextColor(white);
         binding.playerScale.setTextColor(white);
-        binding.playerLut.setTextColor(white);
         binding.playerRepeat.setTextColor(white);
         binding.playerDisplay.setTextColor(white);
         binding.playerQuality.setTextColor(white);
@@ -7662,7 +7612,6 @@ public class TmdbDetailActivity extends PlaybackActivity implements TrackDialog.
         setButtonEnabled(binding.playerDisplay, hasPlayer);
         setButtonEnabled(binding.playerDecode, hasPlayer);
         setButtonEnabled(binding.playerPlayParams, hasPlayer);
-        setButtonEnabled(binding.playerLut, hasPlayer);
         setButtonEnabled(binding.playerTextTrack, hasPlayer);
         setButtonEnabled(binding.playerAudioTrack, hasPlayer);
         setButtonEnabled(binding.playerVideoTrack, hasPlayer);
@@ -7725,7 +7674,6 @@ public class TmdbDetailActivity extends PlaybackActivity implements TrackDialog.
         binding.playerCodecCapability.setTextColor(white);
         binding.playerSpeed.setTextColor(white);
         binding.playerScale.setTextColor(white);
-        binding.playerLut.setTextColor(white);
         binding.playerRepeat.setTextColor(white);
         binding.playerDisplay.setTextColor(white);
         binding.playerQuality.setTextColor(white);
@@ -7771,7 +7719,6 @@ public class TmdbDetailActivity extends PlaybackActivity implements TrackDialog.
         buttons.put(PlayerButtonSetting.SPEED, binding.playerSpeed);
         buttons.put(PlayerButtonSetting.SCALE, binding.playerScale);
         buttons.put(PlayerButtonSetting.QUALITY, binding.playerQuality);
-        buttons.put(PlayerButtonSetting.LUT, binding.playerLut);
         buttons.put(PlayerButtonSetting.PARSE, binding.playerParse);
         buttons.put(PlayerButtonSetting.TEXT, binding.playerTextTrack);
         buttons.put(PlayerButtonSetting.AUDIO, binding.playerAudioTrack);
@@ -7795,7 +7742,6 @@ public class TmdbDetailActivity extends PlaybackActivity implements TrackDialog.
         buttons.put(PlayerButtonSetting.DECODE, detailActionView(R.id.decode, View.class));
         buttons.put(PlayerButtonSetting.PLAY_PARAMS, detailActionView(R.id.playParams, View.class));
         buttons.put(PlayerButtonSetting.CODEC_CAPABILITY, detailActionView(R.id.codecCapability, View.class));
-        buttons.put(PlayerButtonSetting.LUT, detailActionView(R.id.lut, View.class));
         buttons.put(PlayerButtonSetting.SPEED, detailActionView(R.id.speed, View.class));
         buttons.put(PlayerButtonSetting.SCALE, detailActionView(R.id.scale, View.class));
         buttons.put(PlayerButtonSetting.QUALITY, detailActionView(R.id.actionQuality, View.class));
@@ -7972,10 +7918,6 @@ public class TmdbDetailActivity extends PlaybackActivity implements TrackDialog.
         return detailControlRoot == null ? null : detailControlRoot.findViewById(id);
     }
 
-    public TextView inlineControlDialogLutView() {
-        return binding.playerLut;
-    }
-
     public PlayerManager inlineControlDialogPlayer() {
         return player();
     }
@@ -7994,10 +7936,6 @@ public class TmdbDetailActivity extends PlaybackActivity implements TrackDialog.
 
     public void inlineControlDialogParse(Parse item) {
         changeInlineParse(item);
-    }
-
-    public void inlineControlDialogLut() {
-        onInlineLut();
     }
 
     public void inlineControlDialogTrack(int type) {
@@ -8380,262 +8318,6 @@ public class TmdbDetailActivity extends PlaybackActivity implements TrackDialog.
         return TextUtils.isEmpty(episodeTitle) || TextUtils.equals(name, episodeTitle)
                 ? name : getString(R.string.detail_title, name, episodeTitle);
     }
-
-    private void onInlineLut() {
-        if (service() == null || player().isEmpty()) {
-            Notify.show("播放器未就绪");
-            return;
-        }
-        binding.lutQuick.toggle(player(), binding.exo, this::onInlineLutChanged, new com.fongmi.android.tv.ui.custom.LutQuickPanel.ImportCallback() {
-            @Override
-            public void onImportLut() {
-                onInlineLutImport();
-            }
-
-            @Override
-            public void onSelectLutDir() {
-                onInlineLutDir();
-            }
-        });
-        focusInlineLutQuickIfVisible();
-    }
-
-    private void onInlineLutChanged() {
-        // LUT变更后无需特殊处理，LutQuickPanel会自动应用
-    }
-
-    private void focusInlineLutQuickIfVisible() {
-        binding.lutQuick.post(this::focusInlineLutQuickContent);
-        binding.lutQuick.postDelayed(this::focusInlineLutQuickContent, 220);
-        binding.lutQuick.postDelayed(this::focusInlineLutQuickContent, 420);
-    }
-
-    private boolean focusInlineLutQuickContent() {
-        if (!isVisible(binding.lutQuick)) return false;
-        View focus = getCurrentFocus();
-        RecyclerView recycler = findRecyclerView(binding.lutQuick);
-        if (focus != null && isChildOf(binding.lutQuick, focus) && focus != recycler) return true;
-        if (binding.lutQuick.focusSelectedEntry()) return true;
-        if (focusRecyclerItem(recycler)) return true;
-        return focusFirstChild(binding.lutQuick);
-    }
-
-    private RecyclerView findRecyclerView(View view) {
-        if (view instanceof RecyclerView recycler) return recycler;
-        if (!(view instanceof ViewGroup group)) return null;
-        for (int i = 0; i < group.getChildCount(); i++) {
-            RecyclerView recycler = findRecyclerView(group.getChildAt(i));
-            if (recycler != null) return recycler;
-        }
-        return null;
-    }
-
-    private boolean dispatchInlineLutQuickKey(KeyEvent event) {
-        if (KeyUtil.isEnterKey(event)) return dispatchInlineLutQuickEnter(event);
-        if (isInlineLutQuickDirectionKey(event)) return dispatchInlineLutQuickDirection(event);
-        if (KeyUtil.isActionDown(event)) focusInlineLutQuickContent();
-        super.dispatchKeyEvent(event);
-        if (KeyUtil.isActionDown(event)) {
-            View focus = getCurrentFocus();
-            if (focus == null || !isChildOf(binding.lutQuick, focus)) focusInlineLutQuickContent();
-        }
-        return true;
-    }
-
-    private boolean isInlineLutQuickDirectionKey(KeyEvent event) {
-        return KeyUtil.isUpKey(event) || KeyUtil.isDownKey(event) || KeyUtil.isLeftKey(event) || KeyUtil.isRightKey(event);
-    }
-
-    private boolean dispatchInlineLutQuickDirection(KeyEvent event) {
-        if (!KeyUtil.isActionDown(event)) return true;
-        RecyclerView recycler = findRecyclerView(binding.lutQuick);
-        View focus = getCurrentFocus();
-        if (recycler != null && (focus == recycler || isChildOf(recycler, focus)) && moveInlineLutQuickRecycler(recycler, event)) return true;
-        if (focus == null || !isChildOf(binding.lutQuick, focus) || focus == recycler) {
-            focusInlineLutQuickContent();
-            focus = getCurrentFocus();
-        }
-        if (focus != null && isChildOf(binding.lutQuick, focus) && moveInlineLutQuickFocus(focus, event)) return true;
-        if (recycler != null && KeyUtil.isDownKey(event) && focusRecyclerItem(recycler)) return true;
-        focusInlineLutQuickContent();
-        return true;
-    }
-
-    private boolean moveInlineLutQuickRecycler(RecyclerView recycler, KeyEvent event) {
-        if (!KeyUtil.isUpKey(event) && !KeyUtil.isDownKey(event)) return false;
-        RecyclerView.Adapter<?> adapter = recycler.getAdapter();
-        if (adapter == null || adapter.getItemCount() <= 0) return false;
-        int current = getRecyclerFocusPosition(recycler);
-        if (current == RecyclerView.NO_POSITION) return binding.lutQuick.focusSelectedEntry();
-        int next = current + (KeyUtil.isDownKey(event) ? 1 : -1);
-        if (next < 0 || next >= adapter.getItemCount()) return false;
-        return focusRecyclerPosition(recycler, next);
-    }
-
-    private int getRecyclerFocusPosition(RecyclerView recycler) {
-        View child = getRecyclerDirectChild(recycler, getCurrentFocus());
-        return child == null ? RecyclerView.NO_POSITION : recycler.getChildAdapterPosition(child);
-    }
-
-    private View getRecyclerDirectChild(RecyclerView recycler, View focus) {
-        for (View view = focus; view != null && view != recycler; ) {
-            if (view.getParent() == recycler) return view;
-            if (!(view.getParent() instanceof View next)) return null;
-            view = next;
-        }
-        return null;
-    }
-
-    private boolean moveInlineLutQuickFocus(View focus, KeyEvent event) {
-        List<View> focusables = new ArrayList<>();
-        collectInlineLutQuickFocusables(binding.lutQuick, focusables);
-        View target = findInlineLutQuickFocusTarget(focus, focusables, event);
-        return target != null && target.requestFocus();
-    }
-
-    private void collectInlineLutQuickFocusables(View view, List<View> focusables) {
-        if (view == null || view.getVisibility() != View.VISIBLE || !view.isEnabled()) return;
-        if (view instanceof RecyclerView recycler) {
-            for (int i = 0; i < recycler.getChildCount(); i++) collectInlineLutQuickFocusables(recycler.getChildAt(i), focusables);
-            return;
-        }
-        if (view instanceof ViewGroup group) {
-            for (int i = 0; i < group.getChildCount(); i++) collectInlineLutQuickFocusables(group.getChildAt(i), focusables);
-            return;
-        }
-        if (view.isFocusable()) focusables.add(view);
-    }
-
-    private View findInlineLutQuickFocusTarget(View focus, List<View> focusables, KeyEvent event) {
-        Rect current = new Rect();
-        if (focus == null || !focus.getGlobalVisibleRect(current)) return null;
-        View target = null;
-        long bestScore = Long.MAX_VALUE;
-        for (View item : focusables) {
-            if (item == focus) continue;
-            Rect candidate = new Rect();
-            if (!item.getGlobalVisibleRect(candidate) || !isInlineLutQuickFocusCandidate(current, candidate, event)) continue;
-            long score = scoreInlineLutQuickFocusCandidate(current, candidate, event);
-            if (score < bestScore) {
-                bestScore = score;
-                target = item;
-            }
-        }
-        return target;
-    }
-
-    private boolean isInlineLutQuickFocusCandidate(Rect current, Rect candidate, KeyEvent event) {
-        int dx = candidate.centerX() - current.centerX();
-        int dy = candidate.centerY() - current.centerY();
-        if (KeyUtil.isLeftKey(event)) return dx < 0 && isSameInlineLutQuickFocusRow(current, candidate);
-        if (KeyUtil.isRightKey(event)) return dx > 0 && isSameInlineLutQuickFocusRow(current, candidate);
-        if (KeyUtil.isUpKey(event)) return dy < 0;
-        if (KeyUtil.isDownKey(event)) return dy > 0;
-        return false;
-    }
-
-    private boolean isSameInlineLutQuickFocusRow(Rect current, Rect candidate) {
-        return Math.abs(candidate.centerY() - current.centerY()) <= Math.max(current.height(), candidate.height());
-    }
-
-    private long scoreInlineLutQuickFocusCandidate(Rect current, Rect candidate, KeyEvent event) {
-        long dx = Math.abs(candidate.centerX() - current.centerX());
-        long dy = Math.abs(candidate.centerY() - current.centerY());
-        long primary = KeyUtil.isLeftKey(event) || KeyUtil.isRightKey(event) ? dx : dy;
-        long secondary = KeyUtil.isLeftKey(event) || KeyUtil.isRightKey(event) ? dy : dx;
-        return primary * 1000 + secondary;
-    }
-
-    private boolean dispatchInlineLutQuickEnter(KeyEvent event) {
-        if (KeyUtil.isActionDown(event)) {
-            focusInlineLutQuickContent();
-            return true;
-        }
-        if (!KeyUtil.isActionUp(event)) return true;
-        View focus = getCurrentFocus();
-        if (focus == null || !isChildOf(binding.lutQuick, focus) || focus instanceof RecyclerView) {
-            if (!focusInlineLutQuickContent()) return true;
-            focus = getCurrentFocus();
-        }
-        if (focus != null && isChildOf(binding.lutQuick, focus) && focus.isEnabled()) focus.performClick();
-        return true;
-    }
-
-    private boolean focusRecyclerItem(RecyclerView recycler) {
-        return focusRecyclerPosition(recycler, 0);
-    }
-
-    private boolean focusRecyclerPosition(RecyclerView recycler, int position) {
-        if (recycler == null || recycler.getVisibility() != View.VISIBLE || !recycler.isEnabled()) return false;
-        RecyclerView.Adapter<?> adapter = recycler.getAdapter();
-        if (adapter == null || adapter.getItemCount() <= 0) return false;
-        if (position < 0 || position >= adapter.getItemCount()) return false;
-        recycler.scrollToPosition(position);
-        RecyclerView.ViewHolder holder = recycler.findViewHolderForAdapterPosition(position);
-        if (holder != null && focusFirstChild(holder.itemView)) return true;
-        for (int i = 0; i < recycler.getChildCount(); i++) {
-            View child = recycler.getChildAt(i);
-            if (recycler.getChildAdapterPosition(child) == position && focusFirstChild(child)) return true;
-        }
-        recycler.post(() -> {
-            RecyclerView.ViewHolder next = recycler.findViewHolderForAdapterPosition(position);
-            if (next != null) {
-                focusFirstChild(next.itemView);
-                return;
-            }
-            for (int i = 0; i < recycler.getChildCount(); i++) {
-                View child = recycler.getChildAt(i);
-                if (recycler.getChildAdapterPosition(child) == position) {
-                    focusFirstChild(child);
-                    return;
-                }
-            }
-        });
-        return true;
-    }
-
-    private boolean focusFirstChild(View view) {
-        if (view == null || view.getVisibility() != View.VISIBLE || !view.isEnabled()) return false;
-        if (view instanceof RecyclerView recycler) return focusRecyclerItem(recycler);
-        if (view instanceof ViewGroup group) {
-            for (int i = 0; i < group.getChildCount(); i++) {
-                if (focusFirstChild(group.getChildAt(i))) return true;
-            }
-        }
-        return view.isFocusable() && view.requestFocus();
-    }
-
-    private boolean isChildOf(ViewGroup parent, View child) {
-        for (View view = child; view != null; ) {
-            if (view == parent) return true;
-            if (!(view.getParent() instanceof View next)) return false;
-            view = next;
-        }
-        return false;
-    }
-
-    private void onInlineLutImport() {
-        if (!LutStore.hasUserDir()) {
-            pendingInlineLutImport = true;
-            chooseInlineLutDir();
-            return;
-        }
-        chooseInlineLutFile();
-    }
-
-    private void onInlineLutDir() {
-        pendingInlineLutImport = false;
-        chooseInlineLutDir();
-    }
-
-    private void chooseInlineLutFile() {
-        FileChooser.from(inlineLutFile).show("*/*", new String[]{"application/octet-stream", "text/*", "image/*", "*/*"});
-    }
-
-    private void chooseInlineLutDir() {
-        FileChooser.from(inlineLutDir).showDirectory();
-    }
-
 
     private boolean showInlinePlayerChoice() {
         if (service() == null || player().isEmpty()) return false;
@@ -10206,8 +9888,6 @@ public class TmdbDetailActivity extends PlaybackActivity implements TrackDialog.
 
     @Override
     public boolean dispatchKeyEvent(KeyEvent event) {
-        if (binding != null && KeyUtil.isActionUp(event) && KeyUtil.isBackKey(event) && binding.lutQuick.hideIfVisible()) return true;
-        if (binding != null && isVisible(binding.lutQuick)) return dispatchInlineLutQuickKey(event);
         if (handleInlineFullscreenHiddenKey(event)) return true;
         if (handleDetailEpisodeNavigationKey(event)) return true;
         if (handleInlineKey(event)) return true;

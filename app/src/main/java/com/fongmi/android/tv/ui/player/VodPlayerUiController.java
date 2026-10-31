@@ -76,7 +76,6 @@ public class VodPlayerUiController {
         chrome.speed.setOnClickListener(view -> host.changeSpeed());
         chrome.speed.setOnLongClickListener(view -> host.resetSpeed());
         chrome.scale.setOnClickListener(view -> host.cycleScale());
-        chrome.lut.setOnClickListener(view -> host.showLut());
         chrome.refresh.setOnClickListener(view -> host.refreshPlayback());
         chrome.changeSource.setOnClickListener(view -> host.changeSource());
         chrome.changeSource.setOnLongClickListener(view -> host.openSourceSearch());

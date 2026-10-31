@@ -27,7 +27,6 @@ public final class VodPlayerChrome {
     final View parse;
     final View speed;
     final View scale;
-    final View lut;
     final View refresh;
     final View changeSource;
     final View repeat;
@@ -115,7 +114,6 @@ public final class VodPlayerChrome {
             View parse,
             View speed,
             View scale,
-            View lut,
             View refresh,
             View changeSource,
             View repeat,
@@ -153,7 +151,6 @@ public final class VodPlayerChrome {
                 parse,
                 speed,
                 scale,
-                lut,
                 refresh,
                 changeSource,
                 repeat,
@@ -193,7 +190,6 @@ public final class VodPlayerChrome {
             View parse,
             View speed,
             View scale,
-            View lut,
             View refresh,
             View changeSource,
             View repeat,
@@ -230,7 +226,6 @@ public final class VodPlayerChrome {
         this.parse = parse;
         this.speed = speed;
         this.scale = scale;
-        this.lut = lut;
         this.refresh = refresh;
         this.changeSource = changeSource;
         this.repeat = repeat;
@@ -269,7 +264,6 @@ public final class VodPlayerChrome {
                 binding.playerParse,
                 binding.playerSpeed,
                 binding.playerScale,
-                binding.playerLut,
                 binding.playerRefresh,
                 binding.playerChangeSource,
                 binding.playerRepeat,

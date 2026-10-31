@@ -84,14 +84,6 @@
             style="@style/Control"
             android:layout_marginEnd="8dp"
             android:text="@string/play_params" />
-        <com.google.android.material.textview.MaterialTextView
-            android:id="@+id/panDiagnostic"
-            style="@style/Control"
-            android:layout_marginEnd="8dp"
-            android:contentDescription="@string/pan_diagnostic_title"
-            android:text="@string/pan_diagnostic_entry"
-            android:visibility="gone"
-            tools:visibility="visible" />
 
         <com.google.android.material.textview.MaterialTextView
             android:id="@+id/codecCapability"
@@ -119,12 +111,6 @@
             android:text="@string/detail_quality"
             android:visibility="gone"
             tools:visibility="visible" />
-
-        <com.google.android.material.textview.MaterialTextView
-            android:id="@+id/lut"
-            style="@style/Control"
-            android:layout_marginEnd="8dp"
-            android:text="@string/play_lut" />
 
         <com.google.android.material.textview.MaterialTextView
             android:id="@+id/karaoke"

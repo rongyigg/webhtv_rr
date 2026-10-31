@@ -25,8 +25,6 @@ public class PlayerButtonSetting {
     public static final String SPEED = "speed";
     public static final String SCALE = "scale";
     public static final String QUALITY = "quality";
-    public static final String LUT = "lut";
-    public static final String PAN_DIAGNOSTIC = "pan_diagnostic";
     public static final String KARAOKE = "karaoke";
     public static final String IMMERSIVE_AUDIO = "immersive_audio";
     public static final String RESET = "reset";
@@ -60,8 +58,6 @@ public class PlayerButtonSetting {
             new Item(SPEED, R.string.play_speed),
             new Item(SCALE, R.string.play_scale),
             new Item(QUALITY, R.string.detail_quality),
-            new Item(LUT, R.string.play_lut),
-            new Item(PAN_DIAGNOSTIC, R.string.pan_diagnostic_entry),
             new Item(KARAOKE, R.string.player_karaoke_mode),
             new Item(IMMERSIVE_AUDIO, R.string.player_immersive_audio_mode),
             new Item(RESET, R.string.play_reset),

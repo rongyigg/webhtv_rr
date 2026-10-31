@@ -89,8 +89,6 @@ import com.fongmi.android.tv.player.PlaybackExperimentPolicy;
 import com.fongmi.android.tv.player.PlaybackResourceClassifier;
 import com.fongmi.android.tv.player.PlayerHelper;
 import com.fongmi.android.tv.player.PlayerManager;
-import com.fongmi.android.tv.player.lut.LutPreset;
-import com.fongmi.android.tv.player.lut.LutStore;
 import com.fongmi.android.tv.service.AiAdDetectionService;
 import com.fongmi.android.tv.service.PlaybackService;
 import com.fongmi.android.tv.service.IntroSkipService;
@@ -224,7 +222,6 @@ import androidx.coordinatorlayout.widget.CoordinatorLayout;
 import androidx.palette.graphics.Palette;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import com.fongmi.android.tv.bean.CastVideo;
-import com.fongmi.android.tv.player.diagnostic.PanEndpointParser;
 import com.fongmi.android.tv.player.karaoke.KaraokeController;
 import com.fongmi.android.tv.player.karaoke.KaraokePitchTrackGenerator;
 import com.fongmi.android.tv.player.karaoke.KaraokeResult;
@@ -235,7 +232,6 @@ import com.fongmi.android.tv.player.lyrics.LyricsLine;
 import com.fongmi.android.tv.player.lyrics.LyricsRequest;
 import com.fongmi.android.tv.player.lyrics.LyricsRepository;
 import com.fongmi.android.tv.player.lyrics.LyricsResult;
-import com.fongmi.android.tv.player.lut.LutSetting;
 import com.fongmi.android.tv.player.mpv.MpvConfigStore;
 import com.fongmi.android.tv.setting.LyricsSetting;
 import com.fongmi.android.tv.ui.custom.FlagSelectionListener;
@@ -243,7 +239,6 @@ import com.fongmi.android.tv.ui.custom.AudioPlayerBackgroundDrawable;
 import com.fongmi.android.tv.ui.custom.KaraokeResultView;
 import com.fongmi.android.tv.ui.dialog.CastDialog;
 import com.fongmi.android.tv.ui.dialog.ControlDialog;
-import com.fongmi.android.tv.ui.dialog.PanNetworkDiagnosticDialog;
 import com.fongmi.android.tv.ui.dialog.PlayerKernelDialog;
 import com.fongmi.android.tv.ui.dialog.QuickSearchDialog;
 import com.fongmi.android.tv.ui.dialog.SubtitleDialog;
@@ -510,7 +505,6 @@ private boolean runtimeSourceOnly;
     private long playerStartTime;
     private long pendingResumeSeekMs = C.TIME_UNSET;
     private boolean tmdbHistoryResumePending;
-    private boolean pendingLutImport;
     private boolean playerKernelSwitchRefreshing;
     private int playerKernelSwitchRequestId;
     private int mPendingPlayerKernel = PlayerSetting.NONE;
@@ -519,37 +513,6 @@ private boolean runtimeSourceOnly;
     private MpvPlayer mCustomButtonPlayer;
     private final Runnable mCustomButtonStateListener = this::updateCustomButtonStates;
 
-    private final ActivityResultLauncher<Intent> mLutDir = registerForActivityResult(new ActivityResultContracts.StartActivityForResult(), result -> {
-        if (result.getResultCode() != Activity.RESULT_OK || result.getData() == null || result.getData().getData() == null) return;
-        LutStore.setUserDir(result.getData().getData(), result.getData().getFlags());
-        Notify.show(R.string.lut_directory_selected);
-        mBinding.lutQuick.refreshList();
-        if (pendingLutImport) {
-            pendingLutImport = false;
-            chooseLutFile();
-        }
-    });
-
-    private final ActivityResultLauncher<Intent> mLutFile = registerForActivityResult(new ActivityResultContracts.StartActivityForResult(), result -> {
-        if (result.getResultCode() != Activity.RESULT_OK || result.getData() == null || result.getData().getData() == null) return;
-        String path = FileChooser.getPathFromUri(result.getData().getData());
-        if (TextUtils.isEmpty(path)) {
-            Notify.show(R.string.lut_import_failed);
-            return;
-        }
-        Task.execute(() -> {
-            try {
-                LutPreset preset = LutStore.importFile(path);
-                App.post(() -> {
-                    Notify.show(R.string.lut_imported);
-                    mBinding.lutQuick.selectImported(preset, player(), mBinding.exo, this::onLutChanged);
-                });
-            } catch (Exception e) {
-                if (SpiderDebug.isEnabled()) SpiderDebug.log("lut", "import failed path=%s error=%s", path, e.getMessage());
-                App.post(() -> Notify.show(Notify.getError(R.string.lut_import_failed, e)));
-            }
-        });
-    });
     private final ActivityResultLauncher<Intent> mKaraokeTrackFile = registerForActivityResult(new ActivityResultContracts.StartActivityForResult(), result -> {
         if (result.getResultCode() != Activity.RESULT_OK || result.getData() == null || result.getData().getData() == null || service() == null) return;
         String path = FileChooser.getPathFromUri(result.getData().getData());
@@ -1367,7 +1330,6 @@ private boolean runtimeSourceOnly;
         applyPendingPlayerKernel();
         setPlayerKernel();
         setDecode();
-        setLut();
         if (consumeImmersiveAudioLaunch()) return;
         if (!detailRequested) checkId();
         flushPendingFastTmdbPlayback();
@@ -1531,7 +1493,6 @@ private boolean runtimeSourceOnly;
         mBinding.episodeFileName.setOnKeyListener((view, keyCode, event) -> onEpisodeHeaderToolKey(view, keyCode, event));
         mBinding.control.action.scale.setOnClickListener(guarded(this::onScale));
         mBinding.control.action.actionQuality.setOnClickListener(guarded(this::onQuality));
-        mBinding.control.action.lut.setOnClickListener(guarded(this::onLut));
         mBinding.control.action.speed.setOnClickListener(guarded(this::onSpeed));
         mBinding.control.action.reset.setOnClickListener(guarded(this::onReset));
         mBinding.control.action.title.setOnClickListener(guarded(this::onTitle));
@@ -1539,7 +1500,6 @@ private boolean runtimeSourceOnly;
         mBinding.control.action.player.setOnLongClickListener(view -> onPlayerKernelLong());
         mBinding.control.action.decode.setOnClickListener(guarded(this::onDecode));
         mBinding.control.action.playParams.setOnClickListener(guarded(this::onPlayParams));
-        mBinding.control.action.panDiagnostic.setOnClickListener(guarded(this::onPanDiagnostic));
         mBinding.control.action.codecCapability.setOnClickListener(guarded(this::onCodecCapability));
         mBinding.control.action.ending.setOnClickListener(guarded(this::onEnding));
         mBinding.control.action.repeat.setOnClickListener(guarded(this::onRepeat));
@@ -1658,12 +1618,10 @@ private boolean runtimeSourceOnly;
         addActionButton(PlayerButtonSetting.PLAYER, mBinding.control.action.player);
         addActionButton(PlayerButtonSetting.DECODE, mBinding.control.action.decode);
         addActionButton(PlayerButtonSetting.PLAY_PARAMS, mBinding.control.action.playParams);
-        addActionButton(PlayerButtonSetting.PAN_DIAGNOSTIC, mBinding.control.action.panDiagnostic);
         addActionButton(PlayerButtonSetting.CODEC_CAPABILITY, mBinding.control.action.codecCapability);
         addActionButton(PlayerButtonSetting.SPEED, mBinding.control.action.speed);
         addActionButton(PlayerButtonSetting.SCALE, mBinding.control.action.scale);
         addActionButton(PlayerButtonSetting.QUALITY, mBinding.control.action.actionQuality);
-        addActionButton(PlayerButtonSetting.LUT, mBinding.control.action.lut);
         addActionButton(PlayerButtonSetting.KARAOKE, mBinding.control.action.karaoke);
         addActionButton(PlayerButtonSetting.IMMERSIVE_AUDIO, mBinding.control.action.immersiveAudio);
         addActionButton(PlayerButtonSetting.TEXT, mBinding.control.action.text);
@@ -1679,7 +1637,6 @@ private boolean runtimeSourceOnly;
         addActionButton(PlayerButtonSetting.REPEAT, mBinding.control.action.repeat);
         PlayerButtonSetting.applyOrder(mBinding.control.action.container, mActionButtons);
         setupCustomActionButtons();
-        updatePanDiagnosticAction();
         updateDiscMenuButton();
     }
 
@@ -1846,14 +1803,8 @@ private boolean runtimeSourceOnly;
         updateCustomButtonVisibility();
         mBinding.control.action.cast.setVisibility(isFullscreen() ? View.GONE : View.VISIBLE);
         updateImmersiveAudioAction();
-        updatePanDiagnosticAction();
         updateDiscMenuButton();
         if (mActionButtons != null) PlayerButtonSetting.applyVisibility(mActionButtons);
-    }
-
-    private void updatePanDiagnosticAction() {
-        if (mBinding == null) return;
-        mBinding.control.action.panDiagnostic.setVisibility(isFullscreen() && canRunPanDiagnostic() ? View.VISIBLE : View.GONE);
     }
 
     private void setPlayerButton() {
@@ -1872,16 +1823,6 @@ private boolean runtimeSourceOnly;
         boolean available = mpv != null && mpv.isDiscMenuAvailable();
         if (!available && mBinding.control.action.discMenu.hasFocus()) mBinding.control.action.playParams.requestFocus();
         mBinding.control.action.discMenu.setVisibility(available ? View.VISIBLE : View.GONE);
-    }
-
-    private boolean canRunPanDiagnostic() {
-        if (service() == null || player().isEmpty()) return false;
-        try {
-            PanEndpointParser.parse(player().getUrl(), player().getHeaders());
-            return true;
-        } catch (RuntimeException e) {
-            return false;
-        }
     }
 
     private void updateImmersiveAudioAction() {
@@ -1962,14 +1903,6 @@ private boolean runtimeSourceOnly;
         applyResizeMode(scale);
         mBinding.exo.post(() -> applyResizeMode(scale));
         mBinding.control.action.scale.setText(ResUtil.getStringArray(R.array.select_scale)[scale]);
-    }
-
-    private void setLut() {
-        mBinding.control.action.lut.setText(player().getLutText());
-    }
-
-    private void onLutChanged() {
-        setLut();
     }
 
     private void setViewModel() {
@@ -4331,13 +4264,6 @@ private boolean runtimeSourceOnly;
         hideControl();
     }
 
-    private void onPanDiagnostic() {
-        if (!canRunPanDiagnostic()) return;
-        mDialogReturnFocus = mBinding.control.action.panDiagnostic;
-        App.removeCallbacks(mR1);
-        PanNetworkDiagnosticDialog.show(this, player());
-    }
-
     private void setPlayParamsState() {
         mBinding.control.action.playParams.setSelected(mOsd != null && mOsd.isDiagnosticsVisible());
     }
@@ -4403,47 +4329,6 @@ private boolean runtimeSourceOnly;
         setScale(tag);
     }
 
-    private void onLut() {
-        mBinding.lutQuick.toggle(player(), mBinding.exo, this::onLutChanged, new com.fongmi.android.tv.ui.custom.LutQuickPanel.ImportCallback() {
-            @Override
-            public void onImportLut() {
-                onLutImport();
-            }
-
-            @Override
-            public void onSelectLutDir() {
-                onLutDir();
-            }
-        });
-        focusLutQuickIfVisible();
-    }
-
-    private void focusLutQuickIfVisible() {
-        mBinding.lutQuick.post(this::focusLutQuickContent);
-        mBinding.lutQuick.postDelayed(this::focusLutQuickContent, 220);
-        mBinding.lutQuick.postDelayed(this::focusLutQuickContent, 420);
-    }
-
-    private boolean focusLutQuickContent() {
-        if (!isVisible(mBinding.lutQuick)) return false;
-        View focus = getCurrentFocus();
-        RecyclerView recycler = findRecyclerView(mBinding.lutQuick);
-        if (focus != null && isChildOf(mBinding.lutQuick, focus) && focus != recycler) return true;
-        if (mBinding.lutQuick.focusSelectedEntry()) return true;
-        if (focusRecyclerItem(recycler)) return true;
-        return focusFirstChild(mBinding.lutQuick);
-    }
-
-    private RecyclerView findRecyclerView(View view) {
-        if (view instanceof RecyclerView recycler) return recycler;
-        if (!(view instanceof ViewGroup group)) return null;
-        for (int i = 0; i < group.getChildCount(); i++) {
-            RecyclerView recycler = findRecyclerView(group.getChildAt(i));
-            if (recycler != null) return recycler;
-        }
-        return null;
-    }
-
     private boolean focusRecyclerItem(RecyclerView recycler) {
         return focusRecyclerPosition(recycler, 0);
     }
@@ -4496,29 +4381,6 @@ private boolean runtimeSourceOnly;
             view = next;
         }
         return false;
-    }
-
-    public void onLutImport() {
-        if (!LutStore.hasUserDir()) {
-            pendingLutImport = true;
-            chooseLutDir();
-            return;
-        }
-        chooseLutFile();
-    }
-
-    public void onLutDir() {
-        pendingLutImport = false;
-        chooseLutDir();
-    }
-
-
-    private void chooseLutFile() {
-        FileChooser.from(mLutFile).show("*/*", new String[]{"application/octet-stream", "text/*", "image/*", "*/*"});
-    }
-
-    private void chooseLutDir() {
-        FileChooser.from(mLutDir).showDirectory();
     }
 
     private void onSpeed() {
@@ -5699,7 +5561,6 @@ private boolean runtimeSourceOnly;
         android.util.Log.d("VideoActivity", "onPrepare: setting Clock callback");
         setPlayerKernel();
         setDecode();
-        setLut();
         setPosition();
         setSpeed();
         mClock.setCallback(this);
@@ -7829,19 +7690,16 @@ private boolean runtimeSourceOnly;
     protected boolean dispatchDiscMenuKey(KeyEvent event) {
         // Let TV controls own DPAD/ENTER while visible, including the shared
         // PlaybackActivity dispatch performed by super.dispatchKeyEvent().
-        if (isVisible(mBinding.control.getRoot()) || isVisible(mBinding.lutQuick)) return false;
+        if (isVisible(mBinding.control.getRoot())) return false;
         return super.dispatchDiscMenuKey(event);
     }
 
     @Override
     public boolean dispatchKeyEvent(KeyEvent event) {
         if (dispatchDiscMenuKey(event)) return true;
-        if (KeyUtil.isActionUp(event) && KeyUtil.isBackKey(event) && mBinding.lutQuick.hideIfVisible()) return true;
         if (mKeyDown.isChangingSpeed() && KeyUtil.isActionUp(event)) {
             mKeyDown.releaseSpeed();
-            if (isVisible(mBinding.lutQuick)) return dispatchLutQuickKey(event);
         }
-        if (isVisible(mBinding.lutQuick)) return dispatchLutQuickKey(event);
         if (isFullscreen() && KeyUtil.isMenuKey(event)) {
             if (Setting.getFullscreenMenuKey() == 1) onEpisodes();
             else onToggle();
@@ -7861,101 +7719,7 @@ private boolean runtimeSourceOnly;
         return super.dispatchKeyEvent(event);
     }
 
-    private boolean dispatchLutQuickKey(KeyEvent event) {
-        if (KeyUtil.isEnterKey(event)) return dispatchLutQuickEnter(event);
-        if (isLutQuickDirectionKey(event)) return dispatchLutQuickDirection(event);
-        if (KeyUtil.isActionDown(event)) focusLutQuickContent();
-        boolean handled = super.dispatchKeyEvent(event);
-        if (KeyUtil.isActionDown(event)) {
-            View focus = getCurrentFocus();
-            if (focus == null || !isChildOf(mBinding.lutQuick, focus)) focusLutQuickContent();
-        }
-        return true;
-    }
-
-    private boolean isLutQuickDirectionKey(KeyEvent event) {
-        return KeyUtil.isUpKey(event) || KeyUtil.isDownKey(event) || KeyUtil.isLeftKey(event) || KeyUtil.isRightKey(event);
-    }
-
-    private boolean dispatchLutQuickDirection(KeyEvent event) {
-        if (!KeyUtil.isActionDown(event)) return true;
-        RecyclerView recycler = findRecyclerView(mBinding.lutQuick);
-        View focus = getCurrentFocus();
-        if (recycler != null && (focus == recycler || isChildOf(recycler, focus)) && moveLutQuickRecycler(recycler, event)) return true;
-        if (focus == null || !isChildOf(mBinding.lutQuick, focus) || focus == recycler) {
-            focusLutQuickContent();
-            focus = getCurrentFocus();
-        }
-        if (focus != null && isChildOf(mBinding.lutQuick, focus) && moveLutQuickFocus(focus, event)) return true;
-        if (recycler != null && KeyUtil.isDownKey(event) && focusRecyclerItem(recycler)) return true;
-        focusLutQuickContent();
-        return true;
-    }
-
-    private boolean moveLutQuickRecycler(RecyclerView recycler, KeyEvent event) {
-        if (!KeyUtil.isUpKey(event) && !KeyUtil.isDownKey(event)) return false;
-        RecyclerView.Adapter<?> adapter = recycler.getAdapter();
-        if (adapter == null || adapter.getItemCount() <= 0) return false;
-        int current = getRecyclerFocusPosition(recycler);
-        if (current == RecyclerView.NO_POSITION) return mBinding.lutQuick.focusSelectedEntry();
-        int next = current + (KeyUtil.isDownKey(event) ? 1 : -1);
-        if (next < 0 || next >= adapter.getItemCount()) return false;
-        return focusRecyclerPosition(recycler, next);
-    }
-
-    private int getRecyclerFocusPosition(RecyclerView recycler) {
-        View child = getRecyclerDirectChild(recycler, getCurrentFocus());
-        return child == null ? RecyclerView.NO_POSITION : recycler.getChildAdapterPosition(child);
-    }
-
-    private View getRecyclerDirectChild(RecyclerView recycler, View focus) {
-        for (View view = focus; view != null && view != recycler; ) {
-            if (view.getParent() == recycler) return view;
-            if (!(view.getParent() instanceof View next)) return null;
-            view = next;
-        }
-        return null;
-    }
-
-    private boolean moveLutQuickFocus(View focus, KeyEvent event) {
-        List<View> focusables = new ArrayList<>();
-        collectLutQuickFocusables(mBinding.lutQuick, focusables);
-        View target = findLutQuickFocusTarget(focus, focusables, event);
-        return target != null && target.requestFocus();
-    }
-
-    private void collectLutQuickFocusables(View view, List<View> focusables) {
-        if (view == null || view.getVisibility() != View.VISIBLE || !view.isEnabled()) return;
-        if (view instanceof RecyclerView recycler) {
-            for (int i = 0; i < recycler.getChildCount(); i++) collectLutQuickFocusables(recycler.getChildAt(i), focusables);
-            return;
-        }
-        if (view instanceof ViewGroup group) {
-            for (int i = 0; i < group.getChildCount(); i++) collectLutQuickFocusables(group.getChildAt(i), focusables);
-            return;
-        }
-        if (view.isFocusable()) focusables.add(view);
-    }
-
-    private View findLutQuickFocusTarget(View focus, List<View> focusables, KeyEvent event) {
-        Rect current = new Rect();
-        if (focus == null || !focus.getGlobalVisibleRect(current)) return null;
-        View target = null;
-        long bestScore = Long.MAX_VALUE;
-        for (View item : focusables) {
-            if (item == focus) continue;
-            Rect candidate = new Rect();
-            if (!item.getGlobalVisibleRect(candidate) || !isLutQuickFocusCandidate(current, candidate, event)) continue;
-            long score = scoreLutQuickFocusCandidate(current, candidate, event);
-            if (score < bestScore) {
-                bestScore = score;
-                target = item;
-            }
-        }
-        return target;
-    }
-
-    private boolean isLutQuickFocusCandidate(Rect current, Rect candidate, KeyEvent event) {
+    private boolean isFocusCandidate(Rect current, Rect candidate, KeyEvent event) {
         int dx = candidate.centerX() - current.centerX();
         int dy = candidate.centerY() - current.centerY();
         if (KeyUtil.isLeftKey(event)) return dx < 0 && isSameFocusRow(current, candidate);
@@ -7969,27 +7733,12 @@ private boolean runtimeSourceOnly;
         return Math.abs(candidate.centerY() - current.centerY()) <= Math.max(current.height(), candidate.height());
     }
 
-    private long scoreLutQuickFocusCandidate(Rect current, Rect candidate, KeyEvent event) {
+    private long scoreFocusCandidate(Rect current, Rect candidate, KeyEvent event) {
         long dx = Math.abs(candidate.centerX() - current.centerX());
         long dy = Math.abs(candidate.centerY() - current.centerY());
         long primary = KeyUtil.isLeftKey(event) || KeyUtil.isRightKey(event) ? dx : dy;
         long secondary = KeyUtil.isLeftKey(event) || KeyUtil.isRightKey(event) ? dy : dx;
         return primary * 1000 + secondary;
-    }
-
-    private boolean dispatchLutQuickEnter(KeyEvent event) {
-        if (KeyUtil.isActionDown(event)) {
-            focusLutQuickContent();
-            return true;
-        }
-        if (!KeyUtil.isActionUp(event)) return true;
-        View focus = getCurrentFocus();
-        if (focus == null || !isChildOf(mBinding.lutQuick, focus) || focus instanceof RecyclerView) {
-            if (!focusLutQuickContent()) return true;
-            focus = getCurrentFocus();
-        }
-        if (focus != null && isChildOf(mBinding.lutQuick, focus) && focus.isEnabled()) focus.performClick();
-        return true;
     }
 
     @Override
@@ -8241,9 +7990,7 @@ private boolean runtimeSourceOnly;
 
     @Override
     protected void onBackInvoked() {
-        if (mBinding.lutQuick.hideIfVisible()) {
-            return;
-        } else if (isVisible(mBinding.control.getRoot())) {
+        if (isVisible(mBinding.control.getRoot())) {
             hideControl();
         } else if (isVisible(mBinding.widget.center)) {
             hideCenter();
@@ -9900,14 +9647,6 @@ private void configureKaraokeResultDialog(AlertDialog dialog, KaraokeResultView 
 
 private void runAfterKaraokeResult(@Nullable Runnable after) {
         if (after != null) after.run();
-    }
-
-public void onLutSelected(LutPreset preset) {
-        LutSetting.select(preset);
-        if (preset == null) player().applyLut(true);
-        else player().applyLutPreview(true);
-        setLut();
-        setR1Callback();
     }
 
     private void setTraffic() {
@@ -11591,10 +11330,6 @@ public void onParse(Parse item) {
         onItemClick(item);
     }
 
-public void onLutPanel() {
-        onLut();
-    }
-
 public void onTrackPanel(int type) {
         onTrack(type);
     }
@@ -11750,8 +11485,8 @@ private View findAudioStageFocusTarget(View focus, List<View> focusables, KeyEve
         for (View item : focusables) {
             if (item == focus) continue;
             Rect candidate = new Rect();
-            if (!item.getGlobalVisibleRect(candidate) || !isLutQuickFocusCandidate(current, candidate, event)) continue;
-            long score = scoreLutQuickFocusCandidate(current, candidate, event);
+            if (!item.getGlobalVisibleRect(candidate) || !isFocusCandidate(current, candidate, event)) continue;
+            long score = scoreFocusCandidate(current, candidate, event);
             if (score < bestScore) {
                 bestScore = score;
                 target = item;

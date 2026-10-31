@@ -50,11 +50,6 @@
             android:text="@string/codec_capability_short" />
 
         <com.google.android.material.textview.MaterialTextView
-            android:id="@+id/lut"
-            style="@style/Control"
-            android:text="@string/play_lut" />
-
-        <com.google.android.material.textview.MaterialTextView
             android:id="@+id/speed"
             style="@style/Control"
             android:fontFeatureSettings="tnum"

@@ -62,11 +62,6 @@
             tools:visibility="visible" />
 
         <com.google.android.material.textview.MaterialTextView
-            android:id="@+id/lut"
-            style="@style/Control"
-            android:text="@string/play_lut" />
-
-        <com.google.android.material.textview.MaterialTextView
             android:id="@+id/karaoke"
             style="@style/Control"
             android:text="@string/player_karaoke_mode"

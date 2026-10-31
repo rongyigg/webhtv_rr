@@ -112,9 +112,6 @@ import com.fongmi.android.tv.player.PlayerHelper;
 import com.fongmi.android.tv.player.PlayerManager;
 import com.fongmi.android.tv.player.engine.PlayerEngine;
 import com.fongmi.android.tv.player.engine.PlaySpec;
-import com.fongmi.android.tv.player.lut.LutPreset;
-import com.fongmi.android.tv.player.lut.LutSetting;
-import com.fongmi.android.tv.player.lut.LutStore;
 import com.fongmi.android.tv.service.AiAdDetectionService;
 import com.fongmi.android.tv.service.PlaybackService;
 import com.fongmi.android.tv.service.PersonalRecommendationService;
@@ -156,7 +153,6 @@ import com.fongmi.android.tv.ui.dialog.DanmakuDialog;
 import com.fongmi.android.tv.ui.dialog.EpisodeGridDialog;
 import com.fongmi.android.tv.ui.dialog.EpisodeListDialog;
 import com.fongmi.android.tv.ui.dialog.InfoDialog;
-import com.fongmi.android.tv.ui.dialog.LutPanelDialog;
 import com.fongmi.android.tv.ui.dialog.QuickSearchDialog;
 import com.fongmi.android.tv.ui.dialog.ReceiveDialog;
 import com.fongmi.android.tv.ui.dialog.SubtitleDialog;
@@ -500,42 +496,8 @@ private int mAudioBackgroundRandomNonce;
 private final Task.Scope mPersonalRecommendationTasks = new Task.Scope(Task.recommendationExecutor());
     private int mAdFeedbackGeneration;
     private final List<TmdbMovedView> mTmdbMovedViews = new ArrayList<>();
-    private boolean pendingLutImport;
-    private boolean skipPausePiP;
     private RelativeLayout.LayoutParams mDefaultFrameParams;
 
-    private final ActivityResultLauncher<Intent> mLutDir = registerForActivityResult(new ActivityResultContracts.StartActivityForResult(), result -> {
-        if (result.getResultCode() != Activity.RESULT_OK || result.getData() == null || result.getData().getData() == null) return;
-        LutStore.setUserDir(result.getData().getData(), result.getData().getFlags());
-        Notify.show(R.string.lut_directory_selected);
-        if (hasLutQuick()) mBinding.lutQuick.refreshList();
-        if (pendingLutImport) {
-            pendingLutImport = false;
-            chooseLutFile();
-        }
-    });
-
-    private final ActivityResultLauncher<Intent> mLutFile = registerForActivityResult(new ActivityResultContracts.StartActivityForResult(), result -> {
-        if (result.getResultCode() != Activity.RESULT_OK || result.getData() == null || result.getData().getData() == null) return;
-        String path = FileChooser.getPathFromUri(result.getData().getData());
-        if (TextUtils.isEmpty(path)) {
-            Notify.show(R.string.lut_import_failed);
-            return;
-        }
-        Task.execute(() -> {
-            try {
-                LutPreset preset = LutStore.importFile(path);
-                App.post(() -> {
-                    Notify.show(R.string.lut_imported);
-                    if (isFullscreen() && hasLutQuick()) mBinding.lutQuick.selectImported(preset, player(), mBinding.exo, this::onLutChanged);
-                    else onLutSelected(preset);
-                });
-            } catch (Exception e) {
-                if (SpiderDebug.isEnabled()) SpiderDebug.log("lut", "import failed path=%s error=%s", path, e.getMessage());
-                App.post(() -> Notify.show(Notify.getError(R.string.lut_import_failed, e)));
-            }
-        });
-    });
     private final ActivityResultLauncher<Intent> mKaraokeTrackFile = registerForActivityResult(new ActivityResultContracts.StartActivityForResult(), result -> {
         if (result.getResultCode() != Activity.RESULT_OK || result.getData() == null || result.getData().getData() == null || service() == null) return;
         String path = FileChooser.getPathFromUri(result.getData().getData());
@@ -1415,7 +1377,6 @@ private final Task.Scope mPersonalRecommendationTasks = new Task.Scope(Task.reco
         syncDesktopLyricsAudioContent();
         setPlayerKernel();
         setDecode();
-        setLut();
         applyDeferredFullscreenOrientation();
         checkLand();
         if (consumePendingPlaybackResult()) return;
@@ -1427,7 +1388,6 @@ private final Task.Scope mPersonalRecommendationTasks = new Task.Scope(Task.reco
     protected void onPlayerRebuilt() {
         setPlayerKernel();
         setDecode();
-        setLut();
         refreshControlDialog();
     }
 
@@ -1608,7 +1568,6 @@ private final Task.Scope mPersonalRecommendationTasks = new Task.Scope(Task.reco
         mBinding.control.action.audio.setOnClickListener(guardedView(this::onTrack));
         mBinding.control.action.video.setOnClickListener(guardedView(this::onTrack));
         mBinding.control.action.scale.setOnClickListener(guarded(this::onScale));
-        mBinding.control.action.lut.setOnClickListener(guarded(this::onLut));
         mBinding.control.action.karaoke.setOnClickListener(view -> onKaraokeMode());
         mBinding.control.action.speed.setOnClickListener(guarded(this::onSpeed));
         mBinding.control.action.reset.setOnClickListener(guarded(this::onReset));
@@ -1896,7 +1855,6 @@ private final Task.Scope mPersonalRecommendationTasks = new Task.Scope(Task.reco
         addActionButton(PlayerButtonSetting.SPEED, mBinding.control.action.speed);
         addActionButton(PlayerButtonSetting.SCALE, mBinding.control.action.scale);
         addActionButton(PlayerButtonSetting.QUALITY, mBinding.control.action.actionQuality);
-        addActionButton(PlayerButtonSetting.LUT, mBinding.control.action.lut);
         addActionButton(PlayerButtonSetting.RESET, mBinding.control.action.reset);
         addActionButton(PlayerButtonSetting.REPEAT, mBinding.control.action.repeat);
         addActionButton(PlayerButtonSetting.TEXT, mBinding.control.action.text);
@@ -2252,10 +2210,6 @@ private final Task.Scope mPersonalRecommendationTasks = new Task.Scope(Task.reco
         applyResizeMode(scale);
         mBinding.exo.post(() -> applyResizeMode(scale));
         mBinding.control.action.scale.setText(ResUtil.getStringArray(R.array.select_scale)[scale]);
-    }
-
-    private void setLut() {
-        mBinding.control.action.lut.setText(player().getLutText());
     }
 
     private void setViewModel() {
@@ -4913,72 +4867,6 @@ private final Task.Scope mPersonalRecommendationTasks = new Task.Scope(Task.reco
         setR1Callback();
     }
 
-    private void onLut() {
-        if (hasLutQuick()) {
-            mBinding.lutQuick.toggle(player(), mBinding.exo, this::onLutChanged, new com.fongmi.android.tv.ui.custom.LutQuickPanel.ImportCallback() {
-                @Override
-                public void onImportLut() {
-                    onLutImport();
-                }
-
-                @Override
-                public void onSelectLutDir() {
-                    onLutDir();
-                }
-            });
-        }
-        else LutPanelDialog.create().player(player()).show(this);
-        setR1Callback();
-    }
-
-    @Override
-    public void onLutPanel() {
-        if (isFullscreen() && hasLutQuick()) onLut();
-        else LutPanelDialog.create().player(player()).show(this);
-    }
-
-    private boolean hasLutQuick() {
-        return mBinding.lutQuick != null;
-    }
-
-    private void onLutChanged() {
-        setLut();
-    }
-
-    @Override
-    public void onLutImport() {
-        if (!LutStore.hasUserDir()) {
-            pendingLutImport = true;
-            chooseLutDir();
-            return;
-        }
-        chooseLutFile();
-    }
-
-    @Override
-    public void onLutDir() {
-        pendingLutImport = false;
-        chooseLutDir();
-    }
-
-    private void chooseLutFile() {
-        skipPausePiP = true;
-        FileChooser.from(mLutFile).show("*/*", new String[]{"application/octet-stream", "text/*", "image/*", "*/*"});
-    }
-
-    private void chooseLutDir() {
-        skipPausePiP = true;
-        FileChooser.from(mLutDir).showDirectory();
-    }
-
-    @Override
-    public void onLutSelected(LutPreset preset) {
-        if (SpiderDebug.isEnabled()) SpiderDebug.log("lut-ui", "activity select preset=%s enabledBefore=%s current=%s", preset == null ? "original" : preset.getId(), LutSetting.isEnabled(), LutSetting.getPresetId());
-        if (!player().selectLut(preset, preset != null)) return;
-        setLut();
-        setR1Callback();
-    }
-
     private void onSpeed() {
         PlaybackSpeedDialog.show(this, player().getSpeed(), speed -> {
             if (!isServiceReady() || !isOwner() || player().isEmpty()) return;
@@ -6417,7 +6305,6 @@ private final Task.Scope mPersonalRecommendationTasks = new Task.Scope(Task.reco
         android.util.Log.d("VideoActivity", "onPrepare: setting Clock callback");
         setPlayerKernel();
         setDecode();
-        setLut();
         setPosition();
         setSpeed();
         mClock.setCallback(this);
@@ -9712,9 +9599,7 @@ private void checkOrientation() {
 
     @Override
     protected void onBackInvoked() {
-        if (hasLutQuick() && mBinding.lutQuick.hideIfVisible()) {
-            return;
-        } else if (isVisible(mBinding.control.getRoot())) {
+        if (isVisible(mBinding.control.getRoot())) {
             hideControl();
         } else if (isFullscreen() && isShortDramaSession()) {
             finishShortDrama();

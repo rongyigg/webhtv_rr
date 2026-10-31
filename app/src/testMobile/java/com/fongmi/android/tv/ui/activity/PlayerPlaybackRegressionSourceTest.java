@@ -73,29 +73,11 @@ public class PlayerPlaybackRegressionSourceTest {
         int refresh = leanback.indexOf("private void applyActionButtonVisibility()");
         int refreshEnd = leanback.indexOf("\n    private ", refresh + 1);
         int immersive = leanback.indexOf("updateImmersiveAudioAction();", refresh);
-        int diagnostic = leanback.indexOf("updatePanDiagnosticAction();", refresh);
         int rebuild = leanback.indexOf("PlayerButtonSetting.applyVisibility(mActionButtons);", refresh);
         assertTrue("leanback must update runtime-only action visibility before rebuilding the full focus chain",
                 refresh >= 0 && refreshEnd > refresh
                         && immersive > refresh && immersive < rebuild
-                        && diagnostic > refresh && diagnostic < rebuild
                         && rebuild < refreshEnd);
-    }
-
-    @Test
-    public void panDiagnosticRespectsTheConfiguredPlayerButtonOrder() throws Exception {
-        String leanback = readLeanbackJava("com", "fongmi", "android", "tv", "ui", "activity", "VideoActivity.java");
-        int setup = leanback.indexOf("private void setupActionButtons()");
-        int applyOrder = leanback.indexOf("PlayerButtonSetting.applyOrder(mBinding.control.action.container, mActionButtons);", setup);
-
-        assertTrue("pan diagnostic must remain in the configurable action catalog",
-                setup >= 0
-                        && applyOrder > setup
-                        && leanback.indexOf("addActionButton(PlayerButtonSetting.PAN_DIAGNOSTIC, mBinding.control.action.panDiagnostic);", setup) < applyOrder);
-        assertFalse("manual pan diagnostic placement is dead once the action is managed by PlayerButtonSetting",
-                leanback.contains("private void placePanDiagnosticAction()"));
-        assertFalse("configured order must not be overwritten by a second manual pan diagnostic placement",
-                leanback.contains("placePanDiagnosticAction();"));
     }
 
     @Test
@@ -107,7 +89,6 @@ public class PlayerPlaybackRegressionSourceTest {
 
         String[] catalog = {
                 "new Item(QUALITY, R.string.detail_quality)",
-                "new Item(PAN_DIAGNOSTIC, R.string.pan_diagnostic_entry)",
                 "new Item(KARAOKE, R.string.player_karaoke_mode)",
                 "new Item(IMMERSIVE_AUDIO, R.string.player_immersive_audio_mode)",
                 "new Item(SEARCH, R.string.play_search)",
@@ -121,7 +102,6 @@ public class PlayerPlaybackRegressionSourceTest {
 
         String[] leanbackMappings = {
                 "addActionButton(PlayerButtonSetting.SEARCH, mBinding.control.action.search);",
-                "addActionButton(PlayerButtonSetting.PAN_DIAGNOSTIC, mBinding.control.action.panDiagnostic);",
                 "addActionButton(PlayerButtonSetting.QUALITY, mBinding.control.action.actionQuality);",
                 "addActionButton(PlayerButtonSetting.KARAOKE, mBinding.control.action.karaoke);",
                 "addActionButton(PlayerButtonSetting.IMMERSIVE_AUDIO, mBinding.control.action.immersiveAudio);",

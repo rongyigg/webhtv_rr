@@ -1446,12 +1446,6 @@
                             android:visibility="gone" />
 
                         <com.google.android.material.textview.MaterialTextView
-                            android:id="@+id/playerLut"
-                            style="@style/Control"
-                            android:layout_marginEnd="8dp"
-                            android:text="@string/play_lut" />
-
-                        <com.google.android.material.textview.MaterialTextView
                             android:id="@+id/playerParse"
                             style="@style/Control"
                             android:layout_marginEnd="8dp"
@@ -1541,10 +1535,6 @@
             android:layout_height="match_parent"
             android:visibility="gone" />
 
-        <com.fongmi.android.tv.ui.custom.LutQuickPanel
-            android:id="@+id/lutQuick"
-            android:layout_width="match_parent"
-            android:layout_height="match_parent" />
     </com.google.android.material.card.MaterialCardView>
 
     <FrameLayout

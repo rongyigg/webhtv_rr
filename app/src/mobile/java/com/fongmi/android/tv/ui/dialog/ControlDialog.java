@@ -18,7 +18,6 @@ import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowInsetsCompat;
 import androidx.fragment.app.Fragment;
 import androidx.fragment.app.FragmentActivity;
-import androidx.fragment.app.FragmentManager;
 import androidx.viewbinding.ViewBinding;
 
 import com.fongmi.android.tv.App;
@@ -28,7 +27,6 @@ import com.fongmi.android.tv.bean.Parse;
 import com.fongmi.android.tv.databinding.ActivityVideoBinding;
 import com.fongmi.android.tv.databinding.DialogControlBinding;
 import com.fongmi.android.tv.player.PlayerManager;
-import com.fongmi.android.tv.player.lut.LutPreset;
 import com.fongmi.android.tv.setting.PlayerSetting;
 import com.fongmi.android.tv.setting.Setting;
 import com.fongmi.android.tv.ui.activity.TmdbDetailActivity;
@@ -76,7 +74,6 @@ public class ControlDialog extends BaseBottomSheetDialog implements ParseAdapter
                 parent.control.action.playParams,
                 parent.control.action.speed,
                 parent.control.action.scale,
-                parent.control.action.lut,
                 parent.control.action.reset,
                 parent.control.action.repeat,
                 parent.control.action.text,
@@ -101,7 +98,6 @@ public class ControlDialog extends BaseBottomSheetDialog implements ParseAdapter
                 null,
                 activity.inlineControlDialogAction(R.id.speed),
                 activity.inlineControlDialogAction(R.id.scale),
-                activity.inlineControlDialogLutView(),
                 activity.inlineControlDialogAction(R.id.reset),
                 activity.inlineControlDialogAction(R.id.repeat),
                 activity.inlineControlDialogAction(R.id.text),
@@ -158,24 +154,6 @@ public class ControlDialog extends BaseBottomSheetDialog implements ParseAdapter
             @Override
             public void onParse(Parse item) {
                 activity.inlineControlDialogParse(item);
-            }
-
-            @Override
-            public void onLutSelected(LutPreset preset) {
-            }
-
-            @Override
-            public void onLutImport() {
-            }
-
-            @Override
-            public void onLutDir() {
-            }
-
-            @Override
-            public void onLutPanel() {
-                dismiss();
-                App.post(activity::inlineControlDialogLut, 200);
             }
 
             @Override
@@ -286,7 +264,6 @@ public class ControlDialog extends BaseBottomSheetDialog implements ParseAdapter
         setControlPadding();
         setSheetBackground();
         binding.decode.setText(controls.decode.getText());
-        setLut();
         binding.ending.setText(controls.ending.getText());
         binding.opening.setText(controls.opening.getText());
         binding.repeat.setSelected(controls.repeat.isSelected());
@@ -333,8 +310,6 @@ public class ControlDialog extends BaseBottomSheetDialog implements ParseAdapter
         binding.repeat.setOnClickListener(v -> active(binding.repeat, controls.repeat));
         binding.decode.setOnClickListener(v -> click(binding.decode, controls.decode));
         binding.codecCapability.setOnClickListener(v -> listener().onCodecCapabilityPanel());
-        binding.panDiagnostic.setOnClickListener(v -> onPanDiagnostic());
-        binding.lut.setOnClickListener(v -> onLut());
         binding.ending.setOnClickListener(v -> click(binding.ending, controls.ending));
         binding.opening.setOnClickListener(v -> click(binding.opening, controls.opening));
         binding.player.setOnLongClickListener(v -> longClick(binding.player, controls.player));
@@ -344,19 +319,6 @@ public class ControlDialog extends BaseBottomSheetDialog implements ParseAdapter
 
     private void onTimer(View view) {
         TimerDialog.create().show(getActivity());
-    }
-
-    private void onPanDiagnostic() {
-        FragmentActivity activity = getActivity();
-        PlayerManager current = player;
-        if (activity == null || current == null) return;
-        FragmentManager fragmentManager = activity.getSupportFragmentManager();
-        if (activity.isFinishing() || activity.isDestroyed() || fragmentManager.isStateSaved() || current.isReleased()) return;
-        dismissAllowingStateLoss();
-        App.post(() -> {
-            if (activity.isFinishing() || activity.isDestroyed() || fragmentManager.isStateSaved() || current.isReleased()) return;
-            PanNetworkDiagnosticDialog.show(activity, current);
-        }, 140);
     }
 
     private void setImmersiveAudio() {
@@ -464,10 +426,6 @@ public class ControlDialog extends BaseBottomSheetDialog implements ParseAdapter
         view.setText(target.getText());
     }
 
-    private void onLut() {
-        listener().onLutPanel();
-    }
-
     private boolean longClick(TextView view, TextView target) {
         target.performLongClick();
         view.setText(target.getText());
@@ -485,7 +443,6 @@ if (binding == null || controls == null || player == null) return;
         setSpeedPresets();
         binding.player.setText(controls.player.getText());
         binding.reset.setText(controls.reset.getText());
-        setLut();
         setEpisodeColumn();
         // 播放失败回退会同时改内核和软硬解，两个标签都得跟着宿主刷新，否则弹窗里只有内核在变。
         binding.decode.setText(controls.decode.getText());
@@ -495,11 +452,6 @@ if (binding == null || controls == null || player == null) return;
         // setTitleVisible 会带上 setTrackVisible；章节可见性也参与轨道行的计算，
         // 只抄轨道不抄章节的话，回退后弹窗会拿旧章节状态算出错的轨道行。
         setTitleVisible();
-    }
-
-    public void setLut() {
-        if (binding == null || controls == null) return;
-        binding.lut.setText(controls.lut.getText());
     }
 
     private boolean resolveHostDependencies() {
@@ -627,7 +579,6 @@ if (binding == null || controls == null || player == null) return;
         private final TextView playParams;
         private final TextView speed;
         private final TextView scale;
-        private final TextView lut;
         private final TextView reset;
         private final TextView repeat;
         private final TextView text;
@@ -639,7 +590,7 @@ if (binding == null || controls == null || player == null) return;
         private final TextView title;
         private final TextView episodes;
 
-        private Controls(View root, View video, View fullscreen, TextView player, TextView decode, TextView playParams, TextView speed, TextView scale, TextView lut, TextView reset, TextView repeat, TextView text, TextView audio, TextView videoTrack, TextView opening, TextView ending, TextView danmaku, TextView title, TextView episodes) {
+        private Controls(View root, View video, View fullscreen, TextView player, TextView decode, TextView playParams, TextView speed, TextView scale, TextView reset, TextView repeat, TextView text, TextView audio, TextView videoTrack, TextView opening, TextView ending, TextView danmaku, TextView title, TextView episodes) {
             this.root = root;
             this.video = video;
             this.fullscreen = fullscreen;
@@ -648,7 +599,6 @@ if (binding == null || controls == null || player == null) return;
             this.playParams = playParams;
             this.speed = speed;
             this.scale = scale;
-            this.lut = lut;
             this.reset = reset;
             this.repeat = repeat;
             this.text = text;
@@ -684,14 +634,6 @@ if (binding == null || controls == null || player == null) return;
         void onCompactEpisodeTitleChanged();
 
         void onParse(Parse item);
-
-        void onLutSelected(LutPreset preset);
-
-        void onLutImport();
-
-        void onLutDir();
-
-        void onLutPanel();
 
         void onTrackPanel(int type);
 

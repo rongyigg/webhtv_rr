@@ -28,7 +28,6 @@ import com.fongmi.android.tv.bean.Parse;
 import com.fongmi.android.tv.databinding.ActivityVideoBinding;
 import com.fongmi.android.tv.databinding.DialogControlBinding;
 import com.fongmi.android.tv.player.PlayerManager;
-import com.fongmi.android.tv.player.lut.LutPreset;
 import com.fongmi.android.tv.setting.PlayerSetting;
 import com.fongmi.android.tv.setting.Setting;
 import com.fongmi.android.tv.ui.adapter.ParseAdapter;
@@ -130,7 +129,6 @@ public class ControlDialog extends BaseBottomSheetDialog implements ParseAdapter
         setControlPadding();
         setSheetBackground();
         binding.decode.setText(parent.control.action.decode.getText());
-        setLut();
         binding.ending.setText(parent.control.action.ending.getText());
         binding.opening.setText(parent.control.action.opening.getText());
         binding.repeat.setSelected(parent.control.action.repeat.isSelected());
@@ -181,10 +179,8 @@ public class ControlDialog extends BaseBottomSheetDialog implements ParseAdapter
         binding.danmaku.setOnClickListener(v -> ((Listener) requireActivity()).onDanmakuPanel());
         binding.repeat.setOnClickListener(v -> active(binding.repeat, parent.control.action.repeat));
         binding.decode.setOnClickListener(v -> click(binding.decode, parent.control.action.decode));
-        binding.lut.setOnClickListener(v -> onLut());
         binding.ending.setOnClickListener(v -> click(binding.ending, parent.control.action.ending));
         binding.opening.setOnClickListener(v -> click(binding.opening, parent.control.action.opening));
-        binding.panDiagnostic.setOnClickListener(v -> onPanDiagnostic());
         binding.player.setOnLongClickListener(v -> longClick(binding.player, parent.control.action.player));
         binding.ending.setOnLongClickListener(v -> longClick(binding.ending, parent.control.action.ending));
         binding.opening.setOnLongClickListener(v -> longClick(binding.opening, parent.control.action.opening));
@@ -197,9 +193,9 @@ public class ControlDialog extends BaseBottomSheetDialog implements ParseAdapter
 
     private void bindRemoteFocus() {
         List<View> views = Arrays.asList(
-                binding.fullscreen, binding.lut, binding.reset, binding.repeat, binding.timer, binding.karaoke,
+                binding.fullscreen, binding.reset, binding.repeat, binding.timer, binding.karaoke,
                 binding.player, binding.decode, binding.opening, binding.ending, binding.immersiveAudio,
-                binding.panDiagnostic, binding.scale,
+                binding.scale,
                 binding.text, binding.audio, binding.video, binding.danmaku, binding.title,
                 binding.displayTime, binding.displayTraffic, binding.displaySize, binding.displayProgress,
                 binding.displayMini, binding.displayTitle, binding.displayParams,
@@ -219,7 +215,7 @@ public class ControlDialog extends BaseBottomSheetDialog implements ParseAdapter
         if (binding == null || !isAdded()) return;
         binding.controlScroll.scrollTo(0, 0);
         View target = firstFocusable(
-                binding.fullscreen, binding.lut, binding.reset, binding.repeat, binding.timer, binding.karaoke,
+                binding.fullscreen, binding.reset, binding.repeat, binding.timer, binding.karaoke,
                 binding.player, binding.decode, binding.opening, binding.ending
         );
         if (target == null) target = firstFocusable(speeds.toArray(new View[0]));
@@ -238,14 +234,6 @@ public class ControlDialog extends BaseBottomSheetDialog implements ParseAdapter
 
     private void onTimer(View view) {
         TimerDialog.create().show(getActivity());
-    }
-
-    private void onPanDiagnostic() {
-        FragmentActivity activity = getActivity();
-        PlayerManager current = player;
-        if (activity == null || current == null) return;
-        dismissAllowingStateLoss();
-        App.post(() -> PanNetworkDiagnosticDialog.show(activity, current), 140);
     }
 
     private void setKaraoke() {
@@ -362,10 +350,6 @@ public class ControlDialog extends BaseBottomSheetDialog implements ParseAdapter
         view.setText(target.getText());
     }
 
-    private void onLut() {
-        ((Listener) requireActivity()).onLutPanel();
-    }
-
     private boolean longClick(TextView view, TextView target) {
         target.performLongClick();
         view.setText(target.getText());
@@ -383,7 +367,6 @@ public class ControlDialog extends BaseBottomSheetDialog implements ParseAdapter
         setSpeedPresets();
         binding.player.setText(parent.control.action.player.getText());
         binding.reset.setText(parent.control.action.reset.getText());
-        setLut();
         setEpisodeColumn();
         // 播放失败回退会同时改内核和软硬解，两个标签都得跟着宿主刷新，否则弹窗里只有内核在变。
         binding.decode.setText(parent.control.action.decode.getText());
@@ -394,11 +377,6 @@ public class ControlDialog extends BaseBottomSheetDialog implements ParseAdapter
         // setTitleVisible 会带上 setTrackVisible；章节可见性也参与轨道行的计算，
         // 只抄轨道不抄章节的话，回退后弹窗会拿旧章节状态算出错的轨道行。
         setTitleVisible();
-    }
-
-    public void setLut() {
-        if (binding == null || parent == null) return;
-        binding.lut.setText(parent.control.action.lut.getText());
     }
 
     public void setParseVisible(boolean visible) {
@@ -513,14 +491,6 @@ public class ControlDialog extends BaseBottomSheetDialog implements ParseAdapter
         void onCompactEpisodeTitleChanged();
 
         void onParse(Parse item);
-
-        void onLutSelected(LutPreset preset);
-
-        void onLutImport();
-
-        void onLutDir();
-
-        void onLutPanel();
 
         void onTrackPanel(int type);
 
