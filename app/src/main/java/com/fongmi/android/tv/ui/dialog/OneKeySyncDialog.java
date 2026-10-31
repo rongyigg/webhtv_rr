@@ -20,7 +20,6 @@ import com.fongmi.android.tv.bean.Backup;
 import com.fongmi.android.tv.bean.Device;
 import com.fongmi.android.tv.bean.SyncOptions;
 import com.fongmi.android.tv.databinding.DialogOneKeySyncBinding;
-import com.fongmi.android.tv.remote.RemoteStore;
 import com.fongmi.android.tv.server.Server;
 import com.fongmi.android.tv.setting.Setting;
 import com.fongmi.android.tv.ui.adapter.SyncDeviceAdapter;
@@ -28,7 +27,6 @@ import com.fongmi.android.tv.ui.custom.SpaceItemDecoration;
 import com.fongmi.android.tv.utils.NsdDeviceDiscovery;
 import com.fongmi.android.tv.utils.Notify;
 import com.fongmi.android.tv.utils.FileUtil;
-import com.fongmi.android.tv.utils.LoginStateSync;
 import com.fongmi.android.tv.utils.MpvConfigSync;
 import com.fongmi.android.tv.utils.ProgressRequestBody;
 import com.fongmi.android.tv.utils.ResUtil;
@@ -187,7 +185,7 @@ public class OneKeySyncDialog extends BaseBottomSheetDialog implements SyncDevic
     }
 
     private MaterialCheckBox[] boxes() {
-        return new MaterialCheckBox[]{binding.config, binding.spider, binding.mpvConfig, binding.loginState, binding.webHome, binding.search, binding.history, binding.keep, binding.follow, binding.settings, binding.remoteRelay};
+        return new MaterialCheckBox[]{binding.config, binding.spider, binding.mpvConfig, binding.webHome, binding.search, binding.history, binding.keep, binding.follow, binding.settings};
     }
 
     private void updateSyncPathSummary() {
@@ -203,14 +201,12 @@ public class OneKeySyncDialog extends BaseBottomSheetDialog implements SyncDevic
                 .config(binding.config.isChecked())
                 .spider(binding.spider.isChecked())
                 .mpvConfig(binding.mpvConfig.isChecked())
-                .loginState(binding.loginState.isChecked())
                 .webHome(binding.webHome.isChecked())
                 .search(binding.search.isChecked())
                 .history(binding.history.isChecked())
                 .keep(binding.keep.isChecked())
                 .follow(binding.follow.isChecked())
                 .settings(binding.settings.isChecked())
-                .remoteRelay(binding.remoteRelay.isChecked())
                 .paths(Setting.getSyncPaths());
     }
 
@@ -339,16 +335,14 @@ public class OneKeySyncDialog extends BaseBottomSheetDialog implements SyncDevic
             try {
                 SyncFiles.Archive archive = toRemote && SyncFiles.hasPaths(options) ? SyncFiles.createArchive(SyncFiles.getPaths(options), () -> syncing, this::onPrepareProgress) : null;
                 MpvConfigSync.Archive mpvArchive = toRemote && options.isMpvConfig() ? MpvConfigSync.createArchive() : null;
-                LoginStateSync.Archive loginArchive = toRemote && options.isLoginState() ? LoginStateSync.createArchive() : null;
-                RequestBody body = buildBody(options, archive, mpvArchive, loginArchive);
+                RequestBody body = buildBody(options, archive, mpvArchive);
                 if (!syncing) {
                     if (archive != null) archive.delete();
                     if (mpvArchive != null) mpvArchive.delete();
-                    if (loginArchive != null) loginArchive.delete();
                     return;
                 }
                 App.post(() -> binding.start.setEnabled(true));
-                request(url, body, archive, mpvArchive, loginArchive, 0);
+                request(url, body, archive, mpvArchive, 0);
             } catch (Exception e) {
                 if (!syncing) return;
                 App.post(() -> {
@@ -359,72 +353,62 @@ public class OneKeySyncDialog extends BaseBottomSheetDialog implements SyncDevic
         });
     }
 
-    private RequestBody buildBody(SyncOptions options, SyncFiles.Archive archive, MpvConfigSync.Archive mpvArchive, LoginStateSync.Archive loginArchive) {
-        if (archive == null && mpvArchive == null && loginArchive == null) {
+    private RequestBody buildBody(SyncOptions options, SyncFiles.Archive archive, MpvConfigSync.Archive mpvArchive) {
+        if (archive == null && mpvArchive == null) {
             FormBody.Builder body = new FormBody.Builder();
             body.add("options", options.toString());
             body.add("force", "false");
             if (toRemote) body.add("backup", Backup.create(options).toString());
             else body.add("device", Device.get().toString());
-            addRemoteRelay(body, options, toRemote);
             return body.build();
         }
-        App.post(() -> updatePrepare(archive, loginArchive));
+        App.post(() -> updatePrepare(archive));
         MultipartBody.Builder body = new MultipartBody.Builder().setType(MultipartBody.FORM);
         body.addFormDataPart("options", options.toString());
         body.addFormDataPart("force", "false");
         body.addFormDataPart("backup", Backup.create(options).toString());
-        if (options.isRemoteRelay()) body.addFormDataPart("remoteRelay", RemoteStore.exportRelayConfig());
         if (archive != null) body.addFormDataPart(SyncFiles.PART_NAME, archive.getFile().getName(), new ProgressRequestBody(archive.getFile(), ZIP, (written, total) -> App.post(() -> updateUpload(archive, written, total))));
         if (mpvArchive != null) body.addFormDataPart(MpvConfigSync.PART_NAME, mpvArchive.getFile().getName(), new ProgressRequestBody(mpvArchive.getFile(), ZIP, null));
-        if (loginArchive != null) body.addFormDataPart(LoginStateSync.PART_NAME, loginArchive.getFile().getName(), new ProgressRequestBody(loginArchive.getFile(), ZIP, null));
         return body.build();
     }
 
-    private void addRemoteRelay(FormBody.Builder body, SyncOptions options, boolean includeLocal) {
-        if (options.isRemoteRelay() && includeLocal) body.add("remoteRelay", RemoteStore.exportRelayConfig());
-    }
-
-    private void request(String url, RequestBody body, SyncFiles.Archive archive, MpvConfigSync.Archive mpvArchive, LoginStateSync.Archive loginArchive, int retry) {
+    private void request(String url, RequestBody body, SyncFiles.Archive archive, MpvConfigSync.Archive mpvArchive, int retry) {
         syncCall = OkHttp.newCall(client, url, body);
-        syncCall.enqueue(callback(url, body, archive, mpvArchive, loginArchive, retry));
+        syncCall.enqueue(callback(url, body, archive, mpvArchive, retry));
     }
 
-    private void retry(String url, RequestBody body, SyncFiles.Archive archive, MpvConfigSync.Archive mpvArchive, LoginStateSync.Archive loginArchive, int retry, String msg) {
+    private void retry(String url, RequestBody body, SyncFiles.Archive archive, MpvConfigSync.Archive mpvArchive, int retry, String msg) {
         if (!syncing) {
             if (archive != null) archive.delete();
             if (mpvArchive != null) mpvArchive.delete();
-            if (loginArchive != null) loginArchive.delete();
             return;
         }
         if (retry >= MAX_RETRY) {
             if (archive != null) archive.delete();
             if (mpvArchive != null) mpvArchive.delete();
-            if (loginArchive != null) loginArchive.delete();
             App.post(() -> {
                 setSyncing(false);
                 Notify.show(getString(R.string.sync_failed_with_reason, msg));
             });
         } else {
-            Task.schedule(() -> request(url, body, archive, mpvArchive, loginArchive, retry + 1), RETRY_DELAY, TimeUnit.MILLISECONDS);
+            Task.schedule(() -> request(url, body, archive, mpvArchive, retry + 1), RETRY_DELAY, TimeUnit.MILLISECONDS);
         }
     }
 
-    private Callback callback(String url, RequestBody body, SyncFiles.Archive archive, MpvConfigSync.Archive mpvArchive, LoginStateSync.Archive loginArchive, int retry) {
+    private Callback callback(String url, RequestBody body, SyncFiles.Archive archive, MpvConfigSync.Archive mpvArchive, int retry) {
         return new Callback() {
             @Override
             public void onFailure(@NonNull Call call, @NonNull IOException e) {
                 if (call.isCanceled() || !syncing) {
                     if (archive != null) archive.delete();
                     if (mpvArchive != null) mpvArchive.delete();
-                    if (loginArchive != null) loginArchive.delete();
                     App.post(() -> {
                         setSyncing(false);
                         Notify.show(R.string.sync_canceled);
                     });
                     return;
                 }
-                retry(url, body, archive, mpvArchive, loginArchive, retry, e.getMessage());
+                retry(url, body, archive, mpvArchive, retry, e.getMessage());
             }
 
             @Override
@@ -433,12 +417,11 @@ public class OneKeySyncDialog extends BaseBottomSheetDialog implements SyncDevic
                     if (res.isSuccessful()) App.post(() -> {
                         if (archive != null) archive.delete();
                         if (mpvArchive != null) mpvArchive.delete();
-                        if (loginArchive != null) loginArchive.delete();
                         setSyncing(false);
                         Notify.show(R.string.sync_success);
                         dismiss();
                     });
-                    else retry(url, body, archive, mpvArchive, loginArchive, retry, res.message());
+                    else retry(url, body, archive, mpvArchive, retry, res.message());
                 }
             }
         };
@@ -466,13 +449,13 @@ public class OneKeySyncDialog extends BaseBottomSheetDialog implements SyncDevic
         }
     }
 
-    private void updatePrepare(SyncFiles.Archive archive, LoginStateSync.Archive loginArchive) {
+    private void updatePrepare(SyncFiles.Archive archive) {
         if (!syncing || binding == null) return;
         progressStart = System.currentTimeMillis();
         binding.progress.setProgress(100);
-        int count = (archive == null ? 0 : archive.getCount()) + (loginArchive == null ? 0 : loginArchive.getCount());
-        long rawSize = (archive == null ? 0 : archive.getRawSize()) + (loginArchive == null ? 0 : loginArchive.getRawSize());
-        long zipSize = (archive == null ? 0 : archive.getZipSize()) + (loginArchive == null ? 0 : loginArchive.getZipSize());
+        int count = archive == null ? 0 : archive.getCount();
+        long rawSize = archive == null ? 0 : archive.getRawSize();
+        long zipSize = archive == null ? 0 : archive.getZipSize();
         binding.progressText.setText(getString(R.string.sync_upload_prepare, count, FileUtil.byteCountToDisplaySize(rawSize), FileUtil.byteCountToDisplaySize(zipSize)));
     }
 

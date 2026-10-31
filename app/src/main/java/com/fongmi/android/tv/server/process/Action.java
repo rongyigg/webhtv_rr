@@ -17,13 +17,11 @@ import com.fongmi.android.tv.event.CastEvent;
 import com.fongmi.android.tv.event.RefreshEvent;
 import com.fongmi.android.tv.event.ServerEvent;
 import com.fongmi.android.tv.impl.Callback;
-import com.fongmi.android.tv.remote.RemoteStore;
 import com.fongmi.android.tv.server.Nano;
 import com.fongmi.android.tv.server.Server;
 import com.fongmi.android.tv.server.impl.Process;
 import com.fongmi.android.tv.service.PlaybackService;
 import com.fongmi.android.tv.utils.FileUtil;
-import com.fongmi.android.tv.utils.LoginStateSync;
 import com.fongmi.android.tv.utils.MpvConfigSync;
 import com.fongmi.android.tv.utils.Notify;
 import com.fongmi.android.tv.utils.ProgressRequestBody;
@@ -332,13 +330,11 @@ public class Action implements Process {
             SyncOptions options = SyncOptions.objectFrom(params.get("options"));
             SyncFiles.Archive archive = SyncFiles.hasPaths(options) ? SyncFiles.createArchive(SyncFiles.getPaths(options)) : null;
             MpvConfigSync.Archive mpvArchive = options.isMpvConfig() ? MpvConfigSync.createArchive() : null;
-            LoginStateSync.Archive loginArchive = options.isLoginState() ? LoginStateSync.createArchive() : null;
             try {
-                return post(device, "backup", getBackupBody(options, archive, mpvArchive, loginArchive));
+                return post(device, "backup", getBackupBody(options, archive, mpvArchive));
             } finally {
                 if (archive != null) archive.delete();
                 if (mpvArchive != null) mpvArchive.delete();
-                if (loginArchive != null) loginArchive.delete();
             }
         } catch (Exception e) {
             App.post(() -> Notify.show(e.getMessage()));
@@ -346,21 +342,18 @@ public class Action implements Process {
         }
     }
 
-    private RequestBody getBackupBody(SyncOptions options, SyncFiles.Archive archive, MpvConfigSync.Archive mpvArchive, LoginStateSync.Archive loginArchive) {
-        if (archive == null && mpvArchive == null && loginArchive == null) {
+    private RequestBody getBackupBody(SyncOptions options, SyncFiles.Archive archive, MpvConfigSync.Archive mpvArchive) {
+        if (archive == null && mpvArchive == null) {
             FormBody.Builder body = new FormBody.Builder();
             body.add("options", options.toString());
             body.add("backup", Backup.create(options).toString());
-            if (options.isRemoteRelay()) body.add("remoteRelay", RemoteStore.exportRelayConfig());
             return body.build();
         }
         MultipartBody.Builder body = new MultipartBody.Builder().setType(MultipartBody.FORM);
         body.addFormDataPart("options", options.toString());
         body.addFormDataPart("backup", Backup.create(options).toString());
-        if (options.isRemoteRelay()) body.addFormDataPart("remoteRelay", RemoteStore.exportRelayConfig());
         if (archive != null) body.addFormDataPart(SyncFiles.PART_NAME, archive.getFile().getName(), new ProgressRequestBody(archive.getFile(), ZIP, null));
         if (mpvArchive != null) body.addFormDataPart(MpvConfigSync.PART_NAME, mpvArchive.getFile().getName(), new ProgressRequestBody(mpvArchive.getFile(), ZIP, null));
-        if (loginArchive != null) body.addFormDataPart(LoginStateSync.PART_NAME, loginArchive.getFile().getName(), new ProgressRequestBody(loginArchive.getFile(), ZIP, null));
         return body.build();
     }
 
@@ -387,18 +380,7 @@ public class Action implements Process {
                 Path.clear(archive);
             }
         }
-        if (options.isLoginState() && files.containsKey(LoginStateSync.PART_NAME)) {
-            File archive = new File(files.get(LoginStateSync.PART_NAME));
-            try {
-                LoginStateSync.restoreArchive(archive);
-            } catch (Exception e) {
-                throw new IllegalStateException(e);
-            } finally {
-                Path.clear(archive);
-            }
-        }
         backup.restore(options, force);
-        if (options.isRemoteRelay()) RemoteStore.importRelayConfig(params.get("remoteRelay"));
         App.post(() -> Notify.show(R.string.sync_receive_success));
     }
 

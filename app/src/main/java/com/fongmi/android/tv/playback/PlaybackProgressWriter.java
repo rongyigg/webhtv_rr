@@ -108,41 +108,6 @@ public final class PlaybackProgressWriter {
         return deleteInternal(input, null, false, true);
     }
 
-    public static PlaybackProgressBatchResult applyFromRemoteSync(List<PlaybackProgressInput> inputs, RemoteSyncConfig config) {
-        PlaybackProgressBatchResult batch = new PlaybackProgressBatchResult();
-        if (!ViewingRecordSyncStore.isEnabled()) {
-            batch.add(PlaybackProgressApplyResult.failed((PlaybackProgressInput) null, "观影记录同步未开启"));
-            return batch;
-        }
-        List<PlaybackDeleteTombstone> tombstones = PlaybackDeleteTombstoneStore.snapshot();
-        if (inputs != null) for (PlaybackProgressInput input : inputs) {
-            input = input == null ? null : input.normalize();
-            if (input == null) {
-                batch.add(PlaybackProgressApplyResult.failed((PlaybackProgressInput) null, "请求体不能为空"));
-            } else if (config != null && !config.matchesSite(input.siteKey)) {
-                batch.add(PlaybackProgressApplyResult.skipped(input, input.targetHistoryKey(targetCid(input)), "站点不匹配", 0));
-            } else if (!TextUtils.isEmpty(input.configKey) && targetCid(input) <= 0) {
-                batch.add(PlaybackProgressApplyResult.skipped(input, input.historyKey, "接口不匹配", 0));
-            } else {
-                batch.add(applyInternal(input, tombstones, true));
-            }
-        }
-        return batch;
-    }
-
-    /** Applies delete operations from a delete-aware remote response. */
-    public static PlaybackProgressBatchResult deleteFromRemoteSync(List<PlaybackProgressDeleteInput> inputs, RemoteSyncConfig config) {
-        PlaybackProgressBatchResult batch = new PlaybackProgressBatchResult();
-        if (!ViewingRecordSyncStore.isEnabled()) {
-            batch.add(PlaybackProgressApplyResult.failed((PlaybackProgressDeleteInput) null, "观影记录同步未开启"));
-            return batch;
-        }
-        if (inputs != null) for (PlaybackProgressDeleteInput input : inputs) {
-            batch.add(deleteInternal(input, config, true, false));
-        }
-        return batch;
-    }
-
     private static PlaybackProgressBatchResult applyInternal(List<PlaybackProgressInput> inputs,
                                                               List<PlaybackDeleteTombstone> tombstones,
                                                               boolean remote) {

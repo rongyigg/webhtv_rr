@@ -255,7 +255,6 @@ public class SyncFiles {
 
     static boolean skipTree(String path) {
         if (path == null || path.isEmpty()) return false;
-        if ("WebHTV/RemoteTrust".equals(path) || path.startsWith("WebHTV/RemoteTrust/")) return true;
         if ("TV/lib".equals(path) || path.startsWith("TV/lib/")) return true;
         if ("TV/log".equals(path) || path.startsWith("TV/log/")) return true;
         if ("TV/LogVar".equals(path) || path.startsWith("TV/LogVar/")) return true;

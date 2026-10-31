@@ -219,7 +219,6 @@ public class PlayerControlFocusIntegrationTest {
                 "player.setOnClickListener(guarded(this::onPlayerKernel))",
                 "decode.setOnClickListener(guarded(this::onDecode))",
                 "playParams.setOnClickListener(guarded(this::onPlayParams))",
-                "multiThreadProxy.setOnClickListener(guarded(this::onMultiThreadProxy))",
                 "panDiagnostic.setOnClickListener(guarded(this::onPanDiagnostic))",
                 "codecCapability.setOnClickListener(guarded(this::onCodecCapability))",
                 "ending.setOnClickListener(guarded(this::onEnding))",

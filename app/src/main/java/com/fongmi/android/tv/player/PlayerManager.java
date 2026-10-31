@@ -96,15 +96,10 @@ import com.fongmi.android.tv.player.lut.LutSetting;
 import com.fongmi.android.tv.player.lut.LutStore;
 import com.fongmi.android.tv.player.lut.MpvLutShader;
 import com.fongmi.android.tv.player.lut.MpvLutShaderFactory;
-import com.fongmi.android.tv.server.proxy.MultiThreadProxy;
-import com.fongmi.android.tv.server.proxy.ProxyPlaybackPolicy;
-import com.fongmi.android.tv.server.proxy.ProxyRuntimeConfig;
-import com.fongmi.android.tv.server.proxy.ProxyStreamRegistration;
 import com.fongmi.android.tv.setting.DanmakuSetting;
 import com.fongmi.android.tv.setting.SiteHealthStore;
 import com.fongmi.android.tv.setting.ExoPerformanceSetting;
 import com.fongmi.android.tv.setting.IjkPerformanceSetting;
-import com.fongmi.android.tv.setting.MultiThreadProxySetting;
 import com.fongmi.android.tv.setting.PlaybackExperimentSetting;
 import com.fongmi.android.tv.setting.PlaybackLightweightAssessmentSetting;
 import com.fongmi.android.tv.setting.PlaybackPerformanceCatalog;
@@ -227,7 +222,6 @@ public class PlayerManager implements ParseCallback {
     private VideoSize videoSize;
     private ParseJob parseJob;
     private PlaySpec spec;
-    private ProxyStreamRegistration multiThreadProxyRegistration;
     private Player player;
     private TrackSelectionParameters realtimeSubtitleTrackSelection;
     private String currentDanmakuUrl;
@@ -399,7 +393,6 @@ public class PlayerManager implements ParseCallback {
         ijkRuntimeTemporaryFallback = false;
         ijkRuntimeManualOverride = false;
         pendingIjkRuntimeFallbackReparse = false;
-        closeMultiThreadProxyRegistration();
         if (engine == null) {
             mediaSession.close();
             return;
@@ -1709,7 +1702,6 @@ public class PlayerManager implements ParseCallback {
         lutApplySeq++;
         clearExoDecoderResourceRecovery(true);
         resetNetworkProtectionSession("clear");
-        closeMultiThreadProxyRegistration();
         spec = null;
         // 待恢复字幕是绑定「下一次起播」的一次性登记。若那次起播被提前拦下
         // （DRM 不支持、阅读器路由、地址为空），登记会留在这里；不清掉的话
@@ -1775,7 +1767,7 @@ public void resetTrack(int type) {
         initTrack = false;
         waitingLutBeforePlay = false;
         applySubtitleStyle();
-        startWithProxy(target, position, wasPlayWhenReady);
+        startEngine(target, position, wasPlayWhenReady);
         if (speed != 1f) setSpeed(speed);
         setRepeatOne(repeat);
         App.post(runnable, Constant.TIMEOUT_PLAY);
@@ -2579,7 +2571,7 @@ public void resetTrack(int type) {
                     position == C.TIME_UNSET ? 0 : position,
                     wasPlayWhenReady,
                     decision.reason().label());
-            restartWithProxy(spec, position, wasPlayWhenReady);
+            restartEngine(spec, position, wasPlayWhenReady);
         } catch (Throwable error) {
             PlaybackTrace.log("ijk-buffer", playbackTrace.current(),
                     "action=reload result=failed errorType=%s",
@@ -2621,7 +2613,7 @@ public void resetTrack(int type) {
                     recovery.queue().totalPackets(),
                     wasPlayWhenReady,
                     reloadGate.reason().label());
-            restartWithProxy(spec, C.TIME_UNSET, wasPlayWhenReady);
+            restartEngine(spec, C.TIME_UNSET, wasPlayWhenReady);
         } catch (Throwable error) {
             PlaybackTrace.log("ijk-realtime", playbackTrace.current(),
                     "action=rebuild-session result=failed errorType=%s",
@@ -2670,7 +2662,7 @@ public void resetTrack(int type) {
                     Math.round(metrics.outputFps() * 1_000f),
                     wasPlayWhenReady,
                     reloadGate.reason().label());
-            restartWithProxy(spec, position, wasPlayWhenReady);
+            restartEngine(spec, position, wasPlayWhenReady);
         } catch (Throwable error) {
             PlaybackTrace.log("ijk-decode", playbackTrace.current(),
                     "action=reload result=failed errorType=%s",
@@ -3928,7 +3920,7 @@ public void resetTrack(int type) {
         playbackTrace.mark(PlaybackTrace.Stage.PREPARE,
                 "player=" + playerType + " decode=" + engine.getDecode()
                         + " exo=" + reason);
-        startWithProxy(spec, position, wasPlayWhenReady);
+        startEngine(spec, position, wasPlayWhenReady);
         startNativeAudioSession(wasPlayWhenReady);
         if (speed != 1f) setSpeed(speed);
         setRepeatOne(repeat);
@@ -4228,7 +4220,7 @@ public void resetTrack(int type) {
         setDanmakus(spec.getDanmakus());
         initTrack = false;
         waitingLutBeforePlay = false;
-        restartWithProxy(spec, position, playWhenReady);
+        restartEngine(spec, position, playWhenReady);
         App.post(runnable, Constant.TIMEOUT_PLAY);
     }
 
@@ -4298,7 +4290,7 @@ public void resetTrack(int type) {
         playbackTrace.mark(PlaybackTrace.Stage.PREPARE, "player=" + playerType + " decode=" + engine.getDecode());
         long initialPositionMs = pendingInitialStartPositionMs;
         pendingInitialStartPositionMs = C.TIME_UNSET;
-        startWithProxy(spec, initialPositionMs, playWhenReady);
+        startEngine(spec, initialPositionMs, playWhenReady);
         publishPlaybackTelemetry();
         schedulePlaybackTelemetry();
         startNativeAudioSession(playWhenReady);
@@ -4306,16 +4298,19 @@ public void resetTrack(int type) {
         if (notifyPrepare) callback.onPrepare();
     }
 
-    private void startWithProxy(PlaySpec source, boolean playWhenReady) {
-        runWithProxy(source, playbackSpec -> engine.start(playbackSpec, playWhenReady));
+    private void startEngine(PlaySpec source, boolean playWhenReady) {
+        beginPlaybackAttempt();
+        engine.start(source.checkUa(), playWhenReady);
     }
 
-    private void startWithProxy(PlaySpec source, long position, boolean playWhenReady) {
-        runWithProxy(source, playbackSpec -> engine.start(playbackSpec, position, playWhenReady));
+    private void startEngine(PlaySpec source, long position, boolean playWhenReady) {
+        beginPlaybackAttempt();
+        engine.start(source.checkUa(), position, playWhenReady);
     }
 
-    private void restartWithProxy(PlaySpec source, long position, boolean playWhenReady) {
-        runWithProxy(source, playbackSpec -> engine.restart(playbackSpec, position, playWhenReady));
+    private void restartEngine(PlaySpec source, long position, boolean playWhenReady) {
+        beginPlaybackAttempt();
+        engine.restart(source.checkUa(), position, playWhenReady);
     }
 
     private void beginPlaybackAttempt() {
@@ -4331,58 +4326,6 @@ public void resetTrack(int type) {
                 playbackAutoSession, currentIjkRuntimeSample(null, now));
         ijkFirstFrameWatchdog.beginAttempt(
                 playbackAutoSession, isIjk() && !ijkRuntimeCoversFirstFrame);
-    }
-
-    private void runWithProxy(PlaySpec source, ProxyPlaybackAction action) {
-        ProxyStreamRegistration previousProxyRegistration = multiThreadProxyRegistration;
-        PreparedProxyPlayback prepared = prepareProxyPlayback(source);
-        try {
-            beginPlaybackAttempt();
-            action.run(prepared.spec());
-            commitProxyPlayback(previousProxyRegistration, prepared.registration());
-        } catch (RuntimeException | Error failure) {
-            if (prepared.registration() != null) prepared.registration().close();
-            throw failure;
-        }
-    }
-
-    private PreparedProxyPlayback prepareProxyPlayback(PlaySpec source) {
-        PlaySpec playbackSpec = source.checkUa();
-        ProxyStreamRegistration nextProxyRegistration = null;
-        ProxyRuntimeConfig proxyConfig = MultiThreadProxySetting.get();
-        try {
-            MultiThreadProxy.apply(proxyConfig, MultiThreadProxySetting.getDomainRules());
-            if (ProxyPlaybackPolicy.shouldProxy(proxyConfig.enabled(), source.getUrl(), source.getFormat())) {
-                nextProxyRegistration = MultiThreadProxy.register(source.getUrl(), source.getHeaders());
-                playbackSpec = source.copyForPlayback(nextProxyRegistration.url(), Map.of());
-            }
-        } catch (IOException | RuntimeException e) {
-            if (nextProxyRegistration != null) nextProxyRegistration.close();
-            nextProxyRegistration = null;
-            if (SpiderDebug.isEnabled()) {
-                SpiderDebug.log("player", "multi-thread proxy bypass cause=%s", e.getClass().getSimpleName());
-            }
-        }
-        return new PreparedProxyPlayback(playbackSpec, nextProxyRegistration);
-    }
-
-    private void commitProxyPlayback(ProxyStreamRegistration previous, ProxyStreamRegistration next) {
-        multiThreadProxyRegistration = next;
-        if (previous != null) previous.close();
-    }
-
-    @FunctionalInterface
-    private interface ProxyPlaybackAction {
-        void run(PlaySpec playbackSpec);
-    }
-
-    private record PreparedProxyPlayback(PlaySpec spec, ProxyStreamRegistration registration) {
-    }
-
-    private void closeMultiThreadProxyRegistration() {
-        ProxyStreamRegistration registration = multiThreadProxyRegistration;
-        multiThreadProxyRegistration = null;
-        if (registration != null) registration.close();
     }
 
     private void prepareExoFrameSchedulingForNewPlayback() {
@@ -4836,7 +4779,7 @@ public void resetTrack(int type) {
         lutPipelineReadyForItem = true;
         if (SpiderDebug.isEnabled()) SpiderDebug.log("lut", "prepare current item with effects reason=%s position=%d play=%s spec=%s", reason, position, playWhenReady, debugSpec());
         startLutWarmupRecovery();
-        restartWithProxy(spec, position, playWhenReady);
+        restartEngine(spec, position, playWhenReady);
         if (speed != 1f) setSpeed(speed);
         lutPipelinePrepareInProgress = false;
         return false;
@@ -5805,7 +5748,7 @@ public void resetTrack(int type) {
         PlaybackTrace.log("exo-rtsp-live", playbackTrace.current(),
                 "action=rebuild-session play=%s speed=%.3f repeat=%s",
                 wasPlayWhenReady, speed, repeat);
-        restartWithProxy(spec, C.TIME_UNSET, wasPlayWhenReady);
+        restartEngine(spec, C.TIME_UNSET, wasPlayWhenReady);
         if (speed != 1f) setSpeed(speed);
         setRepeatOne(repeat);
         App.post(runnable, Constant.TIMEOUT_PLAY);
@@ -6620,7 +6563,7 @@ public void resetTrack(int type) {
                 setDanmakus(recovery.target().getDanmakus());
                 waitingLutBeforePlay = false;
                 applySubtitleStyle();
-                startWithProxy(
+                startEngine(
                         recovery.target(),
                         recovery.positionMs(),
                         recovery.playWhenReady());
@@ -6675,7 +6618,7 @@ public void resetTrack(int type) {
             initTrack = false;
             waitingLutBeforePlay = false;
             applySubtitleStyle();
-            startWithProxy(target, position, wasPlayWhenReady);
+            startEngine(target, position, wasPlayWhenReady);
             if (speed != 1f) setSpeed(speed);
             setRepeatOne(repeat);
             App.post(runnable, Constant.TIMEOUT_PLAY);
@@ -6705,7 +6648,7 @@ public void resetTrack(int type) {
             setDanmakus(target.getDanmakus());
             waitingLutBeforePlay = false;
             applySubtitleStyle();
-            startWithProxy(target, position, wasPlayWhenReady);
+            startEngine(target, position, wasPlayWhenReady);
             if (speed != 1f) setSpeed(speed);
             setRepeatOne(repeat);
             App.post(runnable, Constant.TIMEOUT_PLAY);
@@ -6760,7 +6703,7 @@ public void resetTrack(int type) {
             setDanmakus(target.getDanmakus());
             waitingLutBeforePlay = false;
             applySubtitleStyle();
-            startWithProxy(target, position, wasPlayWhenReady);
+            startEngine(target, position, wasPlayWhenReady);
             if (speed != 1f) setSpeed(speed);
             setRepeatOne(repeat);
             App.post(runnable, Constant.TIMEOUT_PLAY);
@@ -6798,7 +6741,7 @@ public void resetTrack(int type) {
             setDanmakus(target.getDanmakus());
             waitingLutBeforePlay = false;
             applySubtitleStyle();
-            startWithProxy(target, position, wasPlayWhenReady);
+            startEngine(target, position, wasPlayWhenReady);
             if (speed != 1f) setSpeed(speed);
             setRepeatOne(repeat);
             App.post(runnable, Constant.TIMEOUT_PLAY);

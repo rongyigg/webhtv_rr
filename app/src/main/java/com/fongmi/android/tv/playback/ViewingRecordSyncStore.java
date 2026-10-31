@@ -1,8 +1,5 @@
 package com.fongmi.android.tv.playback;
 
-import android.content.Context;
-
-import com.fongmi.android.tv.R;
 import com.github.catvod.utils.Prefers;
 
 public final class ViewingRecordSyncStore {
@@ -29,13 +26,4 @@ public final class ViewingRecordSyncStore {
         Prefers.put(KEY_LOCAL_WRITE, enabled);
     }
 
-    public static String summary(Context context) {
-        String state = context.getString(isEnabled() ? R.string.setting_enable : R.string.setting_disable);
-        return context.getString(R.string.viewing_record_sync_entry_summary,
-                state,
-                PlaybackRemoteSyncStore.activeCount(),
-                PlaybackRemoteSyncStore.totalCount(),
-                PlaybackWebhookStore.activeCount(),
-                PlaybackWebhookStore.totalCount());
-    }
 }

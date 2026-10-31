@@ -98,7 +98,6 @@ import com.fongmi.android.tv.service.OmdbService;
 import com.fongmi.android.tv.service.PersonalRecommendationService;
 import com.fongmi.android.tv.setting.DanmakuSetting;
 import com.fongmi.android.tv.setting.PlayerButtonSetting;
-import com.fongmi.android.tv.setting.MultiThreadProxySetting;
 import com.fongmi.android.tv.setting.PlaybackExperimentSetting;
 import com.fongmi.android.tv.setting.PreloadSetting;
 import com.fongmi.android.tv.setting.PlayerSetting;
@@ -136,7 +135,6 @@ import com.fongmi.android.tv.ui.dialog.ContentDialog;
 import com.fongmi.android.tv.ui.dialog.AdRuleEditDialog;
 import com.fongmi.android.tv.ui.dialog.DanmakuDialog;
 import com.fongmi.android.tv.ui.dialog.EpisodeListDialog;
-import com.fongmi.android.tv.ui.dialog.MultiThreadProxyDialog;
 import com.fongmi.android.tv.ui.dialog.QuickSearchDialog;
 import com.fongmi.android.tv.ui.dialog.SubtitleDialog;
 import com.fongmi.android.tv.ui.dialog.SubtitleManualSearchDialog;
@@ -1541,7 +1539,6 @@ private boolean runtimeSourceOnly;
         mBinding.control.action.player.setOnLongClickListener(view -> onPlayerKernelLong());
         mBinding.control.action.decode.setOnClickListener(guarded(this::onDecode));
         mBinding.control.action.playParams.setOnClickListener(guarded(this::onPlayParams));
-        mBinding.control.action.multiThreadProxy.setOnClickListener(guarded(this::onMultiThreadProxy));
         mBinding.control.action.panDiagnostic.setOnClickListener(guarded(this::onPanDiagnostic));
         mBinding.control.action.codecCapability.setOnClickListener(guarded(this::onCodecCapability));
         mBinding.control.action.ending.setOnClickListener(guarded(this::onEnding));
@@ -1661,7 +1658,6 @@ private boolean runtimeSourceOnly;
         addActionButton(PlayerButtonSetting.PLAYER, mBinding.control.action.player);
         addActionButton(PlayerButtonSetting.DECODE, mBinding.control.action.decode);
         addActionButton(PlayerButtonSetting.PLAY_PARAMS, mBinding.control.action.playParams);
-        addActionButton(PlayerButtonSetting.MULTI_THREAD_PROXY, mBinding.control.action.multiThreadProxy);
         addActionButton(PlayerButtonSetting.PAN_DIAGNOSTIC, mBinding.control.action.panDiagnostic);
         addActionButton(PlayerButtonSetting.CODEC_CAPABILITY, mBinding.control.action.codecCapability);
         addActionButton(PlayerButtonSetting.SPEED, mBinding.control.action.speed);
@@ -3054,7 +3050,7 @@ private boolean runtimeSourceOnly;
         if (!PlaybackExperimentSetting.isAllowed(PlaybackExperimentPolicy.Action.EXO_SHORT_DRAMA_QUEUE)) return false;
         if (!isShortDramaSource() || service() == null || player() == null || !player().isExo()
                 || !player().supportsPlaylistQueue() || !PreloadSetting.isPreload(PlayerSetting.EXO)) return false;
-        if (MultiThreadProxySetting.get().enabled() || player().isRepeatOne() || mHistory == null
+        if (player().isRepeatOne() || mHistory == null
                 || mHistory.getOpening() > 0 || mHistory.getEnding() > 0
                 || pendingResumeSeekMs != C.TIME_UNSET || tmdbHistoryResumePending
                 || isAudioOnly() || shouldUseImmersiveAudio()) return false;
@@ -4326,16 +4322,6 @@ private boolean runtimeSourceOnly;
         mBinding.control.action.repeat.setSelected(player().isRepeatOne());
     }
 
-    private void onMultiThreadProxy() {
-        MultiThreadProxyDialog.show(this, player().getUrl(), this::onMultiThreadProxySaved);
-    }
-
-    private void onMultiThreadProxySaved(boolean applyNow) {
-        invalidateShortDramaQueue("multi-thread-proxy");
-        setPlayParamsState();
-        if (applyNow && player() != null && !player().isEmpty()) player().reloadCurrentMediaItem();
-    }
-
     private void onPlayParams() {
         if (mOsd == null) return;
         boolean visible = !mOsd.isDiagnosticsVisible();
@@ -4354,7 +4340,6 @@ private boolean runtimeSourceOnly;
 
     private void setPlayParamsState() {
         mBinding.control.action.playParams.setSelected(mOsd != null && mOsd.isDiagnosticsVisible());
-        mBinding.control.action.multiThreadProxy.setSelected(MultiThreadProxySetting.get().enabled());
     }
 
     @Override

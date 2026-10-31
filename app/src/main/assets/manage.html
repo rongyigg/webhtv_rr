@@ -126,7 +126,6 @@
                             <div class="option-grid">
                                 <label class="option-check"><input id="syncOptConfig" type="checkbox" checked><span><strong>接口与站源列表</strong><small>接口配置、站源、直播源</small></span></label>
                                 <label class="option-check"><input id="syncOptSpider" type="checkbox" checked onchange="updateSyncPathsVisible()"><span><strong>Jar/脚本保存数据</strong><small>包含下方选中的同步目录</small></span></label>
-                                <label class="option-check"><input id="syncOptLoginState" type="checkbox" checked><span><strong>登录态</strong><small>学习到的 Cookie、Token 与登录状态文件</small></span></label>
                                 <label class="option-check"><input id="syncOptWebHome" type="checkbox" checked><span><strong>WebHome 主页数据</strong><small>WebHome 缓存与主页状态</small></span></label>
                                 <label class="option-check"><input id="syncOptSearch" type="checkbox" checked><span><strong>搜索记录</strong><small>关键词与热词</small></span></label>
                                 <label class="option-check"><input id="syncOptHistory" type="checkbox" checked><span><strong>观看记录</strong><small>播放历史与进度</small></span></label>
@@ -151,74 +150,6 @@
                         <div class="sync-tree-shell">
                             <div class="file-path" id="syncTreePath">/</div>
                             <div id="syncTree"></div>
-                        </div>
-                    </div>
-                </div>
-            </section>
-
-            <section id="viewLoginState" class="manage-view login-state-view">
-                <div class="workspace-panel">
-                    <div class="workspace-hero login-state-hero">
-                        <div class="workspace-hero-main">
-                            <div class="manage-title">登录态学习</div>
-                            <div class="manage-subtitle" id="loginStateSummary">读取中</div>
-                        </div>
-                        <div class="hero-actions login-state-actions">
-                            <button id="loginStateLearnBtn" class="md-btn md-btn-filled" onclick="toggleLoginStateLearning()" type="button">开始学习</button>
-                            <button class="md-btn md-btn-tonal" onclick="loadLoginStateManage(true)" type="button">刷新</button>
-                        </div>
-                    </div>
-                    <div class="login-state-body">
-                        <div class="manage-card">
-                            <div class="card-line">
-                                <div>
-                                    <div class="manage-card-title">已确认路径</div>
-                                    <div class="manage-subtitle">一键同步只会同步这里已确认的文件或目录</div>
-                                </div>
-                                <div class="card-actions">
-                                    <button class="md-btn md-btn-filled md-btn-compact" onclick="saveLoginStatePaths()" type="button">保存路径</button>
-                                </div>
-                            </div>
-                            <div id="loginStateLearned" class="login-file-list"></div>
-                        </div>
-                        <div class="manage-card">
-                            <div class="card-line">
-                                <div>
-                                    <div class="manage-card-title">待确认</div>
-                                    <div class="manage-subtitle">只显示还没有确认的学习候选，先查看内容再决定是否同步</div>
-                                </div>
-                            </div>
-                            <div id="loginStatePending" class="login-file-list"></div>
-                        </div>
-                        <div class="manage-card">
-                            <div class="card-line">
-                                <div>
-                                    <div class="manage-card-title">路径管理</div>
-                                    <div class="manage-subtitle">展开目录树，勾选需要同步的登录态文件或目录</div>
-                                </div>
-                                <div class="card-actions">
-                                    <button id="loginStateRevealBtn" class="md-btn md-btn-tonal md-btn-compact" onclick="revealLoginStatePending()" type="button">显示待确认</button>
-                                </div>
-                            </div>
-                            <div class="login-tree-grid">
-                                <div class="login-tree-panel">
-                                    <div class="login-tree-title">App 私有目录</div>
-                                    <div id="loginStateTreeApp" class="login-tree"></div>
-                                </div>
-                                <div class="login-tree-panel">
-                                    <div class="login-tree-title">共享存储</div>
-                                    <div id="loginStateTreeSdcard" class="login-tree"></div>
-                                </div>
-                            </div>
-                        </div>
-                        <div class="manage-card">
-                            <div class="card-line">
-                                <div>
-                                    <div class="manage-card-title">最近学习结果</div>
-                                    <div class="manage-subtitle">按学习期间发生变化的文件记录，保留识别原因和置信度</div>
-                                </div>
-                            </div>
-                            <div id="loginStateFindings" class="login-file-list findings-list"></div>
                         </div>
                     </div>
                 </div>
@@ -364,7 +295,6 @@
         <nav class="md-nav-bar manage-nav">
             <button id="navFiles" class="md-nav-item active" onclick="showManageView('files')"><span class="md-nav-label">文件</span></button>
             <button id="navSync" class="md-nav-item" onclick="showManageView('sync')"><span class="md-nav-label">同步</span></button>
-            <button id="navLoginState" class="md-nav-item" onclick="showManageView('loginState')"><span class="md-nav-label">登录态</span></button>
             <button id="navCsp" class="md-nav-item" onclick="showManageView('csp')"><span class="md-nav-label">站点</span></button>
             <button id="navProxy" class="md-nav-item" onclick="showManageView('proxy')"><span class="md-nav-label">Proxy</span></button>
             <button id="navConfigs" class="md-nav-item" onclick="showManageView('configs')"><span class="md-nav-label">接口</span></button>
@@ -440,21 +370,6 @@
             <div class="md-dialog-actions">
                 <button onclick="confirmCspLink(0)" class="md-dialog-btn">取消</button>
                 <button onclick="confirmCspLink(1)" class="md-dialog-btn">确定</button>
-            </div>
-        </div>
-    </div>
-    <div id="loginStateEditorDialog" class="md-dialog-overlay">
-        <div class="md-dialog editor-dialog">
-            <div class="md-dialog-title">登录态文件</div>
-            <div class="md-dialog-body">
-                <div id="loginStatePath" class="file-path"></div>
-                <div id="loginStatePreviewMeta" class="dialog-hint file-preview-meta"></div>
-                <div id="loginStatePreviewList" class="file-preview-list"></div>
-                <textarea id="loginStateContent" class="code-area modal-code scroll-code" spellcheck="false" wrap="off"></textarea>
-            </div>
-            <div class="md-dialog-actions">
-                <button onclick="closeDialog('loginStateEditorDialog')" class="md-dialog-btn">取消</button>
-                <button id="loginStateSaveBtn" onclick="saveLoginStateFile()" class="md-dialog-btn">保存</button>
             </div>
         </div>
     </div>

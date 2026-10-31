@@ -57,23 +57,11 @@ public class TvAppExitSourceTest {
     }
 
     @Test
-    public void stoppedRemoteAgentRejectsQueuedPollsAndLateWebSocketCallbacks() throws Exception {
-        String remote = read("main", "java", "com", "fongmi", "android", "tv", "remote", "RemoteAgent.java");
-
-        assertTrue(remote.contains("private volatile boolean active;"));
-        assertTrue(remote.contains("if (!active || busy) return;"));
-        assertTrue(remote.contains("if (!session.onWebSocketOpen(webSocket)) return;"));
-        assertTrue(remote.contains("session.onWebSocketClosed(webSocket);"));
-        assertTrue(remote.contains("session.onWebSocketFailure(webSocket, t, response);"));
-    }
-
-    @Test
     public void fullExitStopsAppPulseAndPreservesARecreatedPlaybackService() throws Exception {
         String app = read("main", "java", "com", "fongmi", "android", "tv", "App.java");
         String fixer = read("main", "java", "com", "fongmi", "android", "tv", "utils", "DanmakuSearchListFocusFixer.java");
         String server = read("main", "java", "com", "fongmi", "android", "tv", "server", "Server.java");
         String playback = read("main", "java", "com", "fongmi", "android", "tv", "service", "PlaybackService.java");
-        String syncer = read("main", "java", "com", "fongmi", "android", "tv", "playback", "PlaybackRemoteSyncer.java");
 
         assertTrue(app.contains("DanmakuSearchListFocusFixer.stop()"));
         assertTrue(app.contains("DanmakuSearchListFocusFixer.start()"));
@@ -81,16 +69,13 @@ public class TvAppExitSourceTest {
         assertTrue(fixer.contains("if (!started) return;"));
         assertTrue(server.contains("if (service == expected) service = null;"));
         assertTrue(playback.contains("Server.get().clearService(this)"));
-        assertTrue(syncer.contains("public static void syncDue(boolean startup) {\n        if (!started) return;"));
     }
 
     @Test
     public void backgroundResumeIsDebouncedAndWorkerStopIsVisible() throws Exception {
         String app = read("main", "java", "com", "fongmi", "android", "tv", "App.java");
-        String syncer = read("main", "java", "com", "fongmi", "android", "tv", "playback", "PlaybackRemoteSyncer.java");
 
         assertTrue(app.contains("public static void resumeBackgroundServices() {\n        removeCallbacks(get().backgroundServicesStarter);"));
-        assertTrue(syncer.contains("private static volatile boolean started;"));
     }
     @Test
     public void deferredStartupWorkIsCancelledOnFullExit() throws Exception {
@@ -100,8 +85,6 @@ public class TvAppExitSourceTest {
         assertTrue(home.contains("App.removeCallbacks(mDelayedInitConfig, mDelayedPermissionRequest, mDelayedDlnaStart)"));
         assertTrue(home.contains("App.resumeBackgroundServices()"));
         assertTrue(app.contains("removeCallbacks(get().backgroundServicesStarter)"));
-        assertTrue(app.contains("PlaybackRemoteSyncer.stop()"));
-        assertTrue(app.contains("RemoteAgent.get().stop()"));
         assertTrue(app.contains("NsdDeviceDiscovery.unregister()"));
     }
 

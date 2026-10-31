@@ -164,8 +164,8 @@ public class Backup {
         Map<String, ?> prefers = filter(getPrefers(), options);
         if (options.isMpvConfig()) clearMpvConfigPreferences();
         restorePrefers(prefers, false, false);
-        if (options.isConfig() || options.isSpider() || options.isWebHome() || options.isLoginState()) BaseLoader.get().clear();
-        if (options.isConfig() || options.isSpider() || options.isWebHome() || options.isLoginState()) reloadConfig();
+        if (options.isConfig() || options.isSpider() || options.isWebHome()) BaseLoader.get().clear();
+        if (options.isConfig() || options.isSpider() || options.isWebHome()) reloadConfig();
         if (options.isWebHome()) refreshWebHomeExtensions();
         if (options.isKeep()) RefreshEvent.keep();
         if (options.isHistory()) RefreshEvent.history();
@@ -268,8 +268,6 @@ public class Backup {
         if (key.startsWith("config_")) return options.isConfig();
         if ("site_names".equals(key)) return options.isConfig() || options.isSettings();
         if ("keyword".equals(key) || "hot".equals(key) || key.startsWith("hot_")) return options.isSearch();
-        if ("git_cloud_accounts".equals(key)) return options.isSpider() || options.isSettings() || options.isLoginState();
-        if (key.startsWith("login_state_")) return options.isLoginState();
         if (key.startsWith("mpv_config_")) return options.isMpvConfig();
         if (isAppPref(key)) return options.isSettings();
         return options.isSpider();

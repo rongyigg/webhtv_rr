@@ -141,7 +141,6 @@ import com.fongmi.android.tv.model.SiteViewModel;
 import com.fongmi.android.tv.setting.DanmakuSetting;
 import com.fongmi.android.tv.setting.PlayerButtonSetting;
 import com.fongmi.android.tv.setting.SiteHealthStore;
-import com.fongmi.android.tv.setting.MultiThreadProxySetting;
 import com.fongmi.android.tv.setting.PlayerSetting;
 import com.fongmi.android.tv.setting.Setting;
 import com.fongmi.android.tv.setting.TmdbSitePolicy;
@@ -171,7 +170,6 @@ import com.fongmi.android.tv.ui.dialog.PlaybackSpeedDialog;
 import com.fongmi.android.tv.ui.dialog.CodecCapabilityDialog;
 import com.fongmi.android.tv.ui.dialog.DanmakuDialog;
 import com.fongmi.android.tv.ui.dialog.DisplayDialog;
-import com.fongmi.android.tv.ui.dialog.MultiThreadProxyDialog;
 import com.fongmi.android.tv.ui.dialog.PlayerKernelDialog;
 import com.fongmi.android.tv.ui.dialog.SubtitleDialog;
 import com.fongmi.android.tv.ui.dialog.SubtitleManualSearchDialog;
@@ -1280,7 +1278,6 @@ public class TmdbDetailActivity extends PlaybackActivity implements TrackDialog.
         setupInlineControlFocus();
         setupInlineFocusNavigation();
         binding.playerAdFeedback.setOnClickListener(guarded(this::onInlineAdFeedback));
-        binding.playerMultiThreadProxy.setOnClickListener(guarded(this::showInlineMultiThreadProxy));
         binding.playerSearch.setOnClickListener(view -> openInlineSourceSearch());
         binding.playerSearch.setOnLongClickListener(view -> openGlobalSourceSearch());
         inlinePlayerUi.bindInlineActions();
@@ -1320,7 +1317,6 @@ public class TmdbDetailActivity extends PlaybackActivity implements TrackDialog.
         detailActionView(R.id.player, View.class).setOnLongClickListener(view -> showInlinePlayerChoice());
         detailActionView(R.id.decode, View.class).setOnClickListener(guarded(this::toggleInlineDecode));
         detailActionView(R.id.playParams, View.class).setOnClickListener(guarded(this::toggleInlinePlayParams));
-        detailActionView(R.id.multiThreadProxy, View.class).setOnClickListener(guarded(this::showInlineMultiThreadProxy));
         detailActionView(R.id.codecCapability, View.class).setOnClickListener(guarded(this::showInlineCodecCapability));
         detailActionView(R.id.lut, View.class).setOnClickListener(guarded(this::onInlineLut));
         detailActionView(R.id.speed, View.class).setOnClickListener(guarded(this::changeInlineSpeed));
@@ -1491,7 +1487,6 @@ public class TmdbDetailActivity extends PlaybackActivity implements TrackDialog.
         binding.playerExternal.setNextFocusUpId(R.id.playerExternal);
         binding.playerDecode.setNextFocusUpId(R.id.playerDecode);
         binding.playerPlayParams.setNextFocusUpId(R.id.playerPlayParams);
-        binding.playerMultiThreadProxy.setNextFocusUpId(R.id.playerMultiThreadProxy);
         binding.playerCodecCapability.setNextFocusUpId(R.id.playerCodecCapability);
         binding.playerSpeed.setNextFocusUpId(R.id.playerSpeed);
         binding.playerScale.setNextFocusUpId(R.id.playerScale);
@@ -1524,7 +1519,6 @@ public class TmdbDetailActivity extends PlaybackActivity implements TrackDialog.
             binding.playerNext, binding.playerPrev, binding.playerEpisodes,
             binding.playerRefresh, binding.playerChangeSource, binding.playerSearch, binding.playerFullscreenAction,
             binding.playerExternal, binding.playerDecode, binding.playerPlayParams,
-            binding.playerMultiThreadProxy, binding.playerCodecCapability,
             binding.playerSpeed, binding.playerScale, binding.playerQuality,
             binding.playerLut, binding.playerParse, binding.playerTextTrack,
             binding.playerAudioTrack, binding.playerVideoTrack, binding.playerOpening,
@@ -1565,7 +1559,6 @@ public class TmdbDetailActivity extends PlaybackActivity implements TrackDialog.
         setupInlineControl(binding.playerExternal);
         setupInlineControl(binding.playerDecode);
         setupInlineControl(binding.playerPlayParams);
-        setupInlineControl(binding.playerMultiThreadProxy);
         setupInlineControl(binding.playerCodecCapability);
         setupInlineControl(binding.playerSpeed);
         setupInlineControl(binding.playerScale);
@@ -1602,7 +1595,6 @@ public class TmdbDetailActivity extends PlaybackActivity implements TrackDialog.
         binding.playerExternal.setTextColor(white);
         binding.playerDecode.setTextColor(white);
         binding.playerPlayParams.setTextColor(white);
-        binding.playerMultiThreadProxy.setTextColor(white);
         binding.playerCodecCapability.setTextColor(white);
         binding.playerSpeed.setTextColor(white);
         binding.playerScale.setTextColor(white);
@@ -7698,7 +7690,6 @@ public class TmdbDetailActivity extends PlaybackActivity implements TrackDialog.
         binding.playerChapter.setVisibility(View.GONE); // 始终隐藏信息按钮
         binding.playerRepeat.setSelected(hasPlayer && player().isRepeatOne());
         binding.playerPlayParams.setSelected(hasPlayer && inlineOsd != null && inlineOsd.isDiagnosticsVisible());
-        binding.playerMultiThreadProxy.setSelected(MultiThreadProxySetting.get().enabled());
         setInlineFullscreenIcon();
         updateMobileInlineButtons(playing, hasPlayer, episodeCount, hasTitle);
         applyInlinePlayerButtonSettings();
@@ -7716,7 +7707,6 @@ public class TmdbDetailActivity extends PlaybackActivity implements TrackDialog.
         // 播放参数按钮：选中时黄色，否则白色
         boolean playParamsSelected = binding.playerPlayParams.isSelected();
         binding.playerPlayParams.setTextColor(playParamsSelected ? yellow : white);
-        binding.playerMultiThreadProxy.setTextColor(binding.playerMultiThreadProxy.isSelected() ? yellow : white);
 
         // 弹幕按钮：根据弹幕启用状态设置颜色
         boolean danmakuShow = DanmakuSetting.isShow();
@@ -7777,7 +7767,6 @@ public class TmdbDetailActivity extends PlaybackActivity implements TrackDialog.
         buttons.put(PlayerButtonSetting.PLAYER, binding.playerExternal);
         buttons.put(PlayerButtonSetting.DECODE, binding.playerDecode);
         buttons.put(PlayerButtonSetting.PLAY_PARAMS, binding.playerPlayParams);
-        buttons.put(PlayerButtonSetting.MULTI_THREAD_PROXY, binding.playerMultiThreadProxy);
         buttons.put(PlayerButtonSetting.CODEC_CAPABILITY, binding.playerCodecCapability);
         buttons.put(PlayerButtonSetting.SPEED, binding.playerSpeed);
         buttons.put(PlayerButtonSetting.SCALE, binding.playerScale);
@@ -7805,7 +7794,6 @@ public class TmdbDetailActivity extends PlaybackActivity implements TrackDialog.
         buttons.put(PlayerButtonSetting.PLAYER, detailActionView(R.id.player, View.class));
         buttons.put(PlayerButtonSetting.DECODE, detailActionView(R.id.decode, View.class));
         buttons.put(PlayerButtonSetting.PLAY_PARAMS, detailActionView(R.id.playParams, View.class));
-        buttons.put(PlayerButtonSetting.MULTI_THREAD_PROXY, detailActionView(R.id.multiThreadProxy, View.class));
         buttons.put(PlayerButtonSetting.CODEC_CAPABILITY, detailActionView(R.id.codecCapability, View.class));
         buttons.put(PlayerButtonSetting.LUT, detailActionView(R.id.lut, View.class));
         buttons.put(PlayerButtonSetting.SPEED, detailActionView(R.id.speed, View.class));
@@ -7912,7 +7900,6 @@ public class TmdbDetailActivity extends PlaybackActivity implements TrackDialog.
         detailActionView(R.id.chapter, View.class).setVisibility(hasTitle ? View.VISIBLE : View.GONE);
         detailActionView(R.id.actionQuality, View.class).setVisibility(inlineQuality ? View.VISIBLE : View.GONE);
         detailActionView(R.id.repeat, View.class).setSelected(hasPlayer && player().isRepeatOne());
-        detailActionView(R.id.multiThreadProxy, View.class).setSelected(MultiThreadProxySetting.get().enabled());
         hideMobileFusionPlayerActionDock();
         action.setVisibility(inlineFullscreen && !locked ? View.VISIBLE : View.GONE);
         inlineControlController.updateDanmakuState();
@@ -8377,19 +8364,6 @@ public class TmdbDetailActivity extends PlaybackActivity implements TrackDialog.
         binding.playerPlayParams.setSelected(visible);
         // 设置文字颜色：选中时黄色，否则白色
         binding.playerPlayParams.setTextColor(visible ? 0xFFFFD700 : 0xFFFFFFFF);
-        hideInlineControls();
-    }
-
-    private void showInlineMultiThreadProxy() {
-        if (service() == null || player() == null || player().isEmpty()) return;
-        MultiThreadProxyDialog.show(this, player().getUrl(), this::onInlineMultiThreadProxySaved);
-    }
-
-    private void onInlineMultiThreadProxySaved(boolean applyNow) {
-        if (service() == null || player() == null || player().isEmpty()) return;
-        boolean playing = player().isPlaying();
-        if (applyNow) player().reloadCurrentMediaItem();
-        updateInlineButtons(playing);
         hideInlineControls();
     }
 
