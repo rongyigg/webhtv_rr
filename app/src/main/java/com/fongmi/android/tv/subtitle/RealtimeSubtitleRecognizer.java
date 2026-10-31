@@ -43,7 +43,6 @@ final class RealtimeSubtitleRecognizer {
     private static final long UNSET_US = Long.MIN_VALUE;
 
     private final RealtimeSubtitleModelCatalog.ModelSpec spec;
-    private final SpeechRecognitionFactory.ExecutionProfile profile;
     private final Listener listener;
     private final ArrayBlockingQueue<SpeechChunk> speechQueue = new ArrayBlockingQueue<>(SPEECH_QUEUE_CAPACITY);
     private final AtomicInteger decodeGeneration = new AtomicInteger();
@@ -57,16 +56,10 @@ final class RealtimeSubtitleRecognizer {
     private long vadBaseUs = UNSET_US;
     private int speechSamples;
 
-    static RealtimeSubtitleRecognizer create(File modelDir, File vadFile, RealtimeSubtitleModelCatalog.ModelSpec spec, Listener listener) {
-        return create(modelDir, vadFile, spec,
-                SpeechRecognitionFactory.ExecutionProfile.SUBTITLE, listener);
-    }
-
     static RealtimeSubtitleRecognizer create(File modelDir, File vadFile,
                                              RealtimeSubtitleModelCatalog.ModelSpec spec,
-                                             SpeechRecognitionFactory.ExecutionProfile profile,
                                              Listener listener) {
-        return new RealtimeSubtitleRecognizer(modelDir, vadFile, spec, profile, listener);
+        return new RealtimeSubtitleRecognizer(modelDir, vadFile, spec, listener);
     }
 
     static boolean isStreaming(RealtimeSubtitleModelCatalog.ModelSpec spec) {
@@ -86,30 +79,18 @@ final class RealtimeSubtitleRecognizer {
 
     private RealtimeSubtitleRecognizer(File modelDir, File vadFile,
                                        RealtimeSubtitleModelCatalog.ModelSpec spec,
-                                       SpeechRecognitionFactory.ExecutionProfile profile,
                                        Listener listener) {
         this.spec = spec;
-        this.profile = profile;
         this.listener = listener;
         try {
             if (isStreaming(spec)) {
-                onlineRecognizer = new OnlineRecognizer(buildOnlineRecognizer(modelDir, spec, profile));
+                onlineRecognizer = new OnlineRecognizer(buildOnlineRecognizer(modelDir, spec));
                 onlineStream = onlineRecognizer.createStream();
             } else {
-                offlineRecognizer = new OfflineRecognizer(buildOfflineRecognizer(modelDir, spec, profile));
+                offlineRecognizer = new OfflineRecognizer(buildOfflineRecognizer(modelDir, spec));
                 vad = new Vad(buildVad(vadFile));
                 recognitionExecutor = Executors.newSingleThreadExecutor(r -> {
-                    Runnable worker = () -> {
-                        if (profile == SpeechRecognitionFactory.ExecutionProfile.AD_AUDIO) {
-                            try {
-                                android.os.Process.setThreadPriority(
-                                        android.os.Process.THREAD_PRIORITY_BACKGROUND);
-                            } catch (RuntimeException ignored) {
-                            }
-                        }
-                        r.run();
-                    };
-                    Thread thread = new Thread(worker, "realtime-subtitle-offline-asr");
+                    Thread thread = new Thread(r, "realtime-subtitle-offline-asr");
                     thread.setPriority(Thread.NORM_PRIORITY - 1);
                     return thread;
                 });
@@ -263,8 +244,7 @@ final class RealtimeSubtitleRecognizer {
     }
 
     private static OnlineRecognizerConfig buildOnlineRecognizer(
-            File modelDir, RealtimeSubtitleModelCatalog.ModelSpec spec,
-            SpeechRecognitionFactory.ExecutionProfile profile) {
+            File modelDir, RealtimeSubtitleModelCatalog.ModelSpec spec) {
         RealtimeSubtitleModelCatalog.ModelFile[] files = spec.files();
         OnlineTransducerModelConfig transducer = OnlineTransducerModelConfig.builder()
                 .setEncoder(new File(modelDir, files[0].relativePath()).getPath())
@@ -275,7 +255,7 @@ final class RealtimeSubtitleRecognizer {
                 .setTransducer(transducer)
                 .setTokens(new File(modelDir, files[3].relativePath()).getPath())
                 .setModelType(onlineModelType(spec))
-                .setNumThreads(threadCount(profile))
+                .setNumThreads(threadCount())
                 .setProvider("cpu")
                 .setDebug(false)
                 .build();
@@ -295,11 +275,10 @@ final class RealtimeSubtitleRecognizer {
     }
 
     private static OfflineRecognizerConfig buildOfflineRecognizer(
-            File modelDir, RealtimeSubtitleModelCatalog.ModelSpec spec,
-            SpeechRecognitionFactory.ExecutionProfile profile) {
+            File modelDir, RealtimeSubtitleModelCatalog.ModelSpec spec) {
         RealtimeSubtitleModelCatalog.ModelFile[] files = spec.files();
         OfflineModelConfig.Builder model = OfflineModelConfig.builder()
-                .setNumThreads(threadCount(profile))
+                .setNumThreads(threadCount())
                 .setProvider("cpu")
                 .setDebug(false);
         switch (spec.engine()) {
@@ -352,11 +331,6 @@ final class RealtimeSubtitleRecognizer {
 
     private static int threadCount() {
         return Math.max(1, Math.min(4, Runtime.getRuntime().availableProcessors() / 2));
-    }
-
-    static int threadCount(SpeechRecognitionFactory.ExecutionProfile profile) {
-        return profile == SpeechRecognitionFactory.ExecutionProfile.AD_AUDIO
-                ? 1 : threadCount();
     }
 
     private static boolean containsSpeechText(String text) {
