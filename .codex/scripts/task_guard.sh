@@ -202,6 +202,7 @@ start_task() {
     *) fail_usage "unknown mode: $mode" ;;
   esac
 
+  mkdir -p "$state_dir"
   if [[ -d "$state_dir" && -f "$state_dir/status" ]]; then
     local previous_status
     previous_status="$(sed -n '1p' "$state_dir/status")"
@@ -219,7 +220,6 @@ start_task() {
     : > "$state_dir/protected-fingerprints"
     printf 'active\n' > "$state_dir/status"
   fi
-  mkdir -p "$state_dir"
   : > "$state_dir/scope"
   : > "$state_dir/adopted"
 
