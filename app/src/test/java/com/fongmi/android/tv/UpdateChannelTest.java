@@ -51,7 +51,7 @@ public class UpdateChannelTest {
         assertTrue("Both update channels must remain visible in mobile and TV release builds",
                 workflow.contains("--tests 'com.fongmi.android.tv.ui.dialog.UpdateDialogChannelVisibilityTest'"));
         assertTrue("TV release builds must verify that update actions stay inside the dialog window",
-                workflow.contains(":app:testLeanbackArm64_v8aDebugUnitTest")
+                workflow.contains(":app:testLeanbackArmeabi_v7aDebugUnitTest")
                         && workflow.contains("--tests 'com.fongmi.android.tv.ui.dialog.UpdateDialogLayoutTest'"));
         assertTrue("The fixed channel release must be a prerelease so it cannot replace the stable latest release",
                 publishStep.contains("--prerelease"));

@@ -119,35 +119,6 @@ public class PlayerManagerTest {
     }
 
     @Test
-    public void shouldRetryMpvCopy_retriesAutomaticGpuHardFailures() {
-        assertTrue(PlayerManager.shouldRetryMpvCopy(
-                true, true, false, false, false,
-                PlaybackException.ERROR_CODE_TIMEOUT, null));
-        assertTrue(PlayerManager.shouldRetryMpvCopy(
-                true, true, false, false, false,
-                PlaybackException.ERROR_CODE_DECODING_FAILED, "MPV_DECODE_FAILED: codec init"));
-    }
-
-    @Test
-    public void shouldRetryMpvCopy_preservesManualModesAndRejectsUnrelatedFailures() {
-        assertFalse(PlayerManager.shouldRetryMpvCopy(
-                false, true, false, false, false,
-                PlaybackException.ERROR_CODE_DECODING_FAILED, null));
-        assertFalse(PlayerManager.shouldRetryMpvCopy(
-                true, true, true, false, false,
-                PlaybackException.ERROR_CODE_DECODING_FAILED, null));
-        assertFalse(PlayerManager.shouldRetryMpvCopy(
-                true, true, false, true, false,
-                PlaybackException.ERROR_CODE_DECODING_FAILED, null));
-        assertFalse(PlayerManager.shouldRetryMpvCopy(
-                true, true, false, false, true,
-                PlaybackException.ERROR_CODE_DECODING_FAILED, null));
-        assertFalse(PlayerManager.shouldRetryMpvCopy(
-                true, true, false, false, false,
-                PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED, "Socket timeout"));
-    }
-
-    @Test
     public void shouldStopOnManualSwitchFailure_blocksFallbackWhileManualSwitchIsPending() {
         assertEquals(true, PlayerManager.shouldStopOnManualSwitchFailure(true, PlayerEngine.ErrorAction.FATAL));
     }

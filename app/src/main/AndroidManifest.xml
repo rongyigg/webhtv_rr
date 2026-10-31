@@ -122,31 +122,6 @@
             android:configChanges="keyboard|keyboardHidden|orientation|screenSize|screenLayout|smallestScreenSize|uiMode" />
 
         <activity
-            android:name=".lab.LabActivity"
-            android:exported="false"
-            android:configChanges="keyboard|keyboardHidden|orientation|screenSize|screenLayout|smallestScreenSize|uiMode"
-            android:theme="@style/Theme.App.Lab" />
-
-        <activity
-            android:name=".lab.LabDetailActivity"
-            android:exported="false"
-            android:configChanges="keyboard|keyboardHidden|orientation|screenSize|screenLayout|smallestScreenSize|uiMode"
-            android:theme="@style/Theme.App.Lab" />
-
-        <activity
-            android:name=".lab.LabOutputActivity"
-            android:exported="false"
-            android:configChanges="keyboard|keyboardHidden|orientation|screenSize|screenLayout|smallestScreenSize|uiMode"
-            android:theme="@style/Theme.App.Lab" />
-
-        <activity
-            android:name=".lab.LabTerminalActivity"
-            android:exported="false"
-            android:configChanges="keyboard|keyboardHidden|orientation|screenSize|screenLayout|smallestScreenSize|uiMode"
-            android:theme="@style/Theme.App.Lab"
-            android:windowSoftInputMode="adjustResize" />
-
-        <activity
             android:name=".ui.activity.PlaybackRecoveryActivity"
             android:exported="false"
             android:excludeFromRecents="true"
@@ -188,12 +163,6 @@
             android:name=".remote.RemoteAgentService"
             android:exported="false"
             android:foregroundServiceType="dataSync|connectedDevice"
-            android:stopWithTask="false" />
-
-        <service
-            android:name=".lab.LabRuntimeService"
-            android:exported="false"
-            android:foregroundServiceType="dataSync"
             android:stopWithTask="false" />
 
         <service

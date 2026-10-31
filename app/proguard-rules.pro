@@ -18,7 +18,6 @@
 # release inlining does not amplify timing-sensitive create/destroy transitions.
 -keep,allowobfuscation class androidx.media3.mpvplayer.MpvPlayer { *; }
 -keep,allowobfuscation class androidx.media3.mpvplayer.MpvPlayer$* { *; }
--keep,allowobfuscation class com.fongmi.android.tv.player.engine.MpvPlayerEngine { *; }
 
 # Gson
 -keepattributes Signature

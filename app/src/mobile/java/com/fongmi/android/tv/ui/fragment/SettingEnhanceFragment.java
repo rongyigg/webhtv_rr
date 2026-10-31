@@ -17,7 +17,6 @@ import com.fongmi.android.tv.bean.ComicSourceConfig;
 import com.fongmi.android.tv.bean.NovelSourceConfig;
 import com.fongmi.android.tv.bean.ShortDramaConfig;
 import com.fongmi.android.tv.gitcloud.GitCloudAccountStore;
-import com.fongmi.android.tv.lab.LabActivity;
 import com.fongmi.android.tv.playback.ViewingRecordSyncStore;
 import com.fongmi.android.tv.remote.RemoteStore;
 import com.fongmi.android.tv.setting.Setting;
@@ -93,7 +92,6 @@ public class SettingEnhanceFragment extends BaseFragment {
             }
             return false;
         });
-        mBinding.lab.setOnClickListener(view -> LabActivity.start(requireContext()));
         mBinding.driveCheck.setOnClickListener(this::setDriveCheck);
         mBinding.siteName.setOnClickListener(this::setSiteName);
         mBinding.localReader.setOnClickListener(this::setLocalReader);
@@ -129,7 +127,6 @@ public class SettingEnhanceFragment extends BaseFragment {
     private void reorderItems() {
         ViewGroup parent = (ViewGroup) mBinding.customCsp.getParent();
         View[] order = {
-                mBinding.lab,
                 mBinding.customCsp,
                 mBinding.webHomeExtension,
                 mBinding.gitCloud,

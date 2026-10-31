@@ -28,7 +28,7 @@ public final class NativeLibraryDiagnostics {
     });
     private static final LinkedHashMap<String, Identity> identities = new LinkedHashMap<>();
     private record Mapping(File file, long offset) {}
-    private record Library(File file, String name, String source, long offset, long size, String asset) {}
+    private record Library(File file, String name, String source, long offset, long size) {}
     private record Identity(String abi, String buildId, String actual, String expected) {}
     private NativeLibraryDiagnostics() {}
 
@@ -62,10 +62,9 @@ public final class NativeLibraryDiagnostics {
                 if (fields.length < 6 || !fields[1].contains("x")) continue;
                 String path = fields[5];
                 if (apks.contains(path)) mappings.add(new Mapping(new File(path), Long.parseLong(fields[2], 16)));
-                else if (path.endsWith(".so") && (path.startsWith(info.nativeLibraryDir + "/") || path.startsWith(info.dataDir + "/app_mpv-libs/")) && files.add(path)) {
+                else if (path.endsWith(".so") && path.startsWith(info.nativeLibraryDir + "/") && files.add(path)) {
                     File file = new File(path);
-                    String asset = path.startsWith(info.dataDir + "/app_mpv-libs/") ? "mpv-libs/" + file.getParentFile().getName() + "/" + file.getName() : null;
-                    libraries.add(new Library(file, file.getName(), asset == null ? "nativeLibraryDir" : "extracted-mpv-asset", 0, file.length(), asset));
+                    libraries.add(new Library(file, file.getName(), "nativeLibraryDir", 0, file.length()));
                 }
             }
         }
@@ -85,7 +84,6 @@ public final class NativeLibraryDiagnostics {
                         .observed("library", library.name).observed("source", library.source).observed("loadResult", "executable-mapping-observed")
                         .observed("abi", identity.abi).observed("buildId", identity.buildId).observed("actualDigest", identity.actual)
                         .observed("expectedDigest", identity.expected).observed("manifestMatch", identity.expected == null ? null : identity.expected.equals(identity.actual))
-                        .observed("config", library.asset == null ? null : com.fongmi.android.tv.BuildConfig.MPV_NATIVE_SOURCES)
                         .observed("metricScope", "own process executable mappings and backing ELF/package bytes; not memory-content hashing")
                         .pin("library-" + library.name);
                 DebugLogStore.event(event);
@@ -128,7 +126,7 @@ public final class NativeLibraryDiagnostics {
                 long size = Integer.toUnsignedLong(h.getInt(24));
                 if (size <= 0 || size > (128L << 20) || start + size > file.length()) continue;
                 if (mappings.stream().anyMatch(mapping -> mapping.file.equals(apk) && mapping.offset >= start && mapping.offset < start + size))
-                    libraries.add(new Library(apk, name.substring(name.lastIndexOf('/') + 1), "mapped-apk-entry:" + name, start, size, null));
+                    libraries.add(new Library(apk, name.substring(name.lastIndexOf('/') + 1), "mapped-apk-entry:" + name, start, size));
             }
         }
     }
@@ -167,12 +165,7 @@ public final class NativeLibraryDiagnostics {
             file.seek(library.offset);
             while (remaining > 0) { int length = file.read(buffer, 0, (int) Math.min(buffer.length, remaining)); if (length < 0) throw new java.io.EOFException(); digest.update(buffer, 0, length); remaining -= length; }
             String actual = hex(digest.digest()), expected = null;
-            if (library.asset != null) try (InputStream input = App.get().getAssets().open(library.asset)) {
-                digest.reset(); int length; long size = 0;
-                while ((length = input.read(buffer)) >= 0) { if ((size += length) > (128L << 20)) throw new java.io.IOException("asset budget"); digest.update(buffer, 0, length); }
-                expected = hex(digest.digest());
-            }
-            else if (library.source.startsWith("mapped-apk-entry:")) {
+            if (library.source.startsWith("mapped-apk-entry:")) {
                 // The executable map points into this exact packaged ELF; no extracted copy exists.
                 expected = actual;
             } else {

@@ -14,7 +14,6 @@ import com.fongmi.android.tv.R;
 import com.fongmi.android.tv.bean.AudioConfig;
 import com.fongmi.android.tv.bean.ShortDramaConfig;
 import com.fongmi.android.tv.gitcloud.GitCloudAccountStore;
-import com.fongmi.android.tv.lab.LabActivity;
 import com.fongmi.android.tv.playback.ViewingRecordSyncStore;
 import com.fongmi.android.tv.remote.RemoteStore;
 import com.fongmi.android.tv.setting.Setting;
@@ -77,7 +76,6 @@ public class SettingEnhanceActivity extends BaseActivity {
     protected void initEvent() {
         mBinding.githubRepo.setOnClickListener(view -> openRepo(URL_GITHUB));
         mBinding.cnbRepo.setOnClickListener(view -> openRepo(URL_CNB));
-        mBinding.lab.setOnClickListener(view -> LabActivity.start(this));
         mBinding.driveCheck.setOnClickListener(this::setDriveCheck);
         mBinding.siteName.setOnClickListener(this::setSiteName);
         mBinding.audioSource.setOnClickListener(this::setAudioSource);
@@ -110,7 +108,6 @@ public class SettingEnhanceActivity extends BaseActivity {
     private void reorderItems() {
         ViewGroup parent = (ViewGroup) mBinding.customCsp.getParent();
         View[] order = {
-                mBinding.lab,
                 mBinding.customCsp,
                 mBinding.webHomeExtension,
                 mBinding.gitCloud,

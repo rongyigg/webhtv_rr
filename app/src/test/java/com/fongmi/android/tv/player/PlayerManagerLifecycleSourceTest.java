@@ -44,18 +44,16 @@ public class PlayerManagerLifecycleSourceTest {
     }
 
     @Test
-    public void seekInducedBufferingIsExcludedFromTheRebufferCount() throws Exception {
+    public void managedReloadBufferingIsExcludedFromTheRebufferCount() throws Exception {
         String source = readPlayerManager();
         String body = methodBody(source, "private void recordBufferingState(");
-        // MpvPlayer now publishes BUFFERING across a seek, which is what lets the UI keep its
-        // progress indicator up instead of freezing on the old frame. That state reaches
-        // PlaybackBufferingTracker, which counts every post-startup BUFFERING as a rebuffer,
-        // and the rebuffer count feeds the network guard and the HLS variant policy. Without
-        // this exclusion, scrubbing alone would look like collapsing throughput.
-        int exclusion = body.indexOf("isMpvSeekBuffering()");
+        // A managed reload is a pipeline restart the player initiated, not a network stall.
+        // Counting it would inflate the rebuffer count that the network guard reads, so the
+        // entering edge must be dropped before the tracker sees it.
+        int exclusion = body.indexOf("ijkBufferManagedReload");
         int tracker = body.indexOf("playbackBufferingTracker.update(");
-        assertTrue("recordBufferingState must recognise seek-induced buffering", exclusion >= 0);
-        assertTrue("the seek exclusion must return before the rebuffer tracker is updated",
+        assertTrue("recordBufferingState must recognise managed reloads", exclusion >= 0);
+        assertTrue("the managed reload must be checked before the rebuffer tracker is updated",
                 tracker > exclusion);
         assertTrue("the exclusion must be traceable", body.contains("result=excluded-from-rebuffer"));
         // Only the entering edge may be dropped. Swallowing the leaving edge as well would
