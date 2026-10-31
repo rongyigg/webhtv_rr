@@ -95,7 +95,6 @@ public final class VodPlayerChrome {
                 null,
                 null,
                 null,
-                null,
                 null);
     }
 
