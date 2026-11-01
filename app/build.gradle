@@ -1,5 +1,6 @@
 plugins {
     alias libs.plugins.android.application
+    alias libs.plugins.compose.compiler
 }
 
 def localProps = new Properties()
@@ -75,6 +76,7 @@ android {
 
     buildFeatures {
         buildConfig = true
+        compose = true
         viewBinding = true
     }
 
@@ -158,6 +160,11 @@ dependencies {
     implementation project(':nodejs')
     implementation project(':quickjs')
     implementation libs.appcompat
+    implementation platform(libs.compose.bom)
+    implementation libs.activity.compose
+    implementation libs.compose.material3
+    implementation libs.coil.compose
+    implementation libs.coil.network.okhttp
     implementation libs.lifecycle.service
     implementation libs.media
     implementation libs.bundles.media3
