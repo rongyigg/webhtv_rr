@@ -80,7 +80,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
-import androidx.compose.ui.zIndex
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -231,6 +230,27 @@ private fun HeroHomeScreen(onLaunchPlayback: (String) -> Unit) {
         }
     }
 
+    // 网格内上下跨行：无论当前停在第几列，都强制落到目标行的第一张卡片（最左侧）。
+    // 系统默认的 2D 焦点搜索会记住“上次的列号”，参考图那种整排卡片的观感下会跳到错误位置。
+    fun focusPosterRow(fromIndex: Int, delta: Int) {
+        val targetRow = fromIndex / POSTER_COLUMNS + delta
+        if (targetRow < 0) {
+            // 已经在首行还按“上”：交还给分类 Tab。
+            focusTab(lastTabIndex)
+            return
+        }
+        val target = targetRow * POSTER_COLUMNS
+        // 已经最后一行：向下不再移动，事件已被消费，焦点保持原地。
+        if (target > posters.lastIndex) return
+        if (requestFocus(posterRequesters, target)) return
+        // 目标行还在视口之外（尚未组合）：先滚过去，等一帧再请求焦点。
+        scope.launch {
+            gridState.scrollToItem(target)
+            withFrameNanos { }
+            requestFocus(posterRequesters, target)
+        }
+    }
+
     // 启动时、以及占位 Dialog 关闭后，焦点都落回“小房子”。
     LaunchedEffect(showHomeDialog) {
         if (showHomeDialog) return@LaunchedEffect
@@ -284,7 +304,8 @@ private fun HeroHomeScreen(onLaunchPlayback: (String) -> Unit) {
                     .weight(HERO_GRID_WEIGHT),
                 onFocused = { index -> focusedPosterIndex = index },
                 onClick = onLaunchPlayback,
-                onMoveUp = { focusTab(lastTabIndex) },
+                onMoveUp = { index -> focusPosterRow(index, -1) },
+                onMoveDown = { index -> focusPosterRow(index, 1) },
             )
         }
     }
@@ -481,7 +502,7 @@ private fun HeroInfoArea(poster: HeroPoster, modifier: Modifier = Modifier) {
                 Text(
                     text = current.title,
                     color = Color.White,
-                    fontSize = 38.sp,
+                    fontSize = HERO_TITLE_SP.sp,
                     fontWeight = FontWeight.Bold,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
@@ -489,17 +510,17 @@ private fun HeroInfoArea(poster: HeroPoster, modifier: Modifier = Modifier) {
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(
                     text = current.meta,
-                    color = Color.White.copy(alpha = 0.72f),
-                    fontSize = 14.sp,
+                    color = Color.White.copy(alpha = 0.76f),
+                    fontSize = HERO_META_SP.sp,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
                 Spacer(modifier = Modifier.height(6.dp))
                 Text(
                     text = current.synopsis,
-                    color = Color.White.copy(alpha = 0.58f),
-                    fontSize = 14.sp,
-                    lineHeight = 20.sp,
+                    color = Color.White.copy(alpha = 0.60f),
+                    fontSize = HERO_SYNOPSIS_SP.sp,
+                    lineHeight = HERO_SYNOPSIS_LINE_HEIGHT_SP.sp,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                 )
@@ -511,7 +532,7 @@ private fun HeroInfoArea(poster: HeroPoster, modifier: Modifier = Modifier) {
 /**
  * 分类 Tab 栏（胶囊形状，横向滚动）。
  *
- * 选中项带 2dp 红色描边（`HERO_RED`），未选中为 1dp 半透明白描边 + 60% 白字；
+ * 选中项带 3dp 红色描边（`HERO_RED`），未选中为 1dp 半透明白描边 + 62% 白字；
  * 获得焦点的项背景会再压暗一层，确保在亮背景图上也能看出焦点位置。
  * 左右键不交给系统焦点搜索，而是显式 [focusTab]，这样横向滚动与选中态永远同步。
  */
@@ -658,7 +679,8 @@ private fun PosterGrid(
     modifier: Modifier = Modifier,
     onFocused: (Int) -> Unit,
     onClick: (String) -> Unit,
-    onMoveUp: () -> Unit,
+    onMoveUp: (Int) -> Unit,
+    onMoveDown: (Int) -> Unit,
 ) {
     LazyVerticalGrid(
         columns = GridCells.Fixed(POSTER_COLUMNS),
@@ -667,27 +689,28 @@ private fun PosterGrid(
         contentPadding = PaddingValues(
             start = HERO_SIDE_PADDING,
             end = HERO_SIDE_PADDING,
-            top = 12.dp,
-            bottom = 20.dp,
+            top = HERO_GRID_TOP_PADDING,
+            bottom = HERO_GRID_BOTTOM_PADDING,
         ),
-        horizontalArrangement = Arrangement.spacedBy(16.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp),
+        horizontalArrangement = Arrangement.spacedBy(HERO_GRID_H_SPACING),
+        verticalArrangement = Arrangement.spacedBy(HERO_GRID_V_SPACING),
     ) {
         itemsIndexed(items = posters, key = { _, poster -> poster.id }) { index, poster ->
             PosterCard(
                 poster = poster,
-                index = index,
                 requester = requesters[index],
                 onFocused = { onFocused(index) },
                 onClick = { onClick(poster.title) },
-                onMoveUp = onMoveUp,
+                // 跨行时把“从哪一张发起”带回上层，由上层统一算目标行的第一列。
+                onMoveUp = { onMoveUp(index) },
+                onMoveDown = { onMoveDown(index) },
             )
         }
     }
 }
 
 /**
- * 单张海报卡片：纯封面 + 圆角，文字放在卡片外部下方。
+ * 单张海报卡片：图片区与文字区完全剥离。
  *
  * 参数全部对齐 `ref_docs/VodRectPresenter.java`：
  * - 焦点缩放：第 39-41 行 `float f = view.hasFocus() ? 1.08f : 1.0f`，用 setScaleX/Y 整体放大。
@@ -697,15 +720,18 @@ private fun PosterGrid(
  *   Compose 里等价为贴边 `border(2.dp)`，省掉一层 overlay（视觉厚度一致）。
  * - 阴影：`ref_docs/UI.md` §3.2 的 `overlay_focus`/`selector_vod` 在放大时提供浮起感；
  *   Compose 用 `Modifier.shadow(elevation = 18.dp)` 表达同一层级关系，仅在焦点态出现。
+ *
+ * 与上一版的关键差异：`graphicsLayer` 只挂在图片 Box 上，文字 Box 是固定高度的独立容器，
+ * 因此放大时文字既不会跟着变形，也不会因容器被压缩而截断。
  */
 @Composable
 private fun PosterCard(
     poster: HeroPoster,
-    index: Int,
     requester: FocusRequester,
     onFocused: () -> Unit,
     onClick: () -> Unit,
     onMoveUp: () -> Unit,
+    onMoveDown: () -> Unit,
 ) {
     var focused by remember { mutableStateOf(false) }
     val scale by animateFloatAsState(
@@ -728,32 +754,39 @@ private fun PosterCard(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            // 放大后压住相邻卡片，需要抬高绘制层级。
-            .zIndex(if (focused) 1f else 0f)
-            .graphicsLayer {
-                scaleX = scale
-                scaleY = scale
-            }
             .focusRequester(requester)
             .onFocusChanged {
                 focused = it.isFocused
                 if (it.isFocused) onFocused()
             }
             .onPreviewKeyEvent { event ->
-                // 首行（索引 < 列数）按“上”交还被拦截并回给分类 Tab；其余行保留系统默认换行行为。
-                if (event.type == KeyEventType.KeyDown && event.key == Key.DirectionUp && index < POSTER_COLUMNS) {
-                    onMoveUp()
-                    true
-                } else {
-                    false
+                if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                // 上下都自己接管：跨行一律回到目标行第一列，不交给会“记住列号”的系统搜索。
+                when (event.key) {
+                    Key.DirectionUp -> {
+                        onMoveUp()
+                        true
+                    }
+
+                    Key.DirectionDown -> {
+                        onMoveDown()
+                        true
+                    }
+
+                    else -> false
                 }
             }
             .clickable(interactionSource = interaction, indication = null, onClick = onClick),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
+        // 图片区：只有这一层参与缩放、描边与阴影。
         Box(
             modifier = Modifier
                 .fillMaxWidth()
+                .graphicsLayer {
+                    scaleX = scale
+                    scaleY = scale
+                }
                 .aspectRatio(POSTER_ASPECT_RATIO)
                 .shadow(elevation = elevation, shape = POSTER_SHAPE, clip = false)
                 .clip(POSTER_SHAPE)
@@ -767,16 +800,24 @@ private fun PosterCard(
                 modifier = Modifier.fillMaxSize(),
             )
         }
-        // 文字在卡片外部下方：卡片本身保持纯封面，放大时文字不会跟着被裁切。
-        Text(
-            text = poster.title,
-            modifier = Modifier.padding(top = 6.dp),
-            color = if (focused) Color.White else Color.White.copy(alpha = 0.72f),
-            fontSize = 14.sp,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            textAlign = TextAlign.Center,
-        )
+        // 文字区：固定高度 + 单行，图片放大时这里尺寸与字号都不变。
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = POSTER_TITLE_GAP)
+                .height(POSTER_TITLE_HEIGHT),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                text = poster.title,
+                color = if (focused) Color.White else Color.White.copy(alpha = 0.72f),
+                fontSize = POSTER_TITLE_SP.sp,
+                maxLines = 1,
+                softWrap = false,
+                overflow = TextOverflow.Ellipsis,
+                textAlign = TextAlign.Center,
+            )
+        }
     }
 }
 
@@ -898,33 +939,50 @@ private const val TOP_BAR_FOCUS_SP = 22f
 private const val TOP_BAR_IDLE_SP = 20f
 private const val TOP_BAR_IDLE_ALPHA = 0.6f
 
-// 信息层与网格的高度分配：1080p 电视（960×540dp）下网格约占 245dp，信息层拿剩下的部分，
-// 这样海报比例保持 2:3 时不会被压扁，剧名区也还能放下标题 + 元数据 + 两行简介。
-private const val HERO_INFO_WEIGHT = 0.72f
+// 信息层与网格的高度分配：1080p 电视（960×540dp）下，6 列 2:3 卡片 + 卡外单行标题约需 245dp，
+// 信息层拿剩下的约 175dp，刚好放得下 52sp 剧名 + 18sp 元数据 + 两行 15sp 简介。
+private const val HERO_INFO_WEIGHT = 0.68f
 private const val HERO_GRID_WEIGHT = 1f
-private const val HERO_INFO_WIDTH_FRACTION = 0.46f
+private const val HERO_INFO_WIDTH_FRACTION = 0.42f
 private const val HERO_BACKDROP_FADE_MS = 420
 private const val HERO_INFO_FADE_MS = 320
 
-private val HERO_SIDE_PADDING = 40.dp
+// Hero 文案层级（对照 ref_docs/home_ui.png：剧名极大、元数据中等、简介较小）。
+private const val HERO_TITLE_SP = 52f
+private const val HERO_META_SP = 18f
+private const val HERO_SYNOPSIS_SP = 15f
+private const val HERO_SYNOPSIS_LINE_HEIGHT_SP = 22f
+
+// 四周留白整体加大：参考图的左右安全边距接近屏宽的 1/15，1080p 下约 64dp。
+private val HERO_SIDE_PADDING = 64.dp
 private val HERO_INFO_BOTTOM_PADDING = 16.dp
 
-private val TOP_BAR_TOP_PADDING = 22.dp
-private val TOP_BAR_ITEM_SPACING = 36.dp
+private val TOP_BAR_TOP_PADDING = 28.dp
+private val TOP_BAR_ITEM_SPACING = 40.dp
 
-private val HERO_TAB_SPACING = 12.dp
-private val HERO_TAB_H_PADDING = 20.dp
-private val HERO_TAB_V_PADDING = 8.dp
+private val HERO_TAB_SPACING = 14.dp
+private val HERO_TAB_H_PADDING = 22.dp
+private val HERO_TAB_V_PADDING = 9.dp
+
+private val HERO_GRID_TOP_PADDING = 12.dp
+private val HERO_GRID_BOTTOM_PADDING = 14.dp
+private val HERO_GRID_H_SPACING = 20.dp
+private val HERO_GRID_V_SPACING = 20.dp
 
 private val POSTER_FOCUS_ELEVATION = 18.dp
 
 // 参考 VodRectPresenter.java 第 90-101 行：overlay 线宽 density*1dp、四边各外扩 1dp，视觉厚度约 2dp。
 private val POSTER_FOCUS_BORDER = 2.dp
 
-// 胶囊 Tab 选中/焦点态描边：与顶栏红横线同色，只是更粗一圈。
-private val HERO_TAB_FOCUS_BORDER = 2.dp
+// 海报标题：固定高度容器 + 单行，放大或切换都不会改变布局高度。
+private val POSTER_TITLE_GAP = 8.dp
+private val POSTER_TITLE_HEIGHT = 22.dp
+private const val POSTER_TITLE_SP = 14f
+
+// 胶囊 Tab 选中态描边加粗到 3dp，与 1dp 的未选中描边拉开对比。
+private val HERO_TAB_FOCUS_BORDER = 3.dp
 
 private val HERO_RED = Color(0xFFE50914)
-private val POSTER_SHAPE = RoundedCornerShape(6.dp)
+private val POSTER_SHAPE = RoundedCornerShape(16.dp)
 private val POSTER_PLACEHOLDER = Color(0xFF161616)
 private val DIALOG_SHAPE = RoundedCornerShape(14.dp)
