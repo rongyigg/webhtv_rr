@@ -6,7 +6,9 @@ import android.content.ContextWrapper
 import android.graphics.Color as AndroidColor
 import android.graphics.drawable.ColorDrawable
 import android.os.Bundle
+import android.os.SystemClock
 import androidx.activity.ComponentActivity
+import androidx.activity.OnBackPressedCallback
 import androidx.activity.compose.setContent
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateDpAsState
@@ -77,6 +79,7 @@ import androidx.core.view.WindowInsetsControllerCompat
 import coil3.compose.AsyncImage
 import com.fongmi.android.tv.api.SiteApi
 import com.fongmi.android.tv.ui.hero.HeroImageLoader
+import com.fongmi.android.tv.utils.Notify
 import com.fongmi.android.tv.utils.PushParser
 
 /**
@@ -92,6 +95,9 @@ import com.fongmi.android.tv.utils.PushParser
  */
 class HeroHomeActivity : ComponentActivity() {
 
+    /** 上一次按返回键的单调时间戳（毫秒）；`null` 表示当前不在“等待第二次确认”的窗口内。 */
+    private var lastBackPressedAt: Long? = null
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.setBackgroundDrawable(ColorDrawable(AndroidColor.BLACK))
@@ -100,12 +106,38 @@ class HeroHomeActivity : ComponentActivity() {
             hide(WindowInsetsCompat.Type.systemBars())
             systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
         }
+        installDoubleBackToExit()
         HeroImageLoader.install()
         setContent {
             MaterialTheme(colorScheme = darkColorScheme()) {
                 HeroHomeScreen(onLaunchPlayback = { vodName -> launchPlayback(this, vodName) })
             }
         }
+    }
+
+    /**
+     * TV 端“双击返回键退出”：
+     * 第一次按返回只弹提示并吞掉事件，[EXIT_BACK_INTERVAL_MS] 内再按一次才真正 [finish]。
+     * 超过窗口再按，则重新计时并再次提示。
+     *
+     * 用 [SystemClock.elapsedRealtime] 而不是 `System.currentTimeMillis`：单调时钟不受系统时间跳变影响。
+     * 回调挂到 Activity 的 dispatcher 上，生命周期自动跟随，无需在 onDestroy 里手动移除；
+     * 占位 Dialog 的返回键由 Dialog 窗口自己消费，不会走到这里。
+     */
+    private fun installDoubleBackToExit() {
+        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() {
+                val now = SystemClock.elapsedRealtime()
+                val last = lastBackPressedAt
+                if (last != null && now - last <= EXIT_BACK_INTERVAL_MS) {
+                    lastBackPressedAt = null
+                    finish()
+                    return
+                }
+                lastBackPressedAt = now
+                Notify.show(EXIT_BACK_HINT)
+            }
+        })
     }
 
     /**
@@ -130,6 +162,10 @@ class HeroHomeActivity : ComponentActivity() {
 
         // 公开测试流，仅用于确认“点击 → 原有 PlaybackActivity”这条链路；可随时替换为任意可访问直链。
         private const val DEMO_STREAM_URL = "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8"
+
+        // 双击返回键的确认窗口：2 秒内再按才退出。
+        private const val EXIT_BACK_INTERVAL_MS = 2000L
+        private const val EXIT_BACK_HINT = "再按一次返回键退出应用"
     }
 }
 
