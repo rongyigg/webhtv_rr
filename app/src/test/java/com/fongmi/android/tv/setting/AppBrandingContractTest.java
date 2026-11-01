@@ -159,12 +159,12 @@ public class AppBrandingContractTest {
     }
 
     @Test
-    public void bothProductManifestsExposeOnlyAliasLauncherEntries() throws Exception {
+    public void bothProductManifestsKeepBrandingAliasesWithoutLauncherEntries() throws Exception {
         String mobile = read("app/src/mobile/AndroidManifest.xml");
         String leanback = read("app/src/leanback/AndroidManifest.xml");
 
-        assertLauncherAliases(mobile, false);
-        assertLauncherAliases(leanback, true);
+        assertBrandingAliases(mobile);
+        assertBrandingAliases(leanback);
 
         assertEquals(2, countOccurrences(mobile, "android:label=\"@string/app_name\""));
         assertEquals(2, countOccurrences(leanback, "android:label=\"@string/app_name\""));
@@ -172,13 +172,26 @@ public class AppBrandingContractTest {
         assertEquals(0, countOccurrences(leanback, "@string/app_name_history"));
     }
 
-    private static void assertLauncherAliases(String manifest, boolean leanback) {
+    @Test
+    public void mainManifestOwnsTheTemporaryHeroLauncherEntry() throws Exception {
+        String main = read("app/src/main/AndroidManifest.xml");
+
+        assertTrue(main.contains(".ui.activity.HeroHomeActivity"));
+        assertTrue(main.contains("android.intent.action.MAIN"));
+        assertTrue(main.contains("android.intent.category.LAUNCHER"));
+        assertTrue(main.contains("android.intent.category.LEANBACK_LAUNCHER"));
+    }
+
+    private static void assertBrandingAliases(String manifest) {
         assertTrue(manifest.contains(".ui.activity.HomeActivityCurrent"));
         assertTrue(manifest.contains(".ui.activity.HomeActivityHistory"));
         assertTrue(manifest.contains("android:targetActivity=\".ui.activity.HomeActivity\""));
         assertTrue(manifest.contains("android:enabled=\"true\""));
         assertTrue(manifest.contains("android:enabled=\"false\""));
-        if (leanback) assertTrue(manifest.contains("android.intent.category.LEANBACK_LAUNCHER"));
+        // 重写阶段桌面入口已移交 HeroHomeActivity；品牌别名只保留图标/横幅切换能力。
+        assertFalse(manifest.contains("android.intent.action.MAIN"));
+        assertFalse(manifest.contains("android.intent.category.LAUNCHER"));
+        assertFalse(manifest.contains("android.intent.category.LEANBACK_LAUNCHER"));
     }
 
     private static String read(String relative) throws Exception {
