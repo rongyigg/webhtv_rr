@@ -22,7 +22,7 @@
 | `layout/adapter_source_result.xml` | `ref_docs/adapter_vod_rect.xml` | imageWrapper + 120×180 + `@style/Vod.Grid.Large` + 13sp `#ccffffff` + `@color/black_20` 占位 |
 | `layout/dialog_source_sidebar.xml` | `ref_docs/dialog_site.xml` | 根横向 `padding 24dp`、`wrap_content` 高、`CustomRecyclerView`（weight 1、`wrap_content` 高、`app:maxHeight=480dp`） |
 | `layout/adapter_source_sidebar_item.xml` | `ref_docs/adapter_site.xml` | 行高 40dp、18sp 文字（0dp + weight 1）、24dp 勾选圈（marginStart 12dp）、行底 1dp 渐隐线（24dp 边距 / 16dp 上边距） |
-| 面板窗口尺寸 | `ref_docs/kz2.java` | 宽 = `((cols-1)*0.2+0.4)` × 屏宽（单列 0.4）；高 = `(min(max(1,ceil(n/cols)),4)*73 - 16)dp` 且设为 `maxHeight`；`GridLayoutManager(cols)` + 16dp 间距；`itemAnimator=null` / `hasFixedSize(true)` / `itemViewCacheSize=6` / `dim 0.3` |
+| 面板窗口尺寸 | `ref_docs/kz2.java` | 宽 = `((cols-1)*0.2+0.4)` × 屏宽（单列 0.4）；高 = `(min(max(1,ceil(n/cols)),4)*73 - 16)dp` 且设为 `maxHeight`；`GridLayoutManager(cols)` + 16dp 间距；`itemAnimator=null` / `itemViewCacheSize=6` / `dim 0.3`（原版 `hasFixedSize(true)` 不复用，见 §3.10） |
 | 弹窗窗口尺寸 | `ref_docs/f23.java` | 宽 `0.82 ×` 屏宽、高 `min(360dp, 0.65 ×` 屏高`)`；站点间距 12dp、结果间距 16dp、结果卡焦点缩放 1.08 |
 | `drawable/shape_source_site_item_focused.xml` | `ref_docs/shape_site_item_focused.xml` | inset 8/4dp + 白底 + 28dp 圆角（焦点胶囊） |
 | `drawable/shape_source_chip_round_{normal,activated}.xml` | `ref_docs/shape_chip_round_*.xml` | 只有 28dp 圆角 + 6dp 横向 padding，**无 solid**（上一版的灰底/红底就是这里多加的） |
@@ -51,6 +51,10 @@
 8. **侧边栏不再有「全选 / 全不选」**：这一行属于 `dialog_search_site.xml`（搜索页面板），
    `dialog_site.xml` 没有。行点击 = 切换该条目勾选（Hero 多选语义）。
 9. **`shape_home_logo_source_focused` 不在 ref_docs 内**，按红色椭圆实现。
+10. **不复用 `kz2` 的 `setHasFixedSize(true)`**：Lint `InvalidSetHasFixedSize`（androidx.recyclerview）要求
+    滚动方向上的尺寸不能是 `wrap_content`，而 `dialog_source_sidebar.xml` 的列表是
+    `layout_height="wrap_content"`（照搬 `dialog_site.xml`），CI 会因此失败。
+    高度仍由 `bindList()` 每次按条目数算出并写入 `layoutParams` + `setMaxHeight()`，视觉与 kz2 一致。
 
 ## 4. 焦点契约
 

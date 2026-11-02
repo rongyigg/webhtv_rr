@@ -30,7 +30,7 @@ import kotlin.math.roundToInt
  * - 列表高度 = `(min(max(1, ceil(条目数/cols)), 4) * 73 - 16) dp`，同时设为 maxHeight；
  *   73 = 行高 40 + 底部分隔线 16 + 1dp 线，与 16dp 间距装饰器一致，因此最多显示 4 行；
  * - 列表用 `GridLayoutManager(context, cols)`，条目间距 16dp（`h23(cols, 16)`）；
- * - `itemAnimator = null`、`hasFixedSize(true)`、`itemViewCacheSize = 6`。
+ * - `itemAnimator = null`、`itemViewCacheSize = 6`（原版的 `hasFixedSize(true)` 不复用，见 [bindList]）。
  *
  * 焦点 / 选中态照搬 `ref_docs/selector_site_item_background.xml` 与
  * `ref_docs/selector_site_item_text.xml`（焦点白色胶囊、常态透明）。
@@ -99,7 +99,9 @@ internal class SourceSidebar private constructor(
 
     private fun bindList() {
         list = findViewById(R.id.recycler)
-        list.setHasFixedSize(true)
+        // 原版 kz2 调用 setHasFixedSize(true)，但原版列表高度是运行时算出的固定高度；
+        // 这里 dialog_source_sidebar 的列表是 android:layout_height="wrap_content"，
+        // 两者并存会触发 Lint `InvalidSetHasFixedSize`（CI 失败），故不设置该标志。
         list.itemAnimator = null
         list.setItemViewCacheSize(6)
         list.layoutManager = GridLayoutManager(context, COLUMNS)
