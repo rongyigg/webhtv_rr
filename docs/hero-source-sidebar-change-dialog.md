@@ -114,14 +114,15 @@
 
 - `:app:compileLeanbackArmeabi_v7aDebugKotlin` → BUILD SUCCESSFUL（2026-11-02）
 - `:app:compileMobileArmeabi_v7aDebugKotlin` → BUILD SUCCESSFUL（同日，验证 main 源集未引入 Leanback 依赖）
+- 后续 `shape_home_logo_normal_white` 仅改 `solid` 颜色值（`#FFFFFF` → `#1AFFFFFF`），
+  纯资源改动、无新增引用，不回退上述两次编译结论。
 
 ## 8. 已知限制 / 风险
 
-1. `shape_home_logo_normal_white` 按指令写成纯白实心：`ic_home_logo` 本身是白色，
-   常态下图标与圆底同色，视觉上只看到白色圆点。若需要图标可见，把该 shape 的
-   `solid` 改成 `#1AFFFFFF`（逆向原值 `white_10`）即可，其余不动。
+1. ~~`shape_home_logo_normal_white` 按指令写成纯白实心~~ **已修复**：`solid` 改为
+   `#1AFFFFFF`（逆向原值 `white_10`），白色 `ic_home_logo` 叠在半透明圆底上可见。
 2. 顶部「全选/全不选」的焦点态用 source 红色胶囊（`selector_source_site_item_background`），
-   因为逆向的 `overlay_focus` 布局不在本工程资源里，无法直接复用。
+   因为逆向的 `overlay_focus` 布局不在本工程资源里，无法直接复用。**用户已确认无需修改**。
 3. 站点切换后的结果刷新、结果卡确定键的写库仍是 `TODO(数据层对接)`；
    侧边栏勾选状态只保存在本次会话。
 4. 结果卡片暂无海报地址，只显示「站点 · 日期」；接入真实数据后补图片加载。
