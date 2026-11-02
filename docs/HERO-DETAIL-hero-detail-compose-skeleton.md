@@ -42,6 +42,9 @@
 | 32 | **整列边缘翻页**：任意行最右列 → 下一组、最左列 ← 上一组，落点按行对齐 | 七 | 已实现 |
 | 33 | **列数 / 排序持久化**：`SharedPreferences(hero_detail_ui)` 记忆上次选择并初始化网格 | 七 | 已实现 |
 | 34 | 编译通过 `:app:compileLeanbackArmeabi_v7aDebugKotlin` | 七 | BUILD SUCCESSFUL |
+| 35 | **历史记忆契约**：`HeroPlayDialog(lastWatchedEpisodeIndex = -1)` 参数注入，老剧自动切组 + 吸附该集 | 八 | 已实现 |
+| 36 | **播放回调预留**：网格确定键 → `onEpisodeSelected(ascendingIndex)`，注释预留 `History.push` | 八 | 已实现 |
+| 37 | 演示数据 `DEMO_LAST_WATCHED_INDEX = 14`（第 15 集）；编译通过 | 八 | BUILD SUCCESSFUL |
 
 ## 2. 证据来源
 
@@ -175,6 +178,18 @@ Column(align = BottomStart, padding(start/end 24dp, bottom 32dp))
 （文件 `hero_detail_ui`，键 `episode_few_columns` / `episode_descending`）；
 退出弹窗、换剧、杀进程后再次打开都沿用上次选择，分组与组容量也随之初始化。
 
+**历史记忆（参数注入，接库前先定契约）**：`HeroPlayDialog(detail, lastWatchedEpisodeIndex = -1,
+onEpisodeSelected = {}, onDismiss)`。
+
+| 输入 | 行为 |
+|---|---|
+| `lastWatchedEpisodeIndex = -1` | 新剧：初始分组第 1 组，焦点落网格第 1 格 |
+| `lastWatchedEpisodeIndex >= 0` | 老剧：按「0 基升序索引」定位（14 = 第 15 集），**先按当前列数算出它属于哪一组并自动切过去**，再把焦点落到该格；倒序模式下按镜像换算，落点仍是同一集 |
+| 网格确定键 | 回调 `onEpisodeSelected(ascendingIndex)`，量纲与入参一致；内部注释预留 `History.push(detail.title, index)` |
+
+分组是「4 排 × 列数」，所以同一索引在不同列数下会自动落到不同组（多列 14 → 1-16 组；
+少列 14 → 9-16 组），弹窗一打开看到的就是历史集所在页，不需要用户二次翻组。
+
 **边缘切组**（网格 `onKeyEvent` → `handleGridKey`，判定只看列）：
 
 | 位置 | 按键 | 行为 |
@@ -211,7 +226,7 @@ Column(align = BottomStart, padding(start/end 24dp, bottom 32dp))
 | 演职员 ↓ | 最底部，消费 |
 | 关闭播放弹窗 | 焦点回「播放」 |
 | 关闭演员弹窗 | 焦点回**刚才点击的那位演员** |
-| 弹窗打开 | 焦点落历史集（`lastWatchedEpisode`；新剧即第 1 集） |
+| 弹窗打开 | 焦点落 `lastWatchedEpisodeIndex` 对应的集（-1 为新剧，落第 1 格），分组同步切到该集所在组 |
 | 线路栏 ←/→ | 线路间移动，端点消费；↑ 消费 |
 | 线路栏 ↓ | 进控制栏（记住离开时那个按钮） |
 | 控制栏 ←/→ | 在「列数 / 排序 / 分组」之间滑动，端点消费 |
@@ -286,6 +301,5 @@ adb shell am start -n com.silent.android.webhtv/com.fongmi.android.tv.ui.activit
 2. `loadActorProfile` 接 TMDB `/person/{id}`，`logoUrl` 接 `images.logos`（`iso_639_1 = zh`）。
 3. 播放按钮与选集点击接 `VideoActivity.startDirect(...)`（复用 `HeroHomeActivity.launchPlayback`，不改 PlayerManager）。
 4. 收藏接 `Keep`，换源接既有搜索/聚合源入口；线路栏目前只是视觉与焦点占位，确认后接 `Flag` 并触发换源。
-5. `lastWatchedEpisode` 接真实历史进度。
-6. 翻页单位是「每 20 集固定一组」；接真实数据后若某些剧集数很多（如 200 集 = 10 组），
-   可再评估是否改成「按列数铺满一屏为一组」。当前按需求固定 20。
+5. `lastWatchedEpisodeIndex` 换成 `History` 查询结果；`onEpisodeSelected` 里补 `History.push(detail.title, index)`。
+6. 分组已是「4 排 × 列数」动态计算，集数几百集也只多出分组按钮，不再需要改翻页模型。

@@ -116,7 +116,8 @@ import kotlinx.coroutines.withContext
  * 焦点契约：
  * - 默认落在「播放」；←/→ 在按钮间移动。
  * - 「播放」按 ↓ → 演职员行（落在上次停留的演员）；演员行 ↑ → 回到「播放」；行内 ←/→ 横移，↓ 消费。
- * - 点「播放」→ [HeroPlayDialog]：焦点强制进入弹窗并落到 `lastWatchedEpisode`（无历史则第 1 集）。
+ * - 点「播放」→ [HeroPlayDialog]：按 `lastWatchedEpisodeIndex` 强制吸附历史集（-1 落第 1 集），
+ *   并把该集所在分组自动切好。
  * - 点某位演员 → [HeroActorDialog]（立即弹出、数据异步加载）；关闭后焦点**回到被点的那位演员**。
  * - 纯展示文本（剧名/元数据/简介）没有任何 `focusable` / `clickable` 修饰符。
  */
@@ -286,7 +287,16 @@ private fun HeroDetailScreen(detail: HeroDetail) {
     }
 
     if (showPlayDialog) {
-        HeroPlayDialog(detail = detail, onDismiss = { showPlayDialog = false })
+        HeroPlayDialog(
+            detail = detail,
+            // 假数据阶段：手动传 14 = 第 15 集，模拟「上次看到第 15 集」；
+            // 接入本地库后改成 History 里的真实索引（-1 表示没看过）。
+            lastWatchedEpisodeIndex = DEMO_LAST_WATCHED_INDEX,
+            // 预留接口：这里就是未来写 History 的地方（参数量纲 = 0 基升序索引）。
+            // TODO(接入历史库)：History.push(detail.title, index)，目前只占位、不改播放链路。
+            onEpisodeSelected = { _ -> },
+            onDismiss = { showPlayDialog = false },
+        )
     }
 
     // 演员详情：点击即弹出，数据在弹窗内部异步加载。
@@ -815,8 +825,13 @@ private fun HeroDetailSectionTitle(text: String, fontSize: TextUnit = SECTION_TI
  * 分组是「4 排 × 当前列数」的动态分页（多列 16 集一组 / 少列 8 集一组），
  * 所以不管剧集总数是 50 还是几百集，网格永远只有 4 排，翻页全靠边缘按键，绝不滚动。
  *
+ * 历史记忆（本阶段用参数注入，接库后只换数据来源、不动这里的逻辑）：
+ * - [lastWatchedEpisodeIndex] 是**0 基集索引**（14 = 第 15 集），-1 表示新剧。
+ * - 新剧：焦点落第 1 集；老剧：分组先自动切到该集所在组，再把焦点落到该集本身。
+ * - 用户按确定键时回调 [onEpisodeSelected]，参数量纲与 [lastWatchedEpisodeIndex] 完全一致。
+ *
  * 焦点契约：
- * - 打开落在历史集（`lastWatchedEpisode`）；新剧落第 1 集。
+ * - 打开落在历史集（`lastWatchedEpisodeIndex`）；新剧落第 1 集。
  * - 线路栏 ←/→ 在站点间移动，端点消费；↓ 进控制栏；↑ 消费。
  * - 控制栏 ←/→ 在「列数 / 排序 / 分组」之间滑动；↓ 进网格（尽量落回同一集）；↑ 回线路栏。
  * - 网格组内 ←/→/↑/↓ 正常移动；**任意一行**的最右一列按 → 切下一组（普通行落同行第 1 列，
@@ -824,7 +839,12 @@ private fun HeroDetailSectionTitle(text: String, fontSize: TextUnit = SECTION_TI
  * - 列数 / 排序写进 SharedPreferences，下次打开弹窗沿用上次选择；返回键关闭弹窗。
  */
 @Composable
-private fun HeroPlayDialog(detail: HeroDetail, onDismiss: () -> Unit) {
+private fun HeroPlayDialog(
+    detail: HeroDetail,
+    lastWatchedEpisodeIndex: Int = -1,
+    onEpisodeSelected: (Int) -> Unit = {},
+    onDismiss: () -> Unit,
+) {
     // 列数 / 排序本地持久化：换剧、关弹窗、杀进程后再进来仍是上次的选择。
     val context = LocalContext.current
     val prefs = remember(context) {
@@ -835,20 +855,23 @@ private fun HeroPlayDialog(detail: HeroDetail, onDismiss: () -> Unit) {
     // 列数只有「多列(4) / 少列(2)」两态：默认多列。
     var fewColumns by remember { mutableStateOf(prefs.getBoolean(DIALOG_PREF_FEW_COLUMNS, false)) }
 
-    val ordered = remember(descending, detail.episodes) {
-        val ascending = detail.episodes.sortedBy { it.number }
-        if (descending) ascending.asReversed() else ascending
-    }
+    // 集号升序基准表：历史索引、排序镜像都以它为坐标原点，和外部的 History 完全对齐。
+    val ascending = remember(detail.episodes) { detail.episodes.sortedBy { it.number } }
+    val ordered = remember(descending, ascending) { if (descending) ascending.asReversed() else ascending }
     val columns = if (fewColumns) EPISODE_COLUMNS_FEW else EPISODE_COLUMNS_MANY
     // 组容量 = 4 排 × 当前列数：多列 16 集 / 少列 8 集，永远刚好填满 4 排。
     val pageSize = EPISODE_GRID_ROWS * columns
     val pageCount = ((ordered.size + pageSize - 1) / pageSize).coerceAtLeast(1)
 
-    // 记忆用「集号」而不是下标：切排序 / 切列数后仍能找回同一集。
-    val initialIndex = remember {
-        ordered.indexOfFirst { it.number == detail.lastWatchedEpisode }.takeIf { it >= 0 } ?: 0
+    // 历史索引 → 升序下标；-1（新剧）或越界统一收敛到第 1 集。
+    val watchedIndex = remember(lastWatchedEpisodeIndex, ascending) {
+        if (lastWatchedEpisodeIndex in ascending.indices) lastWatchedEpisodeIndex else 0
     }
-    val initialNumber = remember { ordered.getOrNull(initialIndex)?.number ?: 0 }
+    // 升序下标 → 当前排序下的显示下标（倒序时整体镜像），据此算初始分组。
+    val initialIndex = remember(watchedIndex, descending, ascending) {
+        if (descending) ascending.lastIndex - watchedIndex else watchedIndex
+    }
+    val initialNumber = remember(ordered, initialIndex) { ordered.getOrNull(initialIndex)?.number ?: 0 }
 
     var page by remember { mutableIntStateOf(initialIndex / pageSize) }
     /** 焦点集在「当前组内」的下标；焦点不在网格时保留最后一次有效值。 */
@@ -1055,6 +1078,11 @@ private fun HeroPlayDialog(detail: HeroDetail, onDismiss: () -> Unit) {
         }
     }
 
+    // 打开弹窗时把「历史集所在分组」按钮滚进可视区，和网格自动切组保持一致。
+    LaunchedEffect(Unit) {
+        runCatching { groupListState.scrollToItem(page.coerceIn(0, (pageCount - 1).coerceAtLeast(0))) }
+    }
+
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(
@@ -1182,7 +1210,16 @@ private fun HeroPlayDialog(detail: HeroDetail, onDismiss: () -> Unit) {
                                     anchorCell = index
                                     anchorNumber = episode.number
                                 },
-                                onConfirm = { playingNumber = episode.number },
+                                onConfirm = {
+                                    playingNumber = episode.number
+                                    // 显示下标 → 升序绝对索引，作为历史记录的稳定键。
+                                    val orderedIndex = page * pageSize + index
+                                    val episodeIndex =
+                                        if (descending) ordered.lastIndex - orderedIndex else orderedIndex
+                                    // TODO(接入历史库)：这里换成原版的记录接口，例如
+                                    //  History.push(detail.title, episodeIndex)
+                                    onEpisodeSelected(episodeIndex)
+                                },
                             )
                         }
                     }
@@ -1467,8 +1504,6 @@ private data class HeroDetail(
     val cast: List<HeroCast>,
     val flags: List<String>,
     val episodes: List<HeroEpisode>,
-    /** 历史播放进度（1 基集号）；0 表示新剧，焦点落第 1 集。 */
-    val lastWatchedEpisode: Int,
 )
 
 /** 假数据：picsum 按 seed 返回稳定图片，不依赖 TMDB Key 即可验证 Coil 链路。 */
@@ -1504,9 +1539,14 @@ private val DEMO_DETAIL = HeroDetail(
             label = if (number == 15) "第15集_超长名字测试跑马灯效果" else "第${number}集",
         )
     },
-    // 默认吸附第 15 集：一进弹窗就能看到超长名字的跑马灯 + 第 1 组第 4 行。
-    lastWatchedEpisode = 15,
+    // 历史进度改由弹窗参数注入（见 DEMO_LAST_WATCHED_INDEX），详情数据本身不再携带进度。
 )
+
+/**
+ * 假数据阶段的历史进度：14 = 第 15 集（0 基索引）。
+ * 接入本地库后换成 History 查询结果，-1 表示没看过、焦点落第 1 集。
+ */
+private const val DEMO_LAST_WATCHED_INDEX = 14
 
 /** 按钮顺序按需求固定为 播放 | 换源 | 收藏。 */
 private val DETAIL_ACTIONS = listOf(
