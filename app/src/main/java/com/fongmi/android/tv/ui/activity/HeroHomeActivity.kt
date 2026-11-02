@@ -44,7 +44,6 @@ import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -119,8 +118,10 @@ import kotlinx.coroutines.launch
  * - 卡片 120×180dp / 8dp 圆角 / 标题 marginTop 8dp + 13sp：`ref_docs/adapter_vod_rect.xml` L24-27、L45-57。
  *
  * 焦点契约（三区各自持有 FocusRequester，全部显式交接，不依赖 2D 自动搜索）：
- * TopBar ↓→ Tab，Tab ↑→ TopBar，Tab ↓→ 海报行（前 6 张按横向位置落位），
- * 海报行 ←/→ 行内移动（第 5 张起整行左移一张），海报行 ↑→ Tab，↓ 留在原地（已在最底行）。
+ * - 进入 Tab 栏（无论从 TopBar ↓ 还是从海报行 ↑）：落到**记忆中的**上一次选中 Tab。
+ * - 进入 TopBar 或海报行（从别的排切入）：一律落到各自最左侧的第一项。
+ * - 海报行 ←/→ 行内移动；仅当焦点到达第 5 张（index = 4）时把该段推到视觉最左侧，
+ *   index 0..3 不滚动、左侧不露出上一张的边；海报行 ↓ 留在原地（已在最底行）。
  */
 class HeroHomeActivity : ComponentActivity() {
 
@@ -210,8 +211,8 @@ private fun HeroHomeScreen(onLaunchPlayback: (String) -> Unit) {
     val tabRequesters = remember { List(HERO_TABS.size) { FocusRequester() } }
     val posterRequesters = remember { List(HERO_POSTERS.size) { FocusRequester() } }
 
-    var lastTopBarIndex by remember { mutableIntStateOf(0) }
-    var lastTabIndex by remember { mutableIntStateOf(0) }
+    // Tab 栏的记忆索引：从第一排按“下”或从第三排按“上”进入时，都落回这一项。
+    var rememberedTabIndex by remember { mutableIntStateOf(0) }
     var selectedTabIndex by remember { mutableIntStateOf(0) }
     var focusedPosterIndex by remember { mutableIntStateOf(0) }
     var showHomeDialog by remember { mutableStateOf(false) }
@@ -220,25 +221,26 @@ private fun HeroHomeScreen(onLaunchPlayback: (String) -> Unit) {
     val posters = remember(selectedTabIndex) { postersForTab(selectedTabIndex) }
     val heroPoster = posters.getOrElse(focusedPosterIndex) { posters[0] }
 
-    // 海报行 → 顶栏：回到用户离开时的那一项，失败再退回“小房子”。
+    // 任意一排 → 顶栏：默认落在最左侧的第一项（小房子），不记忆上次位置。
     fun focusTopBar() {
-        if (!requestFocus(topBarRequesters, lastTopBarIndex)) requestFocus(topBarRequesters, 0)
+        requestFocus(topBarRequesters, 0)
     }
 
-    // 任意区 → Tab：切换选中分类、把分类条滚到可见、再请求焦点。
-    fun focusTab(index: Int) {
+    // 任意一排 → Tab：落在“记忆中的上一次选中项”，而不是第一项。
+    fun focusTab(index: Int = rememberedTabIndex) {
         val target = index.coerceIn(0, HERO_TABS.lastIndex)
-        lastTabIndex = target
+        rememberedTabIndex = target
         selectedTabIndex = target
         scope.launch { tabState.animateScrollToItem(target) }
         if (!requestFocus(tabRequesters, target)) requestFocus(tabRequesters, 0)
     }
 
-    // Tab → 海报行：按“与 Tab 相近的横向位置”落到对应卡片上。
-    fun focusPoster(index: Int) {
+    // → 海报行：从别的排切入时用默认参数 index = 0，永远落在最左侧的第一张。
+    fun focusPoster(index: Int = 0) {
         val target = index.coerceIn(0, posters.lastIndex)
-        // 焦点卡片停在第 5 个槽位（0-based 4）：索引 0..4 时行不动，索引 ≥ 5 起每按一次右键左移一张。
-        val anchor = (target - POSTER_FOCUS_SLOT).coerceAtLeast(0)
+        // 滚动锚点：只有当焦点走到第 5 张（index = 4）及更右侧时，才把 index 4 推到视觉最左侧；
+        // index 0..3 一律回到行首（anchor = 0），列表不滚动，左侧也不会露出上一张的边。
+        val anchor = if (target >= POSTER_SCROLL_ANCHOR) POSTER_SCROLL_ANCHOR else 0
         if (requestFocus(posterRequesters, target)) {
             if (posterState.firstVisibleItemIndex == anchor && posterState.firstVisibleItemScrollOffset == 0) return
             scope.launch { posterState.animateScrollToItem(anchor) }
@@ -258,9 +260,6 @@ private fun HeroHomeScreen(onLaunchPlayback: (String) -> Unit) {
         if (target !in posters.indices) return
         focusPoster(target)
     }
-
-    // 海报行 → 分类 Tab：回到用户离开时的那一项。
-    fun focusTabFromPoster() = focusTab(lastTabIndex)
 
     // 启动时、以及占位 Dialog 关闭后，焦点都落回“小房子”。
     LaunchedEffect(showHomeDialog) {
@@ -285,9 +284,9 @@ private fun HeroHomeScreen(onLaunchPlayback: (String) -> Unit) {
         Column(modifier = Modifier.fillMaxSize()) {
             HeroTopBar(
                 requesters = topBarRequesters,
-                onFocused = { lastTopBarIndex = it },
                 onHomeConfirm = { showHomeDialog = true },
-                onMoveDown = { index -> focusTab(tabIndexForTopBar(index)) },
+                // 顶栏 ↓ 进入 Tab 栏：落到记忆中的 Tab，而不是与顶栏项横向对齐的那一个。
+                onMoveDown = { focusTab() },
             )
             // XML 里 bottomContent 用 layout_alignParentBottom 贴底；Compose 用弹性留白表达同一语义。
             Spacer(modifier = Modifier.weight(1f))
@@ -297,12 +296,13 @@ private fun HeroHomeScreen(onLaunchPlayback: (String) -> Unit) {
                 requesters = tabRequesters,
                 selectedIndex = selectedTabIndex,
                 onFocused = { index ->
-                    lastTabIndex = index
+                    rememberedTabIndex = index
                     selectedTabIndex = index
                 },
                 onConfirm = { index -> selectedTabIndex = index },
+                // Tab ↑ 回顶栏、↓ 进海报行：两边都默认落在各自最左侧的第一项。
                 onMoveUp = { focusTopBar() },
-                onMoveDown = { index -> focusPoster(columnForTab(index)) },
+                onMoveDown = { focusPoster() },
                 onMoveLeft = { index -> focusTab(index - 1) },
                 onMoveRight = { index -> focusTab(index + 1) },
             )
@@ -312,7 +312,8 @@ private fun HeroHomeScreen(onLaunchPlayback: (String) -> Unit) {
                 requesters = posterRequesters,
                 onFocused = { index -> focusedPosterIndex = index },
                 onClick = onLaunchPlayback,
-                onMoveUp = { focusTabFromPoster() },
+                // 海报行 ↑ 回 Tab 栏：落到记忆中的 Tab。
+                onMoveUp = { focusTab() },
                 onMoveDown = { },
                 onMoveLeft = { index -> focusPosterHorizontal(index, -1) },
                 onMoveRight = { index -> focusPosterHorizontal(index, 1) },
@@ -384,15 +385,14 @@ private fun HeroMaskBottom() {
  * - 高 64dp（L207），左右 padding 各 24dp（L208-209），内容垂直居中（L200 `gravity=center_vertical`）。
  * - `homeBtn` 28dp（L219-220），`navRecycler` 距它 20dp（L259 `layout_marginStart=20dp`）。
  *
- * 顶栏项文字样式沿用既有产品规范（未在 XML 中给出，属于 adapter_nav 的职责）：
- * 焦点态纯白 + 下方红色短横线，未选中纯白 60% 透明度。
+ * 文字样式与第二排 Tab 栏完全一致（同为 [HERO_LABEL_SP]）：未选中纯白 60% 透明度，
+ * 焦点态纯白 + 平滑放大 1.1 倍 + 下方红色短横线（[HeroAccentColor]）。
  */
 @Composable
 private fun HeroTopBar(
     requesters: List<FocusRequester>,
-    onFocused: (Int) -> Unit,
     onHomeConfirm: () -> Unit,
-    onMoveDown: (Int) -> Unit,
+    onMoveDown: () -> Unit,
 ) {
     Row(
         modifier = Modifier
@@ -406,9 +406,8 @@ private fun HeroTopBar(
             label = TOP_BAR_LABELS[0],
             isHome = true,
             requester = requesters[0],
-            onFocused = { onFocused(0) },
             onConfirm = onHomeConfirm,
-            onMoveDown = { onMoveDown(0) },
+            onMoveDown = onMoveDown,
         )
         Row(
             modifier = Modifier.padding(start = NAV_ITEMS_START_GAP),
@@ -420,9 +419,8 @@ private fun HeroTopBar(
                     label = TOP_BAR_LABELS[index],
                     isHome = false,
                     requester = requesters[index],
-                    onFocused = { onFocused(index) },
                     onConfirm = { },
-                    onMoveDown = { onMoveDown(index) },
+                    onMoveDown = onMoveDown,
                 )
             }
         }
@@ -434,7 +432,6 @@ private fun HeroTopBarItem(
     label: String,
     isHome: Boolean,
     requester: FocusRequester,
-    onFocused: () -> Unit,
     onConfirm: () -> Unit,
     onMoveDown: () -> Unit,
 ) {
@@ -444,10 +441,11 @@ private fun HeroTopBarItem(
         animationSpec = tween(durationMillis = 150),
         label = "topBarText",
     )
-    val fontSize by animateFloatAsState(
-        targetValue = if (focused) TOP_BAR_FOCUS_SP else TOP_BAR_IDLE_SP,
-        animationSpec = tween(durationMillis = 150),
-        label = "topBarSize",
+    // 焦点态不再改字号（那样会顶动下划线），改为整体平滑放大 1.1 倍。
+    val focusScale by animateFloatAsState(
+        targetValue = if (focused) TOP_BAR_FOCUS_SCALE else 1f,
+        animationSpec = tween(durationMillis = TOP_BAR_ANIM_MS),
+        label = "topBarScale",
     )
     val underlineAlpha by animateFloatAsState(
         targetValue = if (focused) 1f else 0f,
@@ -459,10 +457,7 @@ private fun HeroTopBarItem(
     Column(
         modifier = Modifier
             .focusRequester(requester)
-            .onFocusChanged {
-                focused = it.isFocused
-                if (it.isFocused) onFocused()
-            }
+            .onFocusChanged { focused = it.isFocused }
             .onPreviewKeyEvent { event ->
                 // 顶栏任意一项按“下”都显式交给分类 Tab，保证边界处不会丢焦点。
                 if (event.type == KeyEventType.KeyDown && event.key == Key.DirectionDown) {
@@ -476,19 +471,31 @@ private fun HeroTopBarItem(
             .padding(horizontal = 2.dp, vertical = 4.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        // homeBtn 是 28dp 方块（XML L219-220）；文字项固定 30dp 内容区，
-        // 保证焦点态 20sp↔22sp 切换时下划线不会上下跳动。
+        // homeBtn 是 28dp 方块（XML L219-220）；文字项固定 30dp 内容区。
+        // 字号固定为 [HERO_LABEL_SP]（与 Tab 栏同号），放大只走 graphicsLayer，不参与布局，下划线不会跳动。
         Box(
             modifier = Modifier.height(if (isHome) NAV_HOME_SIZE else TOP_BAR_TEXT_BOX),
             contentAlignment = Alignment.Center,
         ) {
             if (isHome) {
-                HouseGlyph(color = textColor, modifier = Modifier.size(NAV_HOME_GLYPH_SIZE))
+                HouseGlyph(
+                    color = textColor,
+                    modifier = Modifier
+                        .size(NAV_HOME_GLYPH_SIZE)
+                        .graphicsLayer {
+                            scaleX = focusScale
+                            scaleY = focusScale
+                        },
+                )
             } else {
                 Text(
                     text = label,
+                    modifier = Modifier.graphicsLayer {
+                        scaleX = focusScale
+                        scaleY = focusScale
+                    },
                     color = textColor,
-                    fontSize = fontSize.sp,
+                    fontSize = HERO_LABEL_SP.sp,
                     fontWeight = if (focused) FontWeight.Medium else FontWeight.Normal,
                     maxLines = 1,
                 )
@@ -501,7 +508,7 @@ private fun HeroTopBarItem(
                 .width(26.dp)
                 .height(3.dp)
                 .alpha(underlineAlpha)
-                .background(HERO_RED, RoundedCornerShape(2.dp)),
+                .background(HeroAccentColor, RoundedCornerShape(2.dp)),
         )
     }
 }
@@ -595,8 +602,10 @@ private fun HeroInfoArea(poster: HeroPoster) {
  * 分类 Tab 栏（XML `typeRecycler`，L128-141）：
  * - 左右 padding 24dp（L138-139）、`paddingBottom=2dp`（L130）、`layout_marginBottom=12dp`（L137）。
  *
- * 选中项带 3dp 红色描边（`HERO_RED`），未选中为 1dp 半透明白描边 + 62% 白字；
- * 获得焦点的项背景会再压暗一层，确保在亮背景图上也能看出焦点位置。
+ * 胶囊样式严格对照 `ref_docs/tab_ui.png`（无描边，纯色填充）：
+ * - 选中：HeroAccentColor 纯红底 + 纯白字。
+ * - 未选中：Color(0x33FFFFFF) 深灰半透明底 + 纯白字。
+ * - 形状为胶囊（[HERO_TAB_SHAPE]，24dp 圆角，高度不足时自动收成半圆）。
  * 左右键不交给系统焦点搜索，而是显式 [focusTab]，这样横向滚动与选中态永远同步。
  */
 @Composable
@@ -659,23 +668,9 @@ private fun HeroTabChip(
 ) {
     var focused by remember { mutableStateOf(false) }
     val active = selected || focused
-    val borderWidth by animateDpAsState(
-        targetValue = if (active) HERO_TAB_FOCUS_BORDER else 1.dp,
-        animationSpec = tween(durationMillis = 150),
-        label = "tabBorderWidth",
-    )
-    val borderColor by animateColorAsState(
-        targetValue = if (active) HERO_RED else Color.White.copy(alpha = 0.16f),
-        animationSpec = tween(durationMillis = 150),
-        label = "tabBorderColor",
-    )
-    val textColor by animateColorAsState(
-        targetValue = if (active) Color.White else Color.White.copy(alpha = 0.62f),
-        animationSpec = tween(durationMillis = 150),
-        label = "tabTextColor",
-    )
+    // 选中纯红、未选中深灰半透明；两者都是无描边的实心底，文字一律纯白。
     val chipBackground by animateColorAsState(
-        targetValue = Color.Black.copy(alpha = if (focused) 0.78f else 0.42f),
+        targetValue = if (active) HeroAccentColor else HERO_TAB_IDLE_BACKGROUND,
         animationSpec = tween(durationMillis = 150),
         label = "tabBackground",
     )
@@ -715,15 +710,15 @@ private fun HeroTabChip(
                 }
             }
             .clickable(interactionSource = interaction, indication = null, onClick = onConfirm)
-            .clip(CircleShape)
+            .clip(HERO_TAB_SHAPE)
             .background(chipBackground)
-            .border(width = borderWidth, color = borderColor, shape = CircleShape)
+            // 左右宽、上下窄：胶囊看起来更“扁”，与参考图一致。
             .padding(horizontal = HERO_TAB_H_PADDING, vertical = HERO_TAB_V_PADDING),
     ) {
         Text(
             text = label,
-            color = textColor,
-            fontSize = 15.sp,
+            color = Color.White,
+            fontSize = HERO_LABEL_SP.sp,
             fontWeight = if (active) FontWeight.Medium else FontWeight.Normal,
             maxLines = 1,
         )
@@ -764,12 +759,17 @@ private fun PosterArea(
 
     LazyRow(
         state = state,
-        // 24dp 的左右留白挂在这里（公式第 1 步已经把它扣掉了），LazyRow 自身不再设 contentPadding，
-        // 否则会二次扣减、第 8 张就会多露出 24dp，切不到 1/7。
+        // 左裁剪修复（等价于 Android 的 clipToPadding=false）：
+        // 外层只留 4dp，另外 20dp 作为 contentPadding 放在**行内**，于是
+        //   第一张卡的视觉位置仍 = 4 + 20 = 24dp（与 XML 的 paddingStart 一致），
+        //   但 LazyRow 的裁剪边界在 4dp，焦点卡放大后的红边/阴影有 20dp 余量可以画出去，不会被切。
+        // 右侧仍是 24dp，所以“可用宽度 = 屏宽 − 48dp”的 7 + 1/7 公式不受影响。
+        // 父容器（Box / Column）本身不裁剪子项，这里无需额外 clipToBounds=false。
         modifier = Modifier
             .fillMaxWidth()
             .height(POSTER_AREA_HEIGHT)
-            .padding(horizontal = HERO_PADDING),
+            .padding(start = HERO_PADDING - POSTER_FOCUS_SAFE_GAP, end = HERO_PADDING),
+        contentPadding = PaddingValues(start = POSTER_FOCUS_SAFE_GAP),
         horizontalArrangement = Arrangement.spacedBy(POSTER_GAP),
     ) {
         itemsIndexed(items = posters, key = { _, poster -> poster.id }) { index, poster ->
@@ -892,7 +892,8 @@ private fun PosterCard(
                 .shadow(elevation = elevation, shape = POSTER_SHAPE, clip = false)
                 .clip(POSTER_SHAPE)
                 .background(POSTER_PLACEHOLDER)
-                .border(width = borderWidth, color = Color.White, shape = POSTER_SHAPE),
+                // 焦点边框统一用主题红（HeroAccentColor），不再是白色。
+                .border(width = borderWidth, color = HeroAccentColor, shape = POSTER_SHAPE),
         ) {
             AsyncImage(
                 model = poster.url,
@@ -974,14 +975,6 @@ private fun requestFocus(requesters: List<FocusRequester>, index: Int): Boolean 
     return runCatching { requester.requestFocus() }.isSuccess
 }
 
-/** 顶栏第 index 项正下方对应的 Tab 序号（顶栏 7 项 → 6 个分类，按比例落位）。 */
-private fun tabIndexForTopBar(topBarIndex: Int): Int =
-    (topBarIndex * HERO_TABS.size / TOP_BAR_LABELS.size).coerceIn(0, HERO_TABS.lastIndex)
-
-/** 第 index 个 Tab 正下方对应的海报卡片序号（6 个分类 → 行首 6 张卡片，按比例落位）。 */
-private fun columnForTab(tabIndex: Int): Int =
-    (tabIndex * POSTER_TAB_SPAN / HERO_TABS.size).coerceIn(0, POSTER_TAB_SPAN - 1)
-
 /** 分类切换时轮转假数据：列表顺序变了，但资源只有一套，方便先验证交互。 */
 private fun postersForTab(tabIndex: Int): List<HeroPoster> {
     val offset = (tabIndex * 2) % HERO_POSTERS.size
@@ -1043,9 +1036,9 @@ private val NAV_BAR_HEIGHT = 64.dp          // L207 layout_height
 private val NAV_HOME_SIZE = 28.dp           // L219-220 homeBtn
 private val NAV_HOME_GLYPH_SIZE = 20.dp     // 28dp 按钮内留 4dp 呼吸
 private val NAV_ITEMS_START_GAP = 20.dp     // L259 navRecycler layout_marginStart
-private val TOP_BAR_TEXT_BOX = 30.dp        // 文字项固定内容区（防焦点态字号切换抖动）
-private const val TOP_BAR_FOCUS_SP = 22f
-private const val TOP_BAR_IDLE_SP = 20f
+private val TOP_BAR_TEXT_BOX = 30.dp        // 文字项固定内容区
+private const val TOP_BAR_FOCUS_SCALE = 1.1f // 焦点态整体放大 1.1 倍（只走 graphicsLayer，不动布局）
+private const val TOP_BAR_ANIM_MS = 150
 private const val TOP_BAR_IDLE_ALPHA = 0.6f
 private val TOP_BAR_ITEM_SPACING = 40.dp    // navRecycler 项间距（adapter_nav 职责，沿用既有视觉）
 
@@ -1094,9 +1087,10 @@ private val HERO_DESC_COLOR = Color(0xBBFFFFFF)  // L113
 private val HERO_TAB_BOTTOM_GAP = 12.dp     // L137 layout_marginBottom
 private val HERO_TAB_BOTTOM_PADDING = 2.dp  // L130 paddingBottom
 private val HERO_TAB_SPACING = 14.dp
-private val HERO_TAB_H_PADDING = 22.dp
-private val HERO_TAB_V_PADDING = 9.dp
-private val HERO_TAB_FOCUS_BORDER = 3.dp
+private val HERO_TAB_H_PADDING = 28.dp      // 左右宽一点
+private val HERO_TAB_V_PADDING = 6.dp       // 上下窄一点
+private val HERO_TAB_SHAPE = RoundedCornerShape(24.dp) // 胶囊（高度不足时自动收成半圆）
+private val HERO_TAB_IDLE_BACKGROUND = Color(0x33FFFFFF) // 未选中：深灰半透明，无描边
 
 // ---------------------------------------------------------------------------
 // 海报区 posterArea（L142-191）+ 卡片 adapter_vod_rect（L24-27、L45-57）
@@ -1115,11 +1109,11 @@ private const val POSTER_VISIBLE_CARDS = 7.1428f
 // 高度 = 宽度 × 1.5（严格 2:3，对应 adapter_vod_rect 的 120×180dp）。
 private const val POSTER_CARD_ASPECT = 1.5f
 
-// 焦点卡片停在第 5 个槽位（0-based 4）：索引 0..4 时行不动，索引 ≥ 5 起每按一次右键整行左移一张。
-private const val POSTER_FOCUS_SLOT = 4
+// 焦点进入第 5 张（index = 4）起，把 index 4 推到视觉最左侧；index 0..3 一律停在行首。
+private const val POSTER_SCROLL_ANCHOR = 4
 
-// 顶栏/分类条都是 6 个分类 → 海报行前 6 张卡片，Tab ↓ 按横向位置落位。
-private const val POSTER_TAB_SPAN = 6
+// 左侧焦点安全区：20dp 的额外 contentPadding，专门用来容纳放大后的红边与阴影（见 [PosterArea]）。
+private val POSTER_FOCUS_SAFE_GAP = 20.dp
 
 // 参考 ref_docs/VodRectPresenter.java 第 39-41 行：原实现 hasFocus() ? 1.08f : 1.0f；本项目按要求取 1.05。
 private const val POSTER_FOCUS_SCALE = 1.05f
@@ -1138,4 +1132,10 @@ private val POSTER_SHAPE = RoundedCornerShape(8.dp)
 private val POSTER_PLACEHOLDER = Color(0xFF161616)
 private val DIALOG_SHAPE = RoundedCornerShape(14.dp)
 
-private val HERO_RED = Color(0xFFE50914)
+// ---------------------------------------------------------------------------
+// 全局主题色：顶栏下划线、Tab 选中底、海报焦点边框统一使用这一个红。
+// ---------------------------------------------------------------------------
+private val HeroAccentColor = Color(0xFFFF0000)
+
+// 第一排（TopBar）与第二排（Tab）共用的字号，保证两排视觉统一。
+private const val HERO_LABEL_SP = 15f
