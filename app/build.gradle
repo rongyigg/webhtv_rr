@@ -84,6 +84,19 @@ android {
         unitTests.includeAndroidResources = true
     }
 
+    // Windows 资源管理器会在资源目录里自动生成 desktop.ini（Hidden + System），
+    // aapt2 会因为扩展名不是 .xml/.png 直接中止资源合并。
+    // 实测两种 DSL 都拦不住：`androidResources.ignoreAssetsPatterns` 只管 assets，
+    // `sourceSets.main.res.exclude` 也不被合并任务采用，所以只能每次建资源前物理清掉，
+    // 与 .gitignore 里的同名规则形成双重保险。
+    tasks.configureEach { task ->
+        if (task.name.startsWith('merge') && task.name.endsWith('Resources')) {
+            task.doFirst {
+                fileTree(dir: "$projectDir/src", includes: ['**/desktop.ini']).each { it.delete() }
+            }
+        }
+    }
+
     // ASS rendering is part of normal builds; package the matching prebuilt ABI.
     sourceSets.main.jniLibs.srcDir(rootProject.file('third_party/exo-ass-native/prebuilt'))
 
