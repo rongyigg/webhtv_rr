@@ -18,7 +18,6 @@ import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -74,7 +73,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
-import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
@@ -84,7 +82,11 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import coil3.compose.AsyncImage
 import com.fongmi.android.tv.R
+import com.fongmi.android.tv.ui.hero.ChangeSourceDialog
+import com.fongmi.android.tv.ui.hero.HeroAccentColor
+import com.fongmi.android.tv.ui.hero.HeroDialogShell
 import com.fongmi.android.tv.ui.hero.HeroImageLoader
+import com.fongmi.android.tv.ui.hero.HeroSectionTitle
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
@@ -167,21 +169,35 @@ private fun HeroDetailScreen(detail: HeroDetail) {
     var focusedAction by remember { mutableIntStateOf(DETAIL_ACTION_PLAY) }
     var focusedCast by remember { mutableIntStateOf(0) }
     var showPlayDialog by remember { mutableStateOf(false) }
+    var showSourceDialog by remember { mutableStateOf(false) }
     // 正在查看的演员下标；非 null 时演员详情弹窗可见。
     var actorDialogIndex by remember { mutableStateOf<Int?>(null) }
     // 弹窗关闭后要回去的演员下标；-1 表示「没有待恢复的演员焦点」。
     var pendingCastFocus by remember { mutableIntStateOf(-1) }
+    // 弹窗关闭后要回去的按钮下标；-1 表示「没有待恢复的按钮焦点」。
+    // 换源弹窗关闭时必须回到「换源」，而不是默认的「播放」。
+    var pendingActionFocus by remember { mutableIntStateOf(-1) }
 
-    // 两个弹窗都关闭后才抢焦点：
+    // 三个弹窗都关闭后才抢焦点：
     // - 刚关掉演员弹窗 → 回到被点的那位演员（需求：焦点必须回到刚才点击的头像）；
+    // - 刚关掉换源弹窗 → 回到「换源」按钮（需求三.3）；
     // - 否则（首次进入 / 关闭播放弹窗）→ 回到「播放」。
-    LaunchedEffect(showPlayDialog, actorDialogIndex) {
-        if (showPlayDialog || actorDialogIndex != null) return@LaunchedEffect
+    LaunchedEffect(showPlayDialog, showSourceDialog, actorDialogIndex) {
+        if (showPlayDialog || showSourceDialog || actorDialogIndex != null) return@LaunchedEffect
         val castTarget = pendingCastFocus
         pendingCastFocus = -1
         if (castTarget >= 0) {
             repeat(5) {
                 if (requestDetailFocus(castRequesters, castTarget)) return@LaunchedEffect
+                withFrameNanos { }
+            }
+            return@LaunchedEffect
+        }
+        val actionTarget = pendingActionFocus
+        pendingActionFocus = -1
+        if (actionTarget >= 0) {
+            repeat(5) {
+                if (requestDetailFocus(actionRequesters, actionTarget)) return@LaunchedEffect
                 withFrameNanos { }
             }
             return@LaunchedEffect
@@ -256,8 +272,16 @@ private fun HeroDetailScreen(detail: HeroDetail) {
             HeroDetailActionRow(
                 requesters = actionRequesters,
                 onFocused = { index -> focusedAction = index },
-                // 「播放」拉起播放弹窗（线路 + 选集），其余按钮本阶段仍是占位。
-                onConfirm = { index -> if (index == DETAIL_ACTION_PLAY) showPlayDialog = true },
+                // 「播放」拉起选集弹窗；「换源」拉起换源弹窗（收藏仍是占位）。
+                onConfirm = { index ->
+                    when (index) {
+                        DETAIL_ACTION_PLAY -> showPlayDialog = true
+                        DETAIL_ACTION_CHANGE_SOURCE -> {
+                            pendingActionFocus = DETAIL_ACTION_CHANGE_SOURCE
+                            showSourceDialog = true
+                        }
+                    }
+                },
                 onMoveLeft = { index -> if (index > 0) focusAction(actionRequesters, index - 1) { focusedAction = it } },
                 onMoveRight = { index ->
                     if (index < actionRequesters.lastIndex) focusAction(actionRequesters, index + 1) { focusedAction = it }
@@ -296,6 +320,15 @@ private fun HeroDetailScreen(detail: HeroDetail) {
             // TODO(接入历史库)：History.push(detail.title, index)，目前只占位、不改播放链路。
             onEpisodeSelected = { _ -> },
             onDismiss = { showPlayDialog = false },
+        )
+    }
+
+    // 换源弹窗：复用选集弹窗外壳；内部的小房子再拉起全局 SourceSidebar。
+    // 关闭后由上面的 LaunchedEffect 把焦点送回「换源」按钮。
+    if (showSourceDialog) {
+        ChangeSourceDialog(
+            detailTitle = detail.title,
+            onDismiss = { showSourceDialog = false },
         )
     }
 
@@ -437,7 +470,7 @@ private fun HeroCastSection(
     onMoveLeft: (Int) -> Unit,
     onMoveRight: (Int) -> Unit,
 ) {
-    HeroDetailSectionTitle(text = "导演 / 主演", fontSize = CAST_TITLE_SP.sp)
+    HeroSectionTitle(text = "导演 / 主演", fontSize = CAST_TITLE_SP.sp)
     Spacer(modifier = Modifier.height(CAST_TITLE_GAP))
     LazyRow(
         modifier = Modifier.fillMaxWidth(),
@@ -785,27 +818,6 @@ private fun HeroDetailActionButton(
     }
 }
 
-/** 区块标题：前方 4dp × 16dp 红色小竖条 + [fontSize] 加粗文字。 */
-@Composable
-private fun HeroDetailSectionTitle(text: String, fontSize: TextUnit = SECTION_TITLE_SP.sp) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Box(
-            modifier = Modifier
-                .width(SECTION_BAR_WIDTH)
-                .height(SECTION_BAR_HEIGHT)
-                .background(HeroAccentColor, SECTION_BAR_SHAPE),
-        )
-        Spacer(modifier = Modifier.width(SECTION_BAR_GAP))
-        Text(
-            text = text,
-            color = Color.White,
-            fontSize = fontSize,
-            fontWeight = FontWeight.Bold,
-            maxLines = 1,
-        )
-    }
-}
-
 // ---------------------------------------------------------------------------
 // 选集弹窗：外壳 + 线路栏 + 单行控制栏 + 固定 4 排网格（零内部滚动）
 // ---------------------------------------------------------------------------
@@ -1100,7 +1112,7 @@ private fun HeroPlayDialog(
         ) {
             HeroDialogShell(modifier = Modifier.fillMaxWidth(DIALOG_WIDTH_FRACTION)) {
                 // ---- 播放线路：4dp 红竖条标题 + 32dp 横排（标题纯展示，不可聚焦）----
-                HeroDetailSectionTitle(text = "播放线路", fontSize = DIALOG_SECTION_TITLE_SP.sp)
+                HeroSectionTitle(text = "播放线路", fontSize = DIALOG_SECTION_TITLE_SP.sp)
                 Spacer(modifier = Modifier.height(DIALOG_TITLE_GAP))
                 LazyRow(
                     modifier = Modifier
@@ -1133,7 +1145,7 @@ private fun HeroPlayDialog(
                         .height(DIALOG_TOGGLE_HEIGHT),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    HeroDetailSectionTitle(text = "选集", fontSize = DIALOG_SECTION_TITLE_SP.sp)
+                    HeroSectionTitle(text = "选集", fontSize = DIALOG_SECTION_TITLE_SP.sp)
                     Spacer(modifier = Modifier.width(DIALOG_CONTROL_GAP))
                     HeroToggleButton(
                         label = if (fewColumns) "少列" else "多列",
@@ -1227,24 +1239,6 @@ private fun HeroPlayDialog(
             }
         }
     }
-}
-
-/**
- * 统一弹窗外壳（`ref_docs/dialog_source.xml`）：深色半透明 `#E6000000` + 16dp 圆角 + 18dp 内边距。
- * 选集弹窗与演员详情弹窗都套这一层，保证所有弹窗视觉一致。
- */
-@Composable
-private fun HeroDialogShell(
-    modifier: Modifier = Modifier,
-    content: @Composable ColumnScope.() -> Unit,
-) {
-    Column(
-        modifier = modifier
-            .clip(DIALOG_SHELL_SHAPE)
-            .background(DIALOG_SHELL_BACKGROUND)
-            .padding(DIALOG_SHELL_PADDING),
-        content = content,
-    )
 }
 
 /**
@@ -1558,11 +1552,11 @@ private val DETAIL_ACTIONS = listOf(
 /** 全局左侧基准线：内容区左侧 padding 严格 24dp（原版详情页同值）。 */
 private val HERO_PADDING = 24.dp
 
-/** 主色：焦点/选中态红底、选集红框、区块红色小竖条统一使用。 */
-private val HeroAccentColor = Color(0xFFFF0000)
-
 /** 「播放」在按钮组里的固定下标。 */
 private const val DETAIL_ACTION_PLAY = 0
+
+/** 「换源」在按钮组里的固定下标（关闭换源弹窗后焦点必须回到这里）。 */
+private const val DETAIL_ACTION_CHANGE_SOURCE = 1
 
 // ---------------------------------------------------------------------------
 // 左下内容区（activity_detail.xml detailTop L62-190）
@@ -1664,22 +1658,10 @@ private val DETAIL_ACTION_SHAPE = RoundedCornerShape(4.dp)
 private val DETAIL_ACTION_IDLE_BACKGROUND = Color(0x1AFFFFFF) // white_10
 
 // ---------------------------------------------------------------------------
-// 区块标题：4dp × 16dp 红色小竖条 + 15sp 加粗
-// ---------------------------------------------------------------------------
-private val SECTION_BAR_WIDTH = 4.dp
-private val SECTION_BAR_HEIGHT = 16.dp
-private val SECTION_BAR_SHAPE = RoundedCornerShape(2.dp)
-private val SECTION_BAR_GAP = 8.dp
-private const val SECTION_TITLE_SP = 15f
-
-// ---------------------------------------------------------------------------
-// 统一弹窗外壳（ref_docs/dialog_source.xml：padding 18dp、深色半透明、16dp 圆角）
+// 统一弹窗外壳：外壳实现与常量已抽到 HeroCommonUi.HeroDialogShell（选集 / 换源共用）
 // ---------------------------------------------------------------------------
 private const val DIALOG_WIDTH_FRACTION = 0.82f
 private val DIALOG_SCRIM = Color(0x99000000)
-private val DIALOG_SHELL_BACKGROUND = Color(0xE6000000)
-private val DIALOG_SHELL_SHAPE = RoundedCornerShape(16.dp)
-private val DIALOG_SHELL_PADDING = 18.dp
 
 // 选集弹窗本地偏好（SharedPreferences）：跨剧、退弹窗、杀进程都保持上次的列数与排序
 private const val DIALOG_PREFS_NAME = "hero_detail_ui"

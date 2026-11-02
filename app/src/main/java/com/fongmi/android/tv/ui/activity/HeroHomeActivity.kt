@@ -23,7 +23,6 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.border
@@ -40,13 +39,11 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -71,7 +68,6 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.key.Key
@@ -80,22 +76,21 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import coil3.compose.AsyncImage
-import com.fongmi.android.tv.R
 import com.fongmi.android.tv.api.SiteApi
+import com.fongmi.android.tv.ui.hero.HeroAccentColor
+import com.fongmi.android.tv.ui.hero.HeroHomeLogoButton
 import com.fongmi.android.tv.ui.hero.HeroImageLoader
+import com.fongmi.android.tv.ui.hero.SourceSidebar
 import com.fongmi.android.tv.utils.Notify
 import com.fongmi.android.tv.utils.PushParser
 import kotlinx.coroutines.launch
@@ -219,7 +214,7 @@ private fun HeroHomeScreen(onOpenDetail: (String) -> Unit) {
     var rememberedTabIndex by remember { mutableIntStateOf(0) }
     var selectedTabIndex by remember { mutableIntStateOf(0) }
     var focusedPosterIndex by remember { mutableIntStateOf(0) }
-    var showHomeDialog by remember { mutableStateOf(false) }
+    var showSourceSidebar by remember { mutableStateOf(false) }
 
     // 换分类时用同一批假数据做轮转，视觉上列表确实换了，但不需要第二套资源。
     val posters = remember(selectedTabIndex) { postersForTab(selectedTabIndex) }
@@ -266,9 +261,9 @@ private fun HeroHomeScreen(onOpenDetail: (String) -> Unit) {
         focusPoster(target)
     }
 
-    // 启动时、以及占位 Dialog 关闭后，焦点都落回“小房子”。
-    LaunchedEffect(showHomeDialog) {
-        if (showHomeDialog) return@LaunchedEffect
+    // 启动时、以及接口源侧边栏关闭后，焦点都落回“小房子”。
+    LaunchedEffect(showSourceSidebar) {
+        if (showSourceSidebar) return@LaunchedEffect
         requestFocus(topBarRequesters, 0)
     }
 
@@ -289,7 +284,7 @@ private fun HeroHomeScreen(onOpenDetail: (String) -> Unit) {
         Column(modifier = Modifier.fillMaxSize()) {
             HeroTopBar(
                 requesters = topBarRequesters,
-                onHomeConfirm = { showHomeDialog = true },
+                onHomeConfirm = { showSourceSidebar = true },
                 // 顶栏 ↓ 进入 Tab 栏：落到记忆中的 Tab，而不是与顶栏项横向对齐的那一个。
                 onMoveDown = { focusTab() },
             )
@@ -327,7 +322,9 @@ private fun HeroHomeScreen(onOpenDetail: (String) -> Unit) {
         }
     }
 
-    if (showHomeDialog) HeroPlaceholderDialog(onDismiss = { showHomeDialog = false })
+    if (showSourceSidebar) {
+        SourceSidebar(onDismissRequest = { showSourceSidebar = false })
+    }
 }
 
 /**
@@ -478,39 +475,23 @@ private fun HeroTopBarItem(
         .clickable(interactionSource = interaction, indication = null, onClick = onConfirm)
 
     if (isHome) {
-        // 可点击容器固定 32dp；红底/白圈 28dp，图标 20dp 且绝对居中。
-        // - 未选中：透明底、无边框；
-        // - 焦点态：HeroAccentColor 红底 + 2dp 纯白外框；
-        // - 放大走 graphicsLayer，不参与布局，因此不会顶动整排。
-        Box(
-            modifier = itemModifier.size(NAV_HOME_CLICK_SIZE),
-            contentAlignment = Alignment.Center,
-        ) {
-            Box(
-                modifier = Modifier
-                    .size(NAV_HOME_CIRCLE_SIZE)
-                    .graphicsLayer {
-                        scaleX = focusScale
-                        scaleY = focusScale
-                    }
-                    .background(
-                        color = if (focused) HeroAccentColor else Color.Transparent,
-                        shape = CircleShape,
-                    )
-                    .then(
-                        if (focused) Modifier.border(NAV_HOME_BORDER, Color.White, CircleShape) else Modifier,
-                    ),
-                contentAlignment = Alignment.Center,
-            ) {
-                Image(
-                    painter = painterResource(id = R.drawable.ic_home_logo),
-                    contentDescription = "Home",
-                    // vector 自带 fillColor=@color/white，这里再统一 tint 一次，保证任何主题下都是纯白。
-                    colorFilter = ColorFilter.tint(Color.White),
-                    modifier = Modifier.size(NAV_HOME_ICON_SIZE),
-                )
-            }
-        }
+        // 复用全局「小房子」组件：首页 32dp 容器 / 28dp 圆 / 20dp 图标。
+        // ↓ 显式交给分类 Tab，保证边界处不会丢焦点。
+        HeroHomeLogoButton(
+            requester = requester,
+            containerSize = NAV_HOME_CLICK_SIZE,
+            circleSize = NAV_HOME_CIRCLE_SIZE,
+            iconSize = NAV_HOME_ICON_SIZE,
+            onConfirm = onConfirm,
+            onDirection = { key ->
+                if (key == Key.DirectionDown) {
+                    onMoveDown()
+                    true
+                } else {
+                    false
+                }
+            },
+        )
     } else {
         Column(
             modifier = itemModifier
@@ -947,30 +928,6 @@ private fun PosterCard(
     }
 }
 
-/** 空 Dialog 占位：仅用于验证“小房子 + 确定键”的交互链路，后续替换为真正的首页菜单。 */
-@Composable
-private fun HeroPlaceholderDialog(onDismiss: () -> Unit) {
-    Dialog(
-        onDismissRequest = onDismiss,
-        properties = DialogProperties(dismissOnBackPress = true, dismissOnClickOutside = true),
-    ) {
-        Box(
-            modifier = Modifier
-                .width(420.dp)
-                .height(240.dp)
-                .background(Color(0xFF101010), DIALOG_SHAPE)
-                .border(1.dp, Color(0xFF2F2F2F), DIALOG_SHAPE),
-            contentAlignment = Alignment.Center,
-        ) {
-            Text(
-                text = "占位对话框 · 按返回键关闭",
-                color = Color.White.copy(alpha = 0.5f),
-                fontSize = 14.sp,
-            )
-        }
-    }
-}
-
 /** 在已挂载的 FocusRequester 列表里安全地请求焦点：未组合的 Lazy 项会抛异常，这里降级返回 false。 */
 private fun requestFocus(requesters: List<FocusRequester>, index: Int): Boolean {
     val requester = requesters.getOrNull(index) ?: return false
@@ -1038,7 +995,6 @@ private val NAV_BAR_HEIGHT = 64.dp          // L207 layout_height
 private val NAV_HOME_CLICK_SIZE = 32.dp        // 可点击容器（高 32dp，与 16sp 文字视觉对齐）
 private val NAV_HOME_CIRCLE_SIZE = 28.dp       // 红底/白圈直径
 private val NAV_HOME_ICON_SIZE = 20.dp         // ic_home_logo 渲染尺寸（圆内居中）
-private val NAV_HOME_BORDER = 2.dp             // 焦点态白色外框
 private val NAV_ITEMS_START_GAP = 20.dp     // L259 navRecycler layout_marginStart
 private val TOP_BAR_TEXT_BOX = 24.dp        // 文字项固定内容区（16sp 的贴合高度）
 private const val TOP_BAR_SP = 16f          // 第一排字号（比第二排 Tab 的 13sp 大一档，形成层级）
@@ -1129,7 +1085,6 @@ private val POSTER_FOCUS_BORDER = 2.dp
 // styles.xml:12-14 —— `Vod.Grid.Large` 的 cornerSize 精确值就是 8dp（父样式 `Vod.Grid` 同为 8dp 圆角）。
 private val POSTER_SHAPE = RoundedCornerShape(8.dp)
 private val POSTER_PLACEHOLDER = Color(0xFF161616)
-private val DIALOG_SHAPE = RoundedCornerShape(14.dp)
 
 // ---------------------------------------------------------------------------
 // 全局主题色：顶栏下划线、Tab 选中底、海报焦点边框统一使用这一个红。
