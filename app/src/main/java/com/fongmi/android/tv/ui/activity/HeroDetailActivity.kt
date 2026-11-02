@@ -31,6 +31,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
@@ -69,7 +70,6 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.TextUnit
@@ -799,97 +799,150 @@ private fun HeroDetailSectionTitle(text: String, fontSize: TextUnit = SECTION_TI
 // ---------------------------------------------------------------------------
 
 /**
- * 选集弹窗：统一外壳 + 顶部栏 + 控制栏 + 动态列数网格。
+ * 选集弹窗：统一外壳 + 顶部栏 + 播放线路 + 选集标题行（两个 Toggle）+ 动态网格。
  *
- * 外壳严格对齐 `ref_docs/dialog_source.xml`：深色半透明 `#E6000000`、16dp 圆角、18dp 内边距；
+ * 外壳严格对齐 `ref_docs/dialog_source.xml`：`#E6000000`、16dp 圆角、18dp 内边距；
  * 顶部栏 32dp（红底白字「选集」徽章 24dp / 11sp + 12sp 剧名跑马灯）。
  *
+ * 两个分区标题统一走 [HeroDetailSectionTitle]：4dp × 16dp 红竖条 + 8dp 间距 + 15sp 加粗。
+ * 「播放线路」「选集」标题与「第 x / y 组」都是纯展示文本，没有任何 focusable / clickable。
+ *
  * 焦点契约：
- * - 打开即进入弹窗，落在历史集（`lastWatchedEpisode`，新剧即第 1 集）——比落在控制栏少按一次键。
- * - 控制栏 ←/→ 在 5 个选项间移动，↓ 进网格，↑ 消费。
- * - 网格第 1 行 ↑ 回控制栏（回到离开时那一项）；控制栏 ↓ 回到离开时那一格。
- * - 网格最右列 → 切下一组第一项；最左列 ← 切上一组第一项。
- * - 切排序 / 切列数后，焦点跟着「当前集」走，不回到第一格。
+ * - 打开落在历史集（`lastWatchedEpisode`）；新剧落第 1 集。
+ * - 线路栏 ←/→ 在站点间移动，端点消费；↓ 进控制栏；↑ 消费。
+ * - 控制栏（排序 / 列数两个 Toggle）←/→ 互移；↓ 进网格第一集；↑ 回线路栏。
+ * - 网格第 1 行 ↑ 回控制栏；最右列 → 切下一组第一集；最左列 ← 切上一组最后一集。
+ * - 切排序 / 切列数后按集号重新定位，焦点不漂移。
  * - 返回键关闭弹窗，主页面把焦点还给「播放」。
  */
 @Composable
 private fun HeroPlayDialog(detail: HeroDetail, onDismiss: () -> Unit) {
-    var sort by remember { mutableStateOf(EpisodeSort.ORIGINAL) }
-    var columnMode by remember { mutableStateOf(EpisodeColumns.MANY) }
+    // 排序只有「正序 / 倒序」两态：默认正序，点一次整体翻转。
+    var descending by remember { mutableStateOf(false) }
+    // 列数只有「多列(4) / 少列(2)」两态：默认多列。
+    var fewColumns by remember { mutableStateOf(false) }
 
-    val ordered = remember(sort, detail.episodes) { sortEpisodes(detail.episodes, sort) }
-    val columns = if (columnMode == EpisodeColumns.MANY) EPISODE_COLUMNS_MANY else EPISODE_COLUMNS_FEW
-    val pageSize = columns * EPISODE_ROWS_PER_PAGE
-    val pageCount = ((ordered.size + pageSize - 1) / pageSize).coerceAtLeast(1)
-
-    // 当前集用「集号」记忆而不是下标：切排序 / 切列数后自动跟随。
-    var currentNumber by remember {
-        mutableIntStateOf(
-            ordered.firstOrNull { it.number == detail.lastWatchedEpisode }?.number
-                ?: ordered.firstOrNull()?.number
-                ?: 0,
-        )
+    val ordered = remember(descending, detail.episodes) {
+        val ascending = detail.episodes.sortedBy { it.number }
+        if (descending) ascending.asReversed() else ascending
     }
-    var playingNumber by remember { mutableIntStateOf(currentNumber) }
-    var focusedControl by remember { mutableIntStateOf(CONTROL_COLUMN_MANY) }
+    val columns = if (fewColumns) EPISODE_COLUMNS_FEW else EPISODE_COLUMNS_MANY
+    // 分组与列数解耦：永远每 20 集一组（1-20 / 21-40 / 41-50），列数只改每行几格。
+    val groupCount = ((ordered.size + EPISODE_GROUP_SIZE - 1) / EPISODE_GROUP_SIZE).coerceAtLeast(1)
 
-    val currentIndex = ordered.indexOfFirst { it.number == currentNumber }.coerceAtLeast(0)
-    val page = (currentIndex / pageSize).coerceIn(0, pageCount - 1)
-    val cellInPage = currentIndex - page * pageSize
-    val pageItems = ordered.drop(page * pageSize).take(pageSize)
+    // 记忆用「集号」而不是下标：切排序 / 切列数后仍能找回同一集。
+    val initialIndex = remember {
+        ordered.indexOfFirst { it.number == detail.lastWatchedEpisode }.takeIf { it >= 0 } ?: 0
+    }
+    val initialNumber = ordered.getOrNull(initialIndex)?.number ?: 0
+    var currentNumber by remember { mutableIntStateOf(initialNumber) }
+    var playingNumber by remember { mutableIntStateOf(initialNumber) }
+    var group by remember { mutableIntStateOf(initialIndex / EPISODE_GROUP_SIZE) }
+    var selectedFlag by remember { mutableIntStateOf(0) }
+    var focusedFlag by remember { mutableIntStateOf(0) }
+    var focusedToggle by remember { mutableIntStateOf(TOGGLE_SORT) }
 
-    val controlRequesters = remember { List(CONTROL_INDEX_COUNT) { FocusRequester() } }
-    val cellRequesters = remember { List(EPISODE_COLUMNS_MANY * EPISODE_ROWS_PER_PAGE) { FocusRequester() } }
+    val groupItems = remember(ordered, group) {
+        ordered.drop(group * EPISODE_GROUP_SIZE).take(EPISODE_GROUP_SIZE)
+    }
+    val pageLabel = "第 ${group + 1} / $groupCount 组"
 
-    // 弹窗是独立窗口：首帧可能还没拿到 window focus，逐帧重试。
-    // 页 / 列数 / 排序变化后也走这里，把焦点落回「当前集」所在格。
-    LaunchedEffect(page, columns, sort) {
-        repeat(5) {
-            if (requestDetailFocus(cellRequesters, cellInPage)) return@LaunchedEffect
+    // 待落焦的组内下标；-1 = 不抢焦点（例如焦点还停在 Toggle 上）。
+    // serial 让「同一个下标连续请求两次」也能重新触发落焦。
+    var pendingCell by remember { mutableIntStateOf(initialIndex % EPISODE_GROUP_SIZE) }
+    var pendingSerial by remember { mutableIntStateOf(0) }
+
+    val flagRequesters = remember { List(detail.flags.size) { FocusRequester() } }
+    val toggleRequesters = remember { List(TOGGLE_INDEX_COUNT) { FocusRequester() } }
+    // 网格 item 用「组内下标」做 key：切组时节点原样复用，焦点不会被整片销毁重建成空档。
+    val cellRequesters = remember { List(EPISODE_GROUP_SIZE) { FocusRequester() } }
+    val gridState = remember { LazyGridState() }
+
+    // 滚动 + 落焦：Lazy 项要先组合出来 `requestFocus` 才拿得到节点，所以逐帧重试。
+    LaunchedEffect(group, columns, descending, pendingCell, pendingSerial) {
+        val target = pendingCell
+        if (target < 0 || target !in groupItems.indices) return@LaunchedEffect
+        revealCell(gridState, target, columns)
+        repeat(FOCUS_RETRY_FRAMES) {
+            if (requestDetailFocus(cellRequesters, target)) {
+                currentNumber = groupItems[target].number
+                pendingCell = -1
+                return@LaunchedEffect
+            }
             withFrameNanos { }
         }
     }
 
-    fun focusControl(index: Int) {
-        if (requestDetailFocus(controlRequesters, index)) focusedControl = index
+    fun focusFlag(index: Int) {
+        if (requestDetailFocus(flagRequesters, index)) focusedFlag = index
     }
 
-    /** 记住集号并同步焦点；跨页时交给上面的 LaunchedEffect 接手。 */
-    fun moveTo(index: Int) {
-        val target = index.coerceIn(0, ordered.lastIndex)
-        val targetPage = target / pageSize
-        currentNumber = ordered[target].number
-        if (targetPage == page) requestDetailFocus(cellRequesters, target - page * pageSize)
+    fun focusToggle(index: Int) {
+        if (requestDetailFocus(toggleRequesters, index)) focusedToggle = index
+    }
+
+    /** 网格内移动：只登记目标，真正的滚动 / 落焦交给上面的 LaunchedEffect。 */
+    fun moveCell(index: Int) {
+        if (groupItems.isEmpty()) return
+        val target = index.coerceIn(0, groupItems.lastIndex)
+        currentNumber = groupItems[target].number
+        pendingCell = target
+        pendingSerial++
+    }
+
+    /** 跨组：`toLast` = true 落该组最后一集（左切），false 落第一集（右切）。 */
+    fun switchGroup(targetGroup: Int, toLast: Boolean) {
+        if (targetGroup !in 0 until groupCount) return
+        val items = ordered.drop(targetGroup * EPISODE_GROUP_SIZE).take(EPISODE_GROUP_SIZE)
+        if (items.isEmpty()) return
+        val target = if (toLast) items.lastIndex else 0
+        group = targetGroup
+        currentNumber = items[target].number
+        pendingCell = target
+        pendingSerial++
+    }
+
+    /** 排序翻转：按集号重新定位分组；焦点留在 Toggle 上，不把焦点抢进网格。 */
+    fun toggleSort() {
+        val next = !descending
+        val reordered = detail.episodes.sortedBy { it.number }.let { if (next) it.asReversed() else it }
+        val index = reordered.indexOfFirst { it.number == currentNumber }
+        descending = next
+        if (index >= 0) {
+            group = index / EPISODE_GROUP_SIZE
+            pendingCell = -1
+        }
+    }
+
+    /** 列数切换：分组不变，只重算每行格数。 */
+    fun toggleColumns() {
+        fewColumns = !fewColumns
+        pendingCell = -1
     }
 
     fun handleCellKey(cellIndex: Int, key: Key) {
-        val column = cellIndex % columns
-        val lastIndex = pageItems.lastIndex
+        // 连按时焦点可能还没落到上一格：以「待落焦格」为基准，按键不丢。
+        val lastIndex = groupItems.lastIndex
+        val base = if (pendingCell in 0..lastIndex) pendingCell else cellIndex
+        val column = base % columns
         when (key) {
-            Key.DirectionLeft ->
-                if (column > 0) {
-                    moveTo(page * pageSize + cellIndex - 1)
-                } else if (page > 0) {
-                    // 与右键对称：进入上一组的第一项。
-                    moveTo((page - 1) * pageSize)
-                }
+            // 第一集（第 1 行第 1 列）按左 = 上一组最后一集；其余行首按左消费，不乱跳组。
+            Key.DirectionLeft -> when {
+                base == 0 -> switchGroup(group - 1, toLast = true)
+                column > 0 -> moveCell(base - 1)
+            }
 
-            Key.DirectionRight ->
-                if (column == columns - 1) {
-                    if (page < pageCount - 1) moveTo((page + 1) * pageSize)
-                } else if (cellIndex < lastIndex) {
-                    moveTo(page * pageSize + cellIndex + 1)
-                }
+            // 最后一集（末行末列）按右 = 下一组第一集；其余行尾按右消费，绝不越界。
+            Key.DirectionRight -> when {
+                base == lastIndex -> switchGroup(group + 1, toLast = false)
+                column < columns - 1 -> moveCell(base + 1)
+            }
 
             Key.DirectionUp ->
-                if (cellIndex >= columns) {
-                    moveTo(page * pageSize + cellIndex - columns)
-                } else {
-                    focusControl(focusedControl)
-                }
+                if (base >= columns) moveCell(base - columns) else focusToggle(focusedToggle)
 
             Key.DirectionDown ->
-                if (cellIndex + columns <= lastIndex) moveTo(page * pageSize + cellIndex + columns)
+                if (base + columns <= lastIndex) moveCell(base + columns)
         }
     }
 
@@ -947,24 +1000,78 @@ private fun HeroPlayDialog(detail: HeroDetail, onDismiss: () -> Unit) {
                 }
                 Spacer(modifier = Modifier.height(DIALOG_TOP_BAR_GAP))
 
-                // ---- 控制栏：排序（原始/正序/倒序）+ 列数（少列/多列）----
-                HeroEpisodeControlBar(
-                    sort = sort,
-                    columnMode = columnMode,
-                    pageLabel = "第 ${page + 1} / $pageCount 组",
-                    requesters = controlRequesters,
-                    onFocused = { focusedControl = it },
-                    onSelectSort = { sort = it },
-                    onSelectColumns = { columnMode = it },
-                    onMoveLeft = { index -> if (index > 0) focusControl(index - 1) },
-                    onMoveRight = { index -> if (index < CONTROL_INDEX_COUNT - 1) focusControl(index + 1) },
-                    onMoveDown = { requestDetailFocus(cellRequesters, cellInPage) },
-                )
+                // ---- 播放线路：4dp 红竖条标题 + 39dp 横排（标题纯展示，不可聚焦）----
+                HeroDetailSectionTitle(text = "播放线路", fontSize = DIALOG_SECTION_TITLE_SP.sp)
+                Spacer(modifier = Modifier.height(DIALOG_TITLE_GAP))
+                LazyRow(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(DIALOG_FLAG_ROW_HEIGHT),
+                    horizontalArrangement = Arrangement.spacedBy(DIALOG_FLAG_GAP),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    itemsIndexed(items = detail.flags, key = { index, _ -> index }) { index, label ->
+                        HeroFlagChip(
+                            label = label,
+                            selected = index == selectedFlag,
+                            requester = flagRequesters[index],
+                            onFocused = { focusedFlag = index },
+                            onConfirm = { selectedFlag = index },
+                            // 线路栏 ↑ 上方只有不可聚焦的顶部栏，直接消费。
+                            onMoveUp = { },
+                            onMoveDown = { focusToggle(focusedToggle) },
+                            onMoveLeft = { if (index > 0) focusFlag(index - 1) },
+                            onMoveRight = { if (index < detail.flags.lastIndex) focusFlag(index + 1) },
+                        )
+                    }
+                }
+                Spacer(modifier = Modifier.height(DIALOG_SECTION_GAP))
+
+                // ---- 选集标题行：红竖条 + 标题 + 组标（均不可聚焦）+ 右侧两个 Toggle ----
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(DIALOG_TOGGLE_HEIGHT),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    HeroDetailSectionTitle(text = "选集", fontSize = DIALOG_SECTION_TITLE_SP.sp)
+                    Spacer(modifier = Modifier.width(DIALOG_TOGGLE_GAP))
+                    // 纯展示：不允许获得焦点。
+                    Text(
+                        text = pageLabel,
+                        color = DIALOG_HINT_COLOR,
+                        fontSize = DIALOG_HINT_SP.sp,
+                        maxLines = 1,
+                    )
+                    Spacer(modifier = Modifier.weight(1f))
+                    HeroToggleButton(
+                        label = if (descending) "倒序" else "正序",
+                        requester = toggleRequesters[TOGGLE_SORT],
+                        onFocused = { focusedToggle = TOGGLE_SORT },
+                        onConfirm = { toggleSort() },
+                        onMoveUp = { focusFlag(focusedFlag) },
+                        onMoveDown = { moveCell(0) },
+                        onMoveLeft = { },
+                        onMoveRight = { focusToggle(TOGGLE_COLUMNS) },
+                    )
+                    Spacer(modifier = Modifier.width(DIALOG_TOGGLE_GAP))
+                    HeroToggleButton(
+                        label = if (fewColumns) "少列" else "多列",
+                        requester = toggleRequesters[TOGGLE_COLUMNS],
+                        onFocused = { focusedToggle = TOGGLE_COLUMNS },
+                        onConfirm = { toggleColumns() },
+                        onMoveUp = { focusFlag(focusedFlag) },
+                        onMoveDown = { moveCell(0) },
+                        onMoveLeft = { focusToggle(TOGGLE_SORT) },
+                        onMoveRight = { },
+                    )
+                }
                 Spacer(modifier = Modifier.height(DIALOG_CONTROL_GAP))
 
-                // ---- 动态列数网格：多列 4 列 / 少列 2 列，高 240dp、格高 34dp ----
+                // ---- 动态网格：多列 4 列 / 少列 2 列；每 20 集一组，240dp 内可上下滚动 ----
                 LazyVerticalGrid(
                     columns = GridCells.Fixed(columns),
+                    state = gridState,
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(DIALOG_GRID_HEIGHT),
@@ -972,12 +1079,13 @@ private fun HeroPlayDialog(detail: HeroDetail, onDismiss: () -> Unit) {
                     horizontalArrangement = Arrangement.spacedBy(DIALOG_GRID_GAP),
                     verticalArrangement = Arrangement.spacedBy(DIALOG_GRID_GAP),
                 ) {
-                    pageItems.forEachIndexed { index, episode ->
-                        item(key = "${sort.name}-$page-$index-${episode.number}") {
+                    groupItems.forEachIndexed { index, episode ->
+                        item(key = index) {
                             HeroEpisodeCell(
                                 label = episode.label,
                                 playing = episode.number == playingNumber,
                                 requester = cellRequesters[index],
+                                onFocused = { currentNumber = episode.number },
                                 onConfirm = { playingNumber = episode.number },
                                 onMove = { key -> handleCellKey(index, key) },
                             )
@@ -1007,119 +1115,60 @@ private fun HeroDialogShell(
     )
 }
 
-/** 排序方式：原始（源顺序）/ 正序（集号升序）/ 倒序（集号降序）。 */
-private enum class EpisodeSort { ORIGINAL, ASC, DESC }
-
-/** 列数：少列 2 列 / 多列 4 列。 */
-private enum class EpisodeColumns { FEW, MANY }
-
-/** 排序实现：`number` 是稳定集号；「原始」完全保留源数据顺序。 */
-private fun sortEpisodes(episodes: List<HeroEpisode>, sort: EpisodeSort): List<HeroEpisode> = when (sort) {
-    EpisodeSort.ORIGINAL -> episodes
-    EpisodeSort.ASC -> episodes.sortedBy { it.number }
-    EpisodeSort.DESC -> episodes.sortedByDescending { it.number }
-}
-
-/** 控制栏单项定义：文案 + 是否选中 + 是否在本项前画分组竖线。 */
-private data class HeroControlSpec(
-    val index: Int,
-    val label: String,
-    val selected: Boolean,
-    val dividerBefore: Boolean,
-    val onSelect: () -> Unit,
-)
-
-/** 控制栏：排序三选一 + 列数二选一，右侧显示当前分组。 */
-@Composable
-private fun HeroEpisodeControlBar(
-    sort: EpisodeSort,
-    columnMode: EpisodeColumns,
-    pageLabel: String,
-    requesters: List<FocusRequester>,
-    onFocused: (Int) -> Unit,
-    onSelectSort: (EpisodeSort) -> Unit,
-    onSelectColumns: (EpisodeColumns) -> Unit,
-    onMoveLeft: (Int) -> Unit,
-    onMoveRight: (Int) -> Unit,
-    onMoveDown: () -> Unit,
-) {
-    val specs = listOf(
-        HeroControlSpec(CONTROL_SORT_ORIGINAL, "原始", sort == EpisodeSort.ORIGINAL, false) {
-            onSelectSort(EpisodeSort.ORIGINAL)
-        },
-        HeroControlSpec(CONTROL_SORT_ASC, "正序", sort == EpisodeSort.ASC, false) {
-            onSelectSort(EpisodeSort.ASC)
-        },
-        HeroControlSpec(CONTROL_SORT_DESC, "倒序", sort == EpisodeSort.DESC, false) {
-            onSelectSort(EpisodeSort.DESC)
-        },
-        HeroControlSpec(CONTROL_COLUMN_FEW, "少列", columnMode == EpisodeColumns.FEW, true) {
-            onSelectColumns(EpisodeColumns.FEW)
-        },
-        HeroControlSpec(CONTROL_COLUMN_MANY, "多列", columnMode == EpisodeColumns.MANY, false) {
-            onSelectColumns(EpisodeColumns.MANY)
-        },
-    )
-
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(DIALOG_CONTROL_HEIGHT),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        specs.forEach { spec ->
-            if (spec.dividerBefore) {
-                Box(
-                    modifier = Modifier
-                        .padding(horizontal = DIALOG_DIVIDER_GAP)
-                        .width(DIALOG_DIVIDER_WIDTH)
-                        .height(DIALOG_DIVIDER_HEIGHT)
-                        .background(DIALOG_DIVIDER_COLOR),
-                )
-            }
-            HeroControlItem(
-                spec = spec,
-                requester = requesters[spec.index],
-                onFocused = { onFocused(spec.index) },
-                onMoveLeft = { onMoveLeft(spec.index) },
-                onMoveRight = { onMoveRight(spec.index) },
-                onMoveDown = onMoveDown,
-            )
-        }
-        Spacer(modifier = Modifier.weight(1f))
-        Text(
-            text = pageLabel,
-            color = DIALOG_HINT_COLOR,
-            fontSize = DIALOG_HINT_SP.sp,
-            maxLines = 1,
-        )
+/**
+ * 让格子在 240dp 视口里可见：只在目标行越界时滚动，避免每按一次方向键整屏跳动。
+ * [EPISODE_VISIBLE_ROWS] 对应 240dp 高 / 34dp 格子 + 8dp 间距的整数行。
+ */
+private suspend fun revealCell(state: LazyGridState, index: Int, columns: Int) {
+    val row = index / columns
+    val firstRow = state.firstVisibleItemIndex / columns
+    val targetFirstRow = when {
+        row < firstRow -> row
+        row >= firstRow + EPISODE_VISIBLE_ROWS -> row - EPISODE_VISIBLE_ROWS + 1
+        else -> firstRow
     }
+    if (targetFirstRow == firstRow) return
+    runCatching { state.scrollToItem(targetFirstRow.coerceAtLeast(0) * columns) }
+    withFrameNanos { }
 }
 
 /**
- * 控制栏单项：14sp。
- * 选中 = 红字 + 红色下划线；未选中 = 浅灰；焦点 = 文字转白 + `white_10` 圆角底。
+ * 播放线路项：39dp 高 / 14sp。
+ * 常态深灰底白字，选中略亮（记住当前线路），焦点红底白字。
  */
 @Composable
-private fun HeroControlItem(
-    spec: HeroControlSpec,
+private fun HeroFlagChip(
+    label: String,
+    selected: Boolean,
     requester: FocusRequester,
     onFocused: () -> Unit,
+    onConfirm: () -> Unit,
+    onMoveUp: () -> Unit,
+    onMoveDown: () -> Unit,
     onMoveLeft: () -> Unit,
     onMoveRight: () -> Unit,
-    onMoveDown: () -> Unit,
 ) {
     val interaction = remember { MutableInteractionSource() }
     val isFocused by interaction.collectIsFocusedAsState()
 
     Box(
         modifier = Modifier
-            .height(DIALOG_CONTROL_HEIGHT)
+            .height(DIALOG_FLAG_ROW_HEIGHT)
             .focusRequester(requester)
             .onFocusChanged { if (it.isFocused) onFocused() }
             .onPreviewKeyEvent { event ->
                 if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
                 when (event.key) {
+                    Key.DirectionUp -> {
+                        onMoveUp()
+                        true
+                    }
+
+                    Key.DirectionDown -> {
+                        onMoveDown()
+                        true
+                    }
+
                     Key.DirectionLeft -> {
                         onMoveLeft()
                         true
@@ -1130,34 +1179,91 @@ private fun HeroControlItem(
                         true
                     }
 
+                    else -> false
+                }
+            }
+            .clip(DIALOG_FLAG_SHAPE)
+            .background(
+                when {
+                    isFocused -> HeroAccentColor
+                    selected -> DIALOG_FLAG_SELECTED_BG
+                    else -> DIALOG_FLAG_IDLE_BG
+                },
+            )
+            .clickable(interactionSource = interaction, indication = null, onClick = onConfirm)
+            .padding(horizontal = DIALOG_FLAG_H_PADDING),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = label,
+            color = Color.White,
+            fontSize = DIALOG_FLAG_SP.sp,
+            fontWeight = if (selected || isFocused) FontWeight.Medium else FontWeight.Normal,
+            maxLines = 1,
+        )
+    }
+}
+
+/**
+ * 控制栏 Toggle：32dp 高 / 14sp，单按钮双态（文案即当前状态）。
+ * 未选中深灰底白字，焦点红底白字。
+ */
+@Composable
+private fun HeroToggleButton(
+    label: String,
+    requester: FocusRequester,
+    onFocused: () -> Unit,
+    onConfirm: () -> Unit,
+    onMoveUp: () -> Unit,
+    onMoveDown: () -> Unit,
+    onMoveLeft: () -> Unit,
+    onMoveRight: () -> Unit,
+) {
+    val interaction = remember { MutableInteractionSource() }
+    val isFocused by interaction.collectIsFocusedAsState()
+
+    Box(
+        modifier = Modifier
+            .height(DIALOG_TOGGLE_HEIGHT)
+            .focusRequester(requester)
+            .onFocusChanged { if (it.isFocused) onFocused() }
+            .onPreviewKeyEvent { event ->
+                if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                when (event.key) {
+                    Key.DirectionUp -> {
+                        onMoveUp()
+                        true
+                    }
+
                     Key.DirectionDown -> {
                         onMoveDown()
                         true
                     }
 
-                    // 控制栏上方只有不可聚焦的顶部栏，↑ 直接消费。
-                    Key.DirectionUp -> true
+                    Key.DirectionLeft -> {
+                        onMoveLeft()
+                        true
+                    }
+
+                    Key.DirectionRight -> {
+                        onMoveRight()
+                        true
+                    }
 
                     else -> false
                 }
             }
-            .clip(DIALOG_CONTROL_SHAPE)
-            .background(if (isFocused) DIALOG_CONTROL_FOCUS_BG else Color.Transparent)
-            .clickable(interactionSource = interaction, indication = null, onClick = spec.onSelect)
-            .padding(horizontal = DIALOG_CONTROL_H_PADDING),
+            .clip(DIALOG_TOGGLE_SHAPE)
+            .background(if (isFocused) HeroAccentColor else DIALOG_TOGGLE_IDLE_BG)
+            .clickable(interactionSource = interaction, indication = null, onClick = onConfirm)
+            .padding(horizontal = DIALOG_TOGGLE_H_PADDING),
         contentAlignment = Alignment.Center,
     ) {
         Text(
-            text = spec.label,
-            color = when {
-                spec.selected -> HeroAccentColor
-                isFocused -> Color.White
-                else -> DIALOG_CONTROL_IDLE_COLOR
-            },
-            fontSize = DIALOG_CONTROL_SP.sp,
-            fontWeight = if (spec.selected || isFocused) FontWeight.Medium else FontWeight.Normal,
-            // 选中态：红字 + 红色下划线（下划线颜色跟随文字色）。
-            textDecoration = if (spec.selected) TextDecoration.Underline else null,
+            text = label,
+            color = Color.White,
+            fontSize = DIALOG_TOGGLE_SP.sp,
+            fontWeight = FontWeight.Medium,
             maxLines = 1,
         )
     }
@@ -1172,6 +1278,7 @@ private fun HeroEpisodeCell(
     label: String,
     playing: Boolean,
     requester: FocusRequester,
+    onFocused: () -> Unit,
     onConfirm: () -> Unit,
     onMove: (Key) -> Unit,
 ) {
@@ -1183,6 +1290,7 @@ private fun HeroEpisodeCell(
             .fillMaxWidth()
             .height(EPISODE_CELL_HEIGHT)
             .focusRequester(requester)
+            .onFocusChanged { if (it.isFocused) onFocused() }
             .onPreviewKeyEvent { event ->
                 if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
                 when (event.key) {
@@ -1277,7 +1385,7 @@ private data class HeroDetail(
 /** 假数据：picsum 按 seed 返回稳定图片，不依赖 TMDB Key 即可验证 Coil 链路。 */
 private val DEMO_DETAIL = HeroDetail(
     title = "后会无期",
-    meta = "2026 · 剧情 · 全 24 集 · 9.1",
+    meta = "2026 · 剧情 · 全 50 集 · 9.1",
     // 故意写长，用来验证「简介最多 4 行 + 省略号」以及 440dp 的换行宽度。
     synopsis = "三个男人一路向西，在公路尽头重新认识了自己。他们带着各自的秘密出发，" +
         "却在无人区里把话说得比过去十年都清楚。有人在加油站丢了钱包，有人在沙漠里捡回一条狗，" +
@@ -1298,9 +1406,16 @@ private val DEMO_DETAIL = HeroDetail(
         )
     },
     flags = listOf("线路一", "线路二", "线路三"),
-    episodes = (1..24).map { HeroEpisode(number = it, label = "第 $it 集") },
-    // 演示「老剧吸附历史集」：第 7 集。新剧传 0 即可落回第 1 集。
-    lastWatchedEpisode = 7,
+    // 极限测试数据：整 50 集，第 15 集故意用超长名字验证格子内跑马灯；
+    // 20 集一组 → 1-20 / 21-40 / 41-50，最后一组只有 10 集（右切越界重点）。
+    episodes = (1..50).map { number ->
+        HeroEpisode(
+            number = number,
+            label = if (number == 15) "第15集_超长名字测试跑马灯效果" else "第${number}集",
+        )
+    },
+    // 默认吸附第 15 集：一进弹窗就能看到超长名字的跑马灯 + 第 1 组第 4 行。
+    lastWatchedEpisode = 15,
 )
 
 /** 按钮顺序按需求固定为 播放 | 换源 | 收藏。 */
@@ -1424,7 +1539,7 @@ private val DETAIL_ACTION_IDLE_BACKGROUND = Color(0x1AFFFFFF) // white_10
 private val SECTION_BAR_WIDTH = 4.dp
 private val SECTION_BAR_HEIGHT = 16.dp
 private val SECTION_BAR_SHAPE = RoundedCornerShape(2.dp)
-private val SECTION_BAR_GAP = 10.dp
+private val SECTION_BAR_GAP = 8.dp
 private const val SECTION_TITLE_SP = 15f
 
 // ---------------------------------------------------------------------------
@@ -1447,39 +1562,50 @@ private val DIALOG_BADGE_GAP = 12.dp
 private const val DIALOG_TITLE_SP = 12f
 private val DIALOG_TITLE_COLOR = Color(0x99FFFFFF)
 
-// 控制栏：14sp / 32dp 高；选中红字+红色下划线，未选中浅灰
-private val DIALOG_CONTROL_HEIGHT = 32.dp
+// 分区间距：标题下 8dp、区块之间 16dp、标题行到网格 8dp
+private val DIALOG_TITLE_GAP = 8.dp
+private val DIALOG_SECTION_GAP = 16.dp
 private val DIALOG_CONTROL_GAP = 8.dp
-private val DIALOG_CONTROL_SHAPE = RoundedCornerShape(4.dp)
-private val DIALOG_CONTROL_H_PADDING = 10.dp
-private val DIALOG_CONTROL_FOCUS_BG = Color(0x1FFFFFFF)
-private const val DIALOG_CONTROL_SP = 14f
-private val DIALOG_CONTROL_IDLE_COLOR = Color(0x99FFFFFF)
-private val DIALOG_DIVIDER_COLOR = Color(0x33FFFFFF)
-private val DIALOG_DIVIDER_GAP = 6.dp
-private val DIALOG_DIVIDER_WIDTH = 1.dp
-private val DIALOG_DIVIDER_HEIGHT = 14.dp
+private const val DIALOG_SECTION_TITLE_SP = 15f
 private const val DIALOG_HINT_SP = 11f
 private val DIALOG_HINT_COLOR = Color(0x59FFFFFF)
 
-/** 控制栏 5 个可聚焦项的下标。 */
-private const val CONTROL_SORT_ORIGINAL = 0
-private const val CONTROL_SORT_ASC = 1
-private const val CONTROL_SORT_DESC = 2
-private const val CONTROL_COLUMN_FEW = 3
-private const val CONTROL_COLUMN_MANY = 4
-private const val CONTROL_INDEX_COUNT = 5
+// 播放线路：39dp 高 / 14sp；深灰底白字，焦点红底白字
+private val DIALOG_FLAG_ROW_HEIGHT = 39.dp
+private val DIALOG_FLAG_GAP = 12.dp
+private val DIALOG_FLAG_H_PADDING = 14.dp
+private val DIALOG_FLAG_SHAPE = RoundedCornerShape(4.dp)
+private const val DIALOG_FLAG_SP = 14f
+private val DIALOG_FLAG_IDLE_BG = Color(0x1AFFFFFF)
+private val DIALOG_FLAG_SELECTED_BG = Color(0x33FFFFFF)
+
+// 控制栏 Toggle：32dp 高 / 14sp；深灰底白字，焦点红底白字
+private val DIALOG_TOGGLE_HEIGHT = 32.dp
+private val DIALOG_TOGGLE_GAP = 8.dp
+private val DIALOG_TOGGLE_H_PADDING = 14.dp
+private val DIALOG_TOGGLE_SHAPE = RoundedCornerShape(4.dp)
+private const val DIALOG_TOGGLE_SP = 14f
+private val DIALOG_TOGGLE_IDLE_BG = Color(0x33FFFFFF)
+
+/** 控制栏两个 Toggle 的下标。 */
+private const val TOGGLE_SORT = 0
+private const val TOGGLE_COLUMNS = 1
+private const val TOGGLE_INDEX_COUNT = 2
+
+/** Lazy 项从请求焦点到真正拿到节点要几帧，多给几帧兜住首帧未 attach。 */
+private const val FOCUS_RETRY_FRAMES = 10
 
 // ---------------------------------------------------------------------------
-// 选集网格：高 240dp、格高 34dp、每组 5 行；多列 4 列 / 少列 2 列
-// 240 = 16(上) + 34×5 + 8×4 + 16(下) - 6 余量，五整行不裁切
+// 选集网格：高 240dp、格高 34dp；每 20 集一组（与列数解耦），多列 4 列 / 少列 2 列
+// 240 = 16(上) + 34×5 + 8×4 + 6 余量 → 正好 5 整行不裁切
 // ---------------------------------------------------------------------------
 private val DIALOG_GRID_HEIGHT = 240.dp
 private val DIALOG_GRID_VERTICAL_PADDING = 16.dp
 private val DIALOG_GRID_GAP = 8.dp
+private const val EPISODE_GROUP_SIZE = 20
+private const val EPISODE_VISIBLE_ROWS = 5
 private const val EPISODE_COLUMNS_MANY = 4
 private const val EPISODE_COLUMNS_FEW = 2
-private const val EPISODE_ROWS_PER_PAGE = 5
 private val EPISODE_CELL_HEIGHT = 34.dp
 private val EPISODE_CELL_SHAPE = RoundedCornerShape(6.dp)
 private val EPISODE_CELL_BORDER = 2.dp
