@@ -26,11 +26,11 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -39,8 +39,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
@@ -66,49 +66,43 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import coil3.compose.AsyncImage
 import com.fongmi.android.tv.R
 import com.fongmi.android.tv.ui.hero.HeroImageLoader
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.launch
 
 /**
- * HeroUI（Compose）详情页骨架。
+ * HeroUI（Compose）详情页。
  *
- * 本阶段只做「结构 + 焦点」，数据全部是 [DEMO_DETAIL] 假数据，不触碰 PlayerManager / VideoActivity
- * 等既有播放链路：按钮点击只保留回调占位，没有任何 Intent 或播放器调用。
+ * 本阶段仍是假数据骨架，不触碰 PlayerManager / VideoActivity 等既有播放链路：
+ * 按钮点击只做 UI 反馈，没有任何播放器调用。
  *
- * 尺寸/字号/边距逐条对照 `ref_docs/activity_detail.xml`（下文简称 XML，行号即该文件行号）：
+ * 主页面（自下而上）：
+ * 1. [HeroDetailBackdrop]：全屏背景大图。
+ * 2. [HeroDetailMaskHorizontal]：左侧纯黑 → 右侧透明的横向遮罩（`bg_hero_mask_h`）。
+ * 3. [HeroDetailMaskVertical]：底部纯黑 → 顶部透明的纵向遮罩（`bg_hero_mask_v`）。
+ * 4. 右上角浮动小海报 150dp × 210dp、marginTop 72dp、marginEnd 80dp、内边距 4dp。
+ * 5. 左下内容区：剧名 / 元数据 / 简介 / **演职员** / 按钮组。
+ *    线路与选集已整体移出主页面，收进 [HeroPlayDialog]。
+ *
+ * 尺寸/字号/边距仍逐条对照 `ref_docs/activity_detail.xml`（下文简称 XML，行号即该文件行号）：
  * - 内容容器：左右 padding 24dp、paddingBottom 0dp、整体贴底（L54-61）。
  * - 剧名：32sp 粗体 / 固定高 36dp / 贴底 / 阴影 #cc000000 2,2,12（L69-81）。
  * - 元数据：14sp / #ccffffff / 固定高 20dp / marginTop 2dp / 阴影 #aa000000 1.5,1.5,8（L90-102）。
- * - 简介：12sp / #bbffffff / 固定高 40dp / marginTop 4dp / maxLines 2 / 行距 +3dp / 占父宽一半 / 阴影 #aa000000 1.2,1.2,6（L103-124）。
- * - 按钮组：marginTop 12dp、高 36dp、13sp 粗体、左右 padding 16dp、图标文字间距 4dp、按钮间距 12dp（L125-189）。
- * - 线路区：marginTop 12dp、标题行 marginBottom 8dp、列表高 34dp（L199-233）。
- * - 选集区：与线路区间距 2dp、标题行 marginBottom 0dp、列表高 140dp、列表左右 padding 6dp（L234-280）。
+ * - 简介：12sp / #bbffffff / 固定高 40dp / marginTop 4dp / maxLines 2 / 行距 +3dp / 占父宽一半（L103-124）。
+ * - 按钮组：高 36dp、13sp 粗体、左右 padding 16dp、图标文字间距 4dp、按钮间距 12dp（L125-189）。
  *
- * 分层（自下而上）：
- * 1. [HeroDetailBackdrop]：全屏背景大图（XML `heroBg`）。
- * 2. [HeroDetailMaskHorizontal]：左侧纯黑 → 右侧透明的横向遮罩（`bg_hero_mask_h`）。
- * 3. [HeroDetailMaskVertical]：底部纯黑 → 顶部透明的纵向遮罩（`bg_hero_mask_v`）。
- * 4. 右上角浮动小海报 150dp × 210dp、marginTop 72dp、marginEnd 80dp、内边距 4dp（XML `posterCard` L30-48）。
- * 5. 左下角内容区：剧名 / 元数据 / 简介 / 按钮组 / 线路 / 选集。
- *
- * 两处**有意偏离**原版，按本次需求执行：
- * - 原版按钮焦点态是红色渐变（`shape_detail_play_focused` / `shape_detail_item_focused`），
- *   本页统一取纯红 [HeroAccentColor]，文字与图标纯白。
- * - 原版线路项焦点态是 `black_40` 底 + 1.5dp 白描边（`selector_item` → `shape_item_focused`），
- *   本页改为 [HeroAccentColor] 红底，与按钮、选集的红色焦点语言保持一致；
- *   未选中/已选中底色仍照抄 `black_20` / `black_40`。
- *
- * 焦点契约（三组可聚焦区，全部显式交接，不依赖 2D 自动搜索）：
- * `播放 ⇄ 收藏 ⇄ 换源` → ↓ → `线路` → ↓ → `选集`；↑ 按相反顺序退回。
- * 进入线路/选集时落回各自**记忆中的**上一个焦点项；进入新区域不会从第一项重新数。
+ * 焦点契约：
+ * - 主页面只有按钮组可聚焦，默认落在「播放」；↑/↓ 无处可去，直接消费，不会掉到演职员或文本上。
+ * - 点「播放」→ [HeroPlayDialog]：焦点强制进入弹窗并落到 `lastWatchedEpisode`（无历史则第 1 集）。
+ * - 返回键关闭弹窗后，焦点回到「播放」。
  */
 class HeroDetailActivity : ComponentActivity() {
 
@@ -150,42 +144,18 @@ class HeroDetailActivity : ComponentActivity() {
 
 @Composable
 private fun HeroDetailScreen(detail: HeroDetail) {
-    val scope = rememberCoroutineScope()
-
-    // 四个可聚焦区各自持有 FocusRequester：跨区移动一律显式 requestFocus，
-    // 避免 2D 焦点搜索在「按钮宽度 ≠ 线路标签宽度」时落到文本或空白处。
+    // 主页面只剩一组可聚焦按钮：跨区移动全部显式 requestFocus，不依赖 2D 焦点搜索。
     val actionRequesters = remember { List(DETAIL_ACTIONS.size) { FocusRequester() } }
-    val flagState = rememberLazyListState()
-    val flagRequesters = remember { List(detail.flags.size) { FocusRequester() } }
-    val episodeState = rememberLazyListState()
-    val episodeRequesters = remember { List(detail.episodes.size) { FocusRequester() } }
-
-    // 记忆索引：从按钮 ↓ 进线路、从线路 ↓ 进选集时，都落回上一次停留的那一项。
     var focusedAction by remember { mutableIntStateOf(0) }
-    var focusedFlag by remember { mutableIntStateOf(0) }
-    var focusedEpisode by remember { mutableIntStateOf(0) }
-    var selectedFlag by remember { mutableIntStateOf(0) }
+    var showPlayDialog by remember { mutableStateOf(false) }
 
-    fun focusAction(index: Int = focusedAction) {
-        val target = index.coerceIn(0, actionRequesters.lastIndex)
-        if (requestDetailFocus(actionRequesters, target)) focusedAction = target
-    }
-
-    fun focusFlag(index: Int = focusedFlag) {
-        if (detail.flags.isEmpty()) return
-        val target = index.coerceIn(0, detail.flags.lastIndex)
-        focusLazyItem(scope, flagState, flagRequesters, target) { focusedFlag = target }
-    }
-
-    fun focusEpisode(index: Int = focusedEpisode) {
-        if (detail.episodes.isEmpty()) return
-        val target = index.coerceIn(0, detail.episodes.lastIndex)
-        focusLazyItem(scope, episodeState, episodeRequesters, target) { focusedEpisode = target }
-    }
-
-    // 进页面默认焦点落在「播放」，在此之前不存在任何可聚焦的文本节点。
-    LaunchedEffect(Unit) {
-        requestDetailFocus(actionRequesters, 0)
+    // 首次进入落「播放」；弹窗关闭（含返回键）后也回到「播放」。
+    LaunchedEffect(showPlayDialog) {
+        if (showPlayDialog) return@LaunchedEffect
+        repeat(3) {
+            if (requestDetailFocus(actionRequesters, DETAIL_ACTION_PLAY)) return@LaunchedEffect
+            withFrameNanos { }
+        }
     }
 
     Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
@@ -202,7 +172,7 @@ private fun HeroDetailScreen(detail: HeroDetail) {
                 .padding(top = POSTER_TOP_GAP, end = POSTER_END_GAP),
         )
 
-        // ---- 左下角内容区：整体贴底，左右 padding 各 24dp、paddingBottom 0dp（XML L54-61）----
+        // ---- 左下内容区：整体贴底，左右 padding 各 24dp、paddingBottom 0dp（XML L54-61）----
         Column(
             modifier = Modifier
                 .align(Alignment.BottomStart)
@@ -260,51 +230,24 @@ private fun HeroDetailScreen(detail: HeroDetail) {
                 style = TextStyle(shadow = DETAIL_DESC_SHADOW),
             )
 
+            Spacer(modifier = Modifier.height(DETAIL_CAST_TOP_GAP))
+            HeroCastSection(cast = detail.cast)
             Spacer(modifier = Modifier.height(DETAIL_ACTIONS_TOP_GAP))
             HeroDetailActionRow(
                 requesters = actionRequesters,
                 onFocused = { index -> focusedAction = index },
-                onMoveUp = { },
-                // 按钮 ↓：进入线路列表，落回上一次聚焦的线路。
-                onMoveDown = { focusFlag() },
-                onMoveLeft = { index -> if (index > 0) focusAction(index - 1) },
-                onMoveRight = { index -> if (index < actionRequesters.lastIndex) focusAction(index + 1) },
-            )
-
-            Spacer(modifier = Modifier.height(DETAIL_SECTION_TOP_GAP))
-            HeroDetailSectionTitle(text = "播放线路")
-            Spacer(modifier = Modifier.height(DETAIL_FLAG_TITLE_GAP))
-            HeroDetailFlagRow(
-                flags = detail.flags,
-                state = flagState,
-                requesters = flagRequesters,
-                selectedIndex = selectedFlag,
-                onFocused = { index -> focusedFlag = index },
-                onConfirm = { index -> selectedFlag = index },
-                // 线路 ↑：退回按钮组（停在离开时的那颗按钮）。
-                onMoveUp = { focusAction() },
-                // 线路 ↓：进入选集列表。
-                onMoveDown = { focusEpisode() },
-                onMoveLeft = { index -> if (index > 0) focusFlag(index - 1) },
-                onMoveRight = { index -> if (index < detail.flags.lastIndex) focusFlag(index + 1) },
-            )
-
-            // flagLayout marginBottom=2dp（XML L205）。
-            Spacer(modifier = Modifier.height(DETAIL_SECTION_GAP))
-            HeroDetailSectionTitle(text = "选集")
-            // 选集标题与列表之间没有额外间距（XML L244 marginBottom=0dp）。
-            Spacer(modifier = Modifier.height(DETAIL_EPISODE_TITLE_GAP))
-            HeroDetailEpisodeColumn(
-                episodes = detail.episodes,
-                state = episodeState,
-                requesters = episodeRequesters,
-                onFocused = { index -> focusedEpisode = index },
-                // 选集 ↑：在第一集时退回线路，其余情况在列表内上移。
-                onMoveUp = { index -> if (index > 0) focusEpisode(index - 1) else focusFlag() },
-                // 选集 ↓：列表内下移，到底后停在原地。
-                onMoveDown = { index -> if (index < detail.episodes.lastIndex) focusEpisode(index + 1) },
+                // 「播放」拉起播放弹窗（线路 + 选集），其余按钮本阶段仍是占位。
+                onConfirm = { index -> if (index == DETAIL_ACTION_PLAY) showPlayDialog = true },
+                onMoveLeft = { index -> if (index > 0) focusAction(actionRequesters, index - 1) { focusedAction = it } },
+                onMoveRight = { index ->
+                    if (index < actionRequesters.lastIndex) focusAction(actionRequesters, index + 1) { focusedAction = it }
+                },
             )
         }
+    }
+
+    if (showPlayDialog) {
+        HeroPlayDialog(detail = detail, onDismiss = { showPlayDialog = false })
     }
 }
 
@@ -377,13 +320,68 @@ private fun HeroDetailPoster(url: String, modifier: Modifier = Modifier) {
     }
 }
 
+/**
+ * 演职员区（Netflix 风格）：标题「导演 / 主演」+ 10 个圆形头像。
+ *
+ * **刻意不可聚焦**：整块没有任何 focusable / clickable 修饰符，默认焦点永远留在按钮组。
+ * 头像 60dp 圆形、1dp 浅灰描边、下方 12sp 名字单行省略。
+ */
+@Composable
+private fun HeroCastSection(cast: List<HeroCast>) {
+    HeroDetailSectionTitle(text = "导演 / 主演", fontSize = CAST_TITLE_SP.sp)
+    Spacer(modifier = Modifier.height(CAST_TITLE_GAP))
+    LazyRow(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(CAST_ITEM_GAP),
+        // 列表铺到屏幕右缘，最后一位演员可以贴边滑出，不做硬性截断。
+        contentPadding = PaddingValues(end = HERO_PADDING),
+    ) {
+        itemsIndexed(items = cast, key = { _, item -> item.name }) { _, item ->
+            HeroCastItem(cast = item)
+        }
+    }
+}
+
+@Composable
+private fun HeroCastItem(cast: HeroCast) {
+    Column(
+        modifier = Modifier.width(CAST_ITEM_WIDTH),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        // 圆形头像：先 clip 再 border，描边画在图片之上，1dp 也看得见。
+        Box(
+            modifier = Modifier
+                .size(CAST_AVATAR_SIZE)
+                .clip(CircleShape)
+                .background(CAST_AVATAR_BACKGROUND)
+                .border(CAST_AVATAR_BORDER, CAST_AVATAR_BORDER_COLOR, CircleShape),
+        ) {
+            AsyncImage(
+                model = cast.avatarUrl,
+                contentDescription = cast.name,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
+        Spacer(modifier = Modifier.height(CAST_NAME_GAP))
+        Text(
+            text = cast.name,
+            modifier = Modifier.fillMaxWidth(),
+            color = CAST_NAME_COLOR,
+            fontSize = CAST_NAME_SP.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            textAlign = TextAlign.Center,
+        )
+    }
+}
+
 /** 按钮组：播放 / 收藏 / 换源，横向排列、间距 12dp。 */
 @Composable
 private fun HeroDetailActionRow(
     requesters: List<FocusRequester>,
     onFocused: (Int) -> Unit,
-    onMoveUp: () -> Unit,
-    onMoveDown: () -> Unit,
+    onConfirm: (Int) -> Unit,
     onMoveLeft: (Int) -> Unit,
     onMoveRight: (Int) -> Unit,
 ) {
@@ -393,10 +391,7 @@ private fun HeroDetailActionRow(
                 action = action,
                 requester = requesters[index],
                 onFocused = { onFocused(index) },
-                // 骨架阶段：只保留点击占位，不接播放/收藏/换源逻辑。
-                onConfirm = { },
-                onMoveUp = onMoveUp,
-                onMoveDown = onMoveDown,
+                onConfirm = { onConfirm(index) },
                 onMoveLeft = { onMoveLeft(index) },
                 onMoveRight = { onMoveRight(index) },
             )
@@ -409,6 +404,8 @@ private fun HeroDetailActionRow(
  *
  * 焦点态按需求取 [HeroAccentColor] 纯红底 + 纯白文字/图标；
  * 常态沿用原版 `shape_detail_item_normal` 的 `white_10`（`#1AFFFFFF`）底 + 4dp 圆角。
+ *
+ * 上下键直接消费：主页面下方已经没有其他可聚焦区域，不消费会让焦点搜索落到别处。
  */
 @Composable
 private fun HeroDetailActionButton(
@@ -416,8 +413,6 @@ private fun HeroDetailActionButton(
     requester: FocusRequester,
     onFocused: () -> Unit,
     onConfirm: () -> Unit,
-    onMoveUp: () -> Unit,
-    onMoveDown: () -> Unit,
     onMoveLeft: () -> Unit,
     onMoveRight: () -> Unit,
 ) {
@@ -432,16 +427,6 @@ private fun HeroDetailActionButton(
             .onPreviewKeyEvent { event ->
                 if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
                 when (event.key) {
-                    Key.DirectionUp -> {
-                        onMoveUp()
-                        true
-                    }
-
-                    Key.DirectionDown -> {
-                        onMoveDown()
-                        true
-                    }
-
                     Key.DirectionLeft -> {
                         onMoveLeft()
                         true
@@ -451,6 +436,8 @@ private fun HeroDetailActionButton(
                         onMoveRight()
                         true
                     }
+
+                    Key.DirectionUp, Key.DirectionDown -> true
 
                     else -> false
                 }
@@ -479,9 +466,9 @@ private fun HeroDetailActionButton(
     }
 }
 
-/** 区块标题：前方 4dp × 16dp 红色小竖条 + 15sp 加粗文字。 */
+/** 区块标题：前方 4dp × 16dp 红色小竖条 + [fontSize] 加粗文字。 */
 @Composable
-private fun HeroDetailSectionTitle(text: String) {
+private fun HeroDetailSectionTitle(text: String, fontSize: TextUnit = SECTION_TITLE_SP.sp) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         Box(
             modifier = Modifier
@@ -493,53 +480,191 @@ private fun HeroDetailSectionTitle(text: String) {
         Text(
             text = text,
             color = Color.White,
-            fontSize = SECTION_TITLE_SP.sp,
+            fontSize = fontSize,
             fontWeight = FontWeight.Bold,
             maxLines = 1,
         )
     }
 }
 
-/** 线路列表：整行高 34dp，横向排列；焦点态红底白字，已选线路常亮红色。 */
+// ---------------------------------------------------------------------------
+// 播放弹窗：线路 Tab + 选集网格
+// ---------------------------------------------------------------------------
+
+/**
+ * 播放弹窗：半透明深色 + 24dp 大圆角。
+ *
+ * 焦点契约：
+ * - 打开即强制进入弹窗，并落到 `lastWatchedEpisode`（1 基，无历史时落第 1 集）。
+ * - 线路 Tab 与选集网格双向：Tab ↓ 回网格、网格第 1 行 ↑ 回 Tab。
+ * - 网格最右列按右键切下一组，焦点落新组第一项；最左列按左键切上一组。
+ * - 返回键由 Dialog 自己消费并回调 [onDismiss]，主页面随即把焦点还给「播放」。
+ */
 @Composable
-private fun HeroDetailFlagRow(
-    flags: List<String>,
-    state: LazyListState,
-    requesters: List<FocusRequester>,
-    selectedIndex: Int,
-    onFocused: (Int) -> Unit,
-    onConfirm: (Int) -> Unit,
-    onMoveUp: () -> Unit,
-    onMoveDown: () -> Unit,
-    onMoveLeft: (Int) -> Unit,
-    onMoveRight: (Int) -> Unit,
-) {
-    LazyRow(
-        state = state,
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(DETAIL_FLAG_ROW_HEIGHT),
-        // XML L231-232：paddingStart 0dp、paddingEnd 24dp（父级已有 24dp，右侧合计留白 48dp）。
-        contentPadding = PaddingValues(end = HERO_PADDING),
-        horizontalArrangement = Arrangement.spacedBy(DETAIL_FLAG_GAP),
-        verticalAlignment = Alignment.CenterVertically,
+private fun HeroPlayDialog(detail: HeroDetail, onDismiss: () -> Unit) {
+    val pageCount = ((detail.episodes.size + EPISODE_PAGE_SIZE - 1) / EPISODE_PAGE_SIZE).coerceAtLeast(1)
+    val initialEpisode = (detail.lastWatchedEpisode - 1).coerceIn(0, detail.episodes.lastIndex.coerceAtLeast(0))
+    val initialPage = initialEpisode / EPISODE_PAGE_SIZE
+    val initialCell = initialEpisode % EPISODE_PAGE_SIZE
+
+    var page by remember { mutableIntStateOf(initialPage) }
+    var focusedCell by remember { mutableIntStateOf(initialCell) }
+    var focusedFlag by remember { mutableIntStateOf(0) }
+    var playingEpisode by remember { mutableIntStateOf(initialEpisode) }
+    // 换组/首次打开后要点亮的格子下标，由 page 的 LaunchedEffect 消费。
+    var pendingCell by remember { mutableIntStateOf(initialCell) }
+
+    val flagRequesters = remember { List(detail.flags.size) { FocusRequester() } }
+    val cellRequesters = remember { List(EPISODE_PAGE_SIZE) { FocusRequester() } }
+
+    val pageItems = remember(page, detail.episodes) {
+        detail.episodes.drop(page * EPISODE_PAGE_SIZE).take(EPISODE_PAGE_SIZE)
+    }
+
+    // 弹窗是独立窗口：首帧可能还没拿到 window focus，逐帧重试到焦点真正落下为止。
+    LaunchedEffect(page) {
+        val target = pendingCell.coerceIn(0, pageItems.lastIndex.coerceAtLeast(0))
+        repeat(5) {
+            if (requestDetailFocus(cellRequesters, target)) {
+                focusedCell = target
+                return@LaunchedEffect
+            }
+            withFrameNanos { }
+        }
+    }
+
+    fun focusCell(index: Int) {
+        val target = index.coerceIn(0, pageItems.lastIndex.coerceAtLeast(0))
+        if (requestDetailFocus(cellRequesters, target)) focusedCell = target
+    }
+
+    fun focusFlag(index: Int) {
+        val target = index.coerceIn(0, flagRequesters.lastIndex.coerceAtLeast(0))
+        if (requestDetailFocus(flagRequesters, target)) focusedFlag = target
+    }
+
+    // 切组：先把 pendingCell 归零，等 page 变化后的 LaunchedEffect 把焦点放到新组第一项。
+    fun switchPage(targetPage: Int) {
+        if (targetPage !in 0 until pageCount) return
+        focusedCell = 0
+        pendingCell = 0
+        page = targetPage
+    }
+
+    fun handleCellKey(cellIndex: Int, key: Key) {
+        val column = cellIndex % EPISODE_COLUMNS
+        val lastIndex = pageItems.lastIndex
+        when (key) {
+            Key.DirectionLeft ->
+                if (column > 0) focusCell(cellIndex - 1) else switchPage(page - 1)
+
+            Key.DirectionRight ->
+                if (column == EPISODE_COLUMNS - 1) {
+                    switchPage(page + 1)
+                } else if (cellIndex < lastIndex) {
+                    focusCell(cellIndex + 1)
+                }
+
+            Key.DirectionUp ->
+                if (cellIndex >= EPISODE_COLUMNS) focusCell(cellIndex - EPISODE_COLUMNS) else focusFlag(focusedFlag)
+
+            Key.DirectionDown ->
+                if (cellIndex + EPISODE_COLUMNS <= lastIndex) focusCell(cellIndex + EPISODE_COLUMNS)
+        }
+    }
+
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(
+            dismissOnBackPress = true,
+            dismissOnClickOutside = false,
+            usePlatformDefaultWidth = false,
+        ),
     ) {
-        itemsIndexed(items = flags, key = { index, _ -> index }) { index, label ->
-            HeroDetailFlagItem(
-                label = label,
-                selected = index == selectedIndex,
-                requester = requesters[index],
-                onFocused = { onFocused(index) },
-                onConfirm = { onConfirm(index) },
-                onMoveUp = onMoveUp,
-                onMoveDown = onMoveDown,
-                onMoveLeft = { onMoveLeft(index) },
-                onMoveRight = { onMoveRight(index) },
-            )
+        // 全屏遮罩 + 居中的深色面板；遮罩让底图继续透出来一点，形成「半透明」层次。
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(DIALOG_SCRIM),
+            contentAlignment = Alignment.Center,
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth(DIALOG_WIDTH_FRACTION)
+                    .clip(DIALOG_SHAPE)
+                    .background(DIALOG_BACKGROUND)
+                    .border(DIALOG_BORDER, DIALOG_BORDER_COLOR, DIALOG_SHAPE)
+                    .padding(DIALOG_PADDING),
+            ) {
+                HeroDetailSectionTitle(text = "播放线路")
+                Spacer(modifier = Modifier.height(DIALOG_TITLE_GAP))
+                LazyRow(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(DETAIL_FLAG_ROW_HEIGHT),
+                    horizontalArrangement = Arrangement.spacedBy(DETAIL_FLAG_GAP),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    itemsIndexed(items = detail.flags, key = { index, _ -> index }) { index, label ->
+                        HeroDetailFlagItem(
+                            label = label,
+                            selected = index == 0,
+                            requester = flagRequesters[index],
+                            onFocused = { focusedFlag = index },
+                            onConfirm = { },
+                            // Tab ↑ 无处可去，直接消费。
+                            onMoveUp = { },
+                            // Tab ↓ 回选集网格，停在离开时的那一格。
+                            onMoveDown = { focusCell(focusedCell) },
+                            onMoveLeft = { if (index > 0) focusFlag(index - 1) },
+                            onMoveRight = { if (index < detail.flags.lastIndex) focusFlag(index + 1) },
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(DIALOG_SECTION_GAP))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    HeroDetailSectionTitle(text = "选集")
+                    Spacer(modifier = Modifier.weight(1f))
+                    Text(
+                        text = "第 ${page + 1} / $pageCount 组",
+                        color = DIALOG_PAGE_INDICATOR_COLOR,
+                        fontSize = DIALOG_PAGE_INDICATOR_SP.sp,
+                        maxLines = 1,
+                    )
+                }
+                Spacer(modifier = Modifier.height(DIALOG_TITLE_GAP))
+                LazyVerticalGrid(
+                    columns = GridCells.Fixed(EPISODE_COLUMNS),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(DIALOG_GRID_HEIGHT),
+                    contentPadding = PaddingValues(vertical = DIALOG_GRID_VERTICAL_PADDING),
+                    horizontalArrangement = Arrangement.spacedBy(DIALOG_GRID_GAP),
+                    verticalArrangement = Arrangement.spacedBy(DIALOG_GRID_GAP),
+                ) {
+                    pageItems.forEachIndexed { index, label ->
+                        item(key = page * EPISODE_PAGE_SIZE + index) {
+                            HeroEpisodeCell(
+                                label = label,
+                                playing = page * EPISODE_PAGE_SIZE + index == playingEpisode,
+                                requester = cellRequesters[index],
+                                onFocused = { focusedCell = index },
+                                onConfirm = { playingEpisode = page * EPISODE_PAGE_SIZE + index },
+                                onMove = { key -> handleCellKey(index, key) },
+                            )
+                        }
+                    }
+                }
+            }
         }
     }
 }
 
+/** 线路项：焦点/选中红底白字，常态 `white_10`。 */
 @Composable
 private fun HeroDetailFlagItem(
     label: String,
@@ -554,12 +679,15 @@ private fun HeroDetailFlagItem(
 ) {
     val interaction = remember { MutableInteractionSource() }
     val isFocused by interaction.collectIsFocusedAsState()
+    val active = selected || isFocused
 
     Box(
         modifier = Modifier
             .height(DETAIL_FLAG_ROW_HEIGHT)
             .focusRequester(requester)
-            .onFocusChanged { if (it.isFocused) onFocused() }
+            .onFocusChanged {
+                if (it.isFocused) onFocused()
+            }
             .onPreviewKeyEvent { event ->
                 if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
                 when (event.key) {
@@ -600,57 +728,27 @@ private fun HeroDetailFlagItem(
     ) {
         Text(
             text = label,
-            // XML adapter_flag.xml L3：textSize=16sp、gravity=center。
+            // `adapter_flag.xml` L3：textSize=16sp、gravity=center。
             color = Color.White,
             fontSize = DETAIL_FLAG_SP.sp,
-            fontWeight = if (selected || isFocused) FontWeight.Medium else FontWeight.Normal,
+            fontWeight = if (active) FontWeight.Medium else FontWeight.Normal,
             maxLines = 1,
         )
     }
 }
 
 /**
- * 选集列表：固定高 140dp、纵向滚动、单列。
- * 文字 16sp 居中单行，聚焦时整行加 [HeroAccentColor] 红框 + 跑马灯。
+ * 选集格子：焦点态红框，当前播放集用红字区分。
+ * 四方向键全部在本组件内消费，交给 `onMove` 统一做边界与跨组处理。
  */
 @Composable
-private fun HeroDetailEpisodeColumn(
-    episodes: List<String>,
-    state: LazyListState,
-    requesters: List<FocusRequester>,
-    onFocused: (Int) -> Unit,
-    onMoveUp: (Int) -> Unit,
-    onMoveDown: (Int) -> Unit,
-) {
-    LazyColumn(
-        state = state,
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(DETAIL_EPISODE_AREA_HEIGHT),
-        // XML L279-280：RecyclerView paddingStart/End = 6dp。
-        contentPadding = PaddingValues(horizontal = DETAIL_EPISODE_LIST_PADDING),
-    ) {
-        itemsIndexed(items = episodes, key = { index, _ -> index }) { index, label ->
-            HeroDetailEpisodeItem(
-                label = label,
-                requester = requesters[index],
-                onFocused = { onFocused(index) },
-                onConfirm = { },
-                onMoveUp = { onMoveUp(index) },
-                onMoveDown = { onMoveDown(index) },
-            )
-        }
-    }
-}
-
-@Composable
-private fun HeroDetailEpisodeItem(
+private fun HeroEpisodeCell(
     label: String,
+    playing: Boolean,
     requester: FocusRequester,
     onFocused: () -> Unit,
     onConfirm: () -> Unit,
-    onMoveUp: () -> Unit,
-    onMoveDown: () -> Unit,
+    onMove: (Key) -> Unit,
 ) {
     val interaction = remember { MutableInteractionSource() }
     val isFocused by interaction.collectIsFocusedAsState()
@@ -658,32 +756,25 @@ private fun HeroDetailEpisodeItem(
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .height(DETAIL_EPISODE_ITEM_HEIGHT)
+            .height(EPISODE_CELL_HEIGHT)
             .focusRequester(requester)
             .onFocusChanged { if (it.isFocused) onFocused() }
             .onPreviewKeyEvent { event ->
                 if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
                 when (event.key) {
-                    Key.DirectionUp -> {
-                        onMoveUp()
+                    Key.DirectionUp, Key.DirectionDown, Key.DirectionLeft, Key.DirectionRight -> {
+                        onMove(event.key)
                         true
                     }
-
-                    Key.DirectionDown -> {
-                        onMoveDown()
-                        true
-                    }
-
-                    // 单列纵向列表：左右不离开本列，避免焦点跳到背景或海报上。
-                    Key.DirectionLeft, Key.DirectionRight -> true
 
                     else -> false
                 }
             }
-            .clip(DETAIL_EPISODE_SHAPE)
+            .clip(EPISODE_CELL_SHAPE)
+            .background(if (isFocused) EPISODE_CELL_FOCUS_BACKGROUND else EPISODE_CELL_BACKGROUND)
             .then(
                 if (isFocused) {
-                    Modifier.border(DETAIL_EPISODE_BORDER, HeroAccentColor, DETAIL_EPISODE_SHAPE)
+                    Modifier.border(EPISODE_CELL_BORDER, HeroAccentColor, EPISODE_CELL_SHAPE)
                 } else {
                     Modifier
                 },
@@ -695,10 +786,10 @@ private fun HeroDetailEpisodeItem(
             text = label,
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = DETAIL_EPISODE_H_PADDING)
+                .padding(horizontal = EPISODE_CELL_H_PADDING)
                 .then(if (isFocused) Modifier.basicMarquee(iterations = Int.MAX_VALUE) else Modifier),
-            color = Color.White,
-            fontSize = DETAIL_EPISODE_SP.sp,
+            color = if (playing) HeroAccentColor else Color.White,
+            fontSize = EPISODE_CELL_SP.sp,
             maxLines = 1,
             softWrap = false,
             overflow = TextOverflow.Ellipsis,
@@ -715,27 +806,9 @@ private fun requestDetailFocus(requesters: List<FocusRequester>, index: Int): Bo
     return runCatching { requester.requestFocus() }.isSuccess
 }
 
-/**
- * 聚焦 Lazy 列表里的指定项：
- * 已组合时直接请求焦点（Compose 自带 bring-into-view 负责最小滚动）；
- * 目标项被 Lazy 回收时，先滚过去、等一帧再请求焦点。
- */
-private fun focusLazyItem(
-    scope: CoroutineScope,
-    state: LazyListState,
-    requesters: List<FocusRequester>,
-    index: Int,
-    onFocused: () -> Unit,
-) {
-    if (requestDetailFocus(requesters, index)) {
-        onFocused()
-        return
-    }
-    scope.launch {
-        state.scrollToItem(index)
-        withFrameNanos { }
-        if (requestDetailFocus(requesters, index)) onFocused()
-    }
+/** 按钮组的左右移动：统一走这里，成功后才更新记忆索引。 */
+private fun focusAction(requesters: List<FocusRequester>, index: Int, onFocused: (Int) -> Unit) {
+    if (requestDetailFocus(requesters, index)) onFocused(index)
 }
 
 /** 按钮组定义：图标、图标尺寸、文案全部集中在这里，新增按钮只改这个列表。 */
@@ -745,14 +818,20 @@ private data class HeroDetailAction(
     val iconSize: Dp,
 )
 
+/** 演职员假数据：姓名 + 头像地址（picsum 稳定图，不依赖 TMDB）。 */
+private data class HeroCast(val name: String, val avatarUrl: String)
+
 private data class HeroDetail(
     val title: String,
     val meta: String,
     val synopsis: String,
     val posterUrl: String,
     val backdropUrl: String,
+    val cast: List<HeroCast>,
     val flags: List<String>,
     val episodes: List<String>,
+    /** 历史播放进度（1 基集号）；0 表示新剧，焦点落第 1 集。 */
+    val lastWatchedEpisode: Int,
 )
 
 /** 假数据：picsum 按 seed 返回稳定图片，不依赖 TMDB Key 即可验证 Coil 链路。 */
@@ -763,8 +842,16 @@ private val DEMO_DETAIL = HeroDetail(
         "却在无人区里把话说得比过去十年都清楚。",
     posterUrl = "https://picsum.photos/seed/hero-detail-poster/300/420",
     backdropUrl = "https://picsum.photos/seed/hero-detail-backdrop/1280/720",
+    cast = listOf(
+        "李海潮", "陈屿", "林晚舟", "周野", "苏见月",
+        "顾云深", "沈青禾", "许知白", "叶南", "宋一诺",
+    ).mapIndexed { index, name ->
+        HeroCast(name = name, avatarUrl = "https://picsum.photos/seed/hero-cast-$index/120/120")
+    },
     flags = listOf("线路一", "线路二", "线路三"),
     episodes = (1..24).map { "第 $it 集" },
+    // 演示「老剧吸附历史集」：第 7 集。新剧传 0 即可落回第 1 集。
+    lastWatchedEpisode = 7,
 )
 
 private val DETAIL_ACTIONS = listOf(
@@ -773,70 +860,85 @@ private val DETAIL_ACTIONS = listOf(
     HeroDetailAction(label = "换源", iconRes = R.drawable.ic_detail_change, iconSize = 20.dp),
 )
 
-/** 全局左侧基准线：需求指定内容区左侧 padding 严格 24dp（原版详情页同值）。 */
+/** 全局左侧基准线：内容区左侧 padding 严格 24dp（原版详情页同值）。 */
 private val HERO_PADDING = 24.dp
 
 /** 主色：焦点/选中态红底、选集红框、区块红色小竖条统一使用。 */
 private val HeroAccentColor = Color(0xFFFF0000)
 
+/** 「播放」在按钮组里的固定下标。 */
+private const val DETAIL_ACTION_PLAY = 0
+
 // ---------------------------------------------------------------------------
 // 左下内容区（activity_detail.xml detailTop L62-190）
 // ---------------------------------------------------------------------------
-private const val DETAIL_TITLE_SP = 32f                    // L70
-private val DETAIL_TITLE_HEIGHT = 36.dp                    // L77
-private val DETAIL_TITLE_META_GAP = 2.dp                   // L98 layout_marginTop
-private val DETAIL_META_HEIGHT = 20.dp                     // L97
-private const val DETAIL_META_SP = 14f                     // L91
-private val DETAIL_META_COLOR = Color(0xCCFFFFFF)          // L92
-private val DETAIL_META_DESC_GAP = 4.dp                    // L107
-private val DETAIL_DESC_HEIGHT = 40.dp                     // L116
-private const val DETAIL_DESC_WIDTH_FRACTION = 0.5f        // L108 weightSum=2 + L122 weight=1
-private const val DETAIL_DESC_SP = 12f                     // L110
-private const val DETAIL_DESC_LINE_HEIGHT_SP = 17f         // L123 lineSpacingExtra=3dp
-private val DETAIL_DESC_COLOR = Color(0xBBFFFFFF)          // L111
-private val DETAIL_ACTIONS_TOP_GAP = 12.dp                 // L131
-private val DETAIL_SECTION_TOP_GAP = 18.dp                 // L68 detailTop marginBottom 6dp + L204 flagLayout marginTop 12dp
-private val DETAIL_FLAG_TITLE_GAP = 8.dp                   // L211 标题行 marginBottom
-private val DETAIL_SECTION_GAP = 2.dp                      // L205 flagLayout marginBottom
-private val DETAIL_EPISODE_TITLE_GAP = 0.dp                // L244 marginBottom=0dp
+private const val DETAIL_TITLE_SP = 32f
+private val DETAIL_TITLE_HEIGHT = 36.dp
+private val DETAIL_TITLE_META_GAP = 2.dp
+private val DETAIL_META_HEIGHT = 20.dp
+private const val DETAIL_META_SP = 14f
+private val DETAIL_META_COLOR = Color(0xCCFFFFFF)
+private val DETAIL_META_DESC_GAP = 4.dp
+private val DETAIL_DESC_HEIGHT = 40.dp
+private const val DETAIL_DESC_WIDTH_FRACTION = 0.5f
+private const val DETAIL_DESC_SP = 12f
+private const val DETAIL_DESC_LINE_HEIGHT_SP = 17f
+private val DETAIL_DESC_COLOR = Color(0xBBFFFFFF)
+private val DETAIL_ACTIONS_TOP_GAP = 18.dp
+private val DETAIL_CAST_TOP_GAP = 18.dp
 
 // XML 阴影参数是 px 值，Compose 的 Shadow 同样按 px 解释，因此直接照抄。
 private val DETAIL_TITLE_SHADOW = Shadow(
-    color = Color(0xCC000000),                              // L78
-    offset = Offset(2f, 2f),                                // L79-80
-    blurRadius = 12f,                                       // L81
+    color = Color(0xCC000000),
+    offset = Offset(2f, 2f),
+    blurRadius = 12f,
 )
 private val DETAIL_META_SHADOW = Shadow(
-    color = Color(0xAA000000),                              // L99
-    offset = Offset(1.5f, 1.5f),                            // L100-101
-    blurRadius = 8f,                                        // L102
+    color = Color(0xAA000000),
+    offset = Offset(1.5f, 1.5f),
+    blurRadius = 8f,
 )
 private val DETAIL_DESC_SHADOW = Shadow(
-    color = Color(0xAA000000),                              // L118
-    offset = Offset(1.2f, 1.2f),                            // L119-120
-    blurRadius = 6f,                                        // L121
+    color = Color(0xAA000000),
+    offset = Offset(1.2f, 1.2f),
+    blurRadius = 6f,
 )
+
+// ---------------------------------------------------------------------------
+// 演职员区（Netflix 风格）：60dp 圆形头像 + 12sp 名字，不可聚焦
+// ---------------------------------------------------------------------------
+private const val CAST_TITLE_SP = 14f
+private val CAST_TITLE_GAP = 10.dp
+private val CAST_AVATAR_SIZE = 60.dp
+private val CAST_AVATAR_BORDER = 1.dp
+private val CAST_AVATAR_BORDER_COLOR = Color(0x66FFFFFF)
+private val CAST_AVATAR_BACKGROUND = Color(0xFF2A2A2A)
+private val CAST_NAME_GAP = 6.dp
+private const val CAST_NAME_SP = 12f
+private val CAST_NAME_COLOR = Color(0xCCFFFFFF)
+private val CAST_ITEM_WIDTH = 76.dp
+private val CAST_ITEM_GAP = 12.dp
 
 // ---------------------------------------------------------------------------
 // 右上浮动海报 150dp × 210dp（activity_detail.xml posterCard L30-48）
 // ---------------------------------------------------------------------------
-private val POSTER_WIDTH = 150.dp                          // L37
-private val POSTER_HEIGHT = 210.dp                         // L38
-private val POSTER_TOP_GAP = 72.dp                         // L39 layout_marginTop
-private val POSTER_END_GAP = 80.dp                         // L40 layout_marginEnd
-private val POSTER_INNER_PADDING = 4.dp                    // L34 padding
-private val POSTER_SHAPE = RoundedCornerShape(12.dp)       // shape_poster_card.xml
-private val POSTER_BACKGROUND = Color(0x33000000)          // black_20
+private val POSTER_WIDTH = 150.dp
+private val POSTER_HEIGHT = 210.dp
+private val POSTER_TOP_GAP = 72.dp
+private val POSTER_END_GAP = 80.dp
+private val POSTER_INNER_PADDING = 4.dp
+private val POSTER_SHAPE = RoundedCornerShape(12.dp)
+private val POSTER_BACKGROUND = Color(0x33000000) // black_20
 
 // ---------------------------------------------------------------------------
 // 按钮组：高 36dp / 字号 13sp 加粗 / 间距 12dp（L125-189）
 // ---------------------------------------------------------------------------
-private val DETAIL_ACTION_HEIGHT = 36.dp                   // L144
-private const val DETAIL_ACTION_SP = 13f                   // L133
-private val DETAIL_ACTION_GAP = 12.dp                      // L149 layout_marginEnd
-private val DETAIL_ACTION_ICON_GAP = 4.dp                  // L146 drawablePadding
-private val DETAIL_ACTION_H_PADDING = 16.dp                // L147-148
-private val DETAIL_ACTION_SHAPE = RoundedCornerShape(4.dp)  // shape_detail_item_normal.xml
+private val DETAIL_ACTION_HEIGHT = 36.dp
+private const val DETAIL_ACTION_SP = 13f
+private val DETAIL_ACTION_GAP = 12.dp
+private val DETAIL_ACTION_ICON_GAP = 4.dp
+private val DETAIL_ACTION_H_PADDING = 16.dp
+private val DETAIL_ACTION_SHAPE = RoundedCornerShape(4.dp)
 private val DETAIL_ACTION_IDLE_BACKGROUND = Color(0x1AFFFFFF) // white_10
 
 // ---------------------------------------------------------------------------
@@ -849,23 +951,43 @@ private val SECTION_BAR_GAP = 10.dp
 private const val SECTION_TITLE_SP = 15f
 
 // ---------------------------------------------------------------------------
-// 线路列表：高 34dp（activity_detail.xml L225-232 + adapter_flag.xml）
+// 弹窗内线路 Tab（activity_detail.xml L225-232 + adapter_flag.xml）
 // ---------------------------------------------------------------------------
-private val DETAIL_FLAG_ROW_HEIGHT = 34.dp                 // L230
+private val DETAIL_FLAG_ROW_HEIGHT = 34.dp
 private val DETAIL_FLAG_GAP = 12.dp
-private val DETAIL_FLAG_H_PADDING = 12.dp                  // shape_item_*.xml padding left/right
-private val DETAIL_FLAG_SHAPE = RoundedCornerShape(4.dp)    // shape_item_*.xml corners
-private const val DETAIL_FLAG_SP = 16f                     // adapter_flag.xml L3
-private val DETAIL_FLAG_IDLE_BACKGROUND = Color(0x33000000)     // black_20 → shape_item_normal
-private val DETAIL_FLAG_SELECTED_BACKGROUND = Color(0x66000000) // black_40 → shape_item_activated
+private val DETAIL_FLAG_H_PADDING = 12.dp
+private val DETAIL_FLAG_SHAPE = RoundedCornerShape(4.dp)
+private const val DETAIL_FLAG_SP = 16f
+private val DETAIL_FLAG_IDLE_BACKGROUND = Color(0x33000000)     // black_20
+private val DETAIL_FLAG_SELECTED_BACKGROUND = Color(0x66000000) // black_40
 
 // ---------------------------------------------------------------------------
-// 选集列表：高 140dp / 纵向滚动 / 16sp（activity_detail.xml L271-280 + adapter_episode.xml）
+// 播放弹窗
 // ---------------------------------------------------------------------------
-private val DETAIL_EPISODE_AREA_HEIGHT = 140.dp            // L278
-private val DETAIL_EPISODE_LIST_PADDING = 6.dp             // L279-280 paddingStart/End
-private val DETAIL_EPISODE_ITEM_HEIGHT = 34.dp             // 行高由代码决定，XML 未给出
-private val DETAIL_EPISODE_H_PADDING = 12.dp               // 跑马灯左右留白
-private val DETAIL_EPISODE_SHAPE = RoundedCornerShape(4.dp)
-private val DETAIL_EPISODE_BORDER = 2.dp
-private const val DETAIL_EPISODE_SP = 16f                  // adapter_episode.xml L12
+private const val DIALOG_WIDTH_FRACTION = 0.82f
+private val DIALOG_SCRIM = Color(0x99000000)
+private val DIALOG_SHAPE = RoundedCornerShape(24.dp)
+private val DIALOG_BACKGROUND = Color(0xE6141414)   // 半透明深色面板
+private val DIALOG_BORDER = 1.dp
+private val DIALOG_BORDER_COLOR = Color(0x1FFFFFFF)
+private val DIALOG_PADDING = 32.dp
+private val DIALOG_TITLE_GAP = 10.dp
+private val DIALOG_SECTION_GAP = 20.dp
+private val DIALOG_PAGE_INDICATOR_COLOR = Color(0x99FFFFFF)
+private const val DIALOG_PAGE_INDICATOR_SP = 12f
+
+// ---------------------------------------------------------------------------
+// 选集网格：5 列 × 4 行 = 20 集/组；240dp 高度正好容纳 4 行（16+46×4+8×3+16 = 240）
+// ---------------------------------------------------------------------------
+private const val EPISODE_COLUMNS = 5
+private const val EPISODE_PAGE_SIZE = EPISODE_COLUMNS * 4
+private val DIALOG_GRID_HEIGHT = 240.dp
+private val DIALOG_GRID_VERTICAL_PADDING = 16.dp
+private val DIALOG_GRID_GAP = 8.dp
+private val EPISODE_CELL_HEIGHT = 46.dp
+private val EPISODE_CELL_SHAPE = RoundedCornerShape(6.dp)
+private val EPISODE_CELL_BORDER = 2.dp
+private val EPISODE_CELL_H_PADDING = 8.dp
+private val EPISODE_CELL_BACKGROUND = Color(0x14FFFFFF)
+private val EPISODE_CELL_FOCUS_BACKGROUND = Color(0x1FFFFFFF)
+private const val EPISODE_CELL_SP = 16f
