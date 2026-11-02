@@ -7,6 +7,7 @@ import android.graphics.drawable.ColorDrawable
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.basicMarquee
@@ -26,12 +27,14 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.darkColorScheme
@@ -46,6 +49,7 @@ import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
@@ -77,6 +81,9 @@ import androidx.core.view.WindowInsetsControllerCompat
 import coil3.compose.AsyncImage
 import com.fongmi.android.tv.R
 import com.fongmi.android.tv.ui.hero.HeroImageLoader
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 
 /**
  * HeroUI（Compose）详情页。
@@ -84,25 +91,30 @@ import com.fongmi.android.tv.ui.hero.HeroImageLoader
  * 本阶段仍是假数据骨架，不触碰 PlayerManager / VideoActivity 等既有播放链路：
  * 按钮点击只做 UI 反馈，没有任何播放器调用。
  *
- * 主页面（自下而上）：
+ * 主页面（从下往上）：
  * 1. [HeroDetailBackdrop]：全屏背景大图。
  * 2. [HeroDetailMaskHorizontal]：左侧纯黑 → 右侧透明的横向遮罩（`bg_hero_mask_h`）。
  * 3. [HeroDetailMaskVertical]：底部纯黑 → 顶部透明的纵向遮罩（`bg_hero_mask_v`）。
  * 4. 右上角浮动小海报 150dp × 210dp、marginTop 72dp、marginEnd 80dp、内边距 4dp。
- * 5. 左下内容区：剧名 / 元数据 / 简介 / **演职员** / 按钮组。
+ * 5. 左下内容区（整体贴底、paddingBottom 32dp）：剧名/Logo → 元数据 → 简介 → 按钮组 → **演职员行**。
  *    线路与选集已整体移出主页面，收进 [HeroPlayDialog]。
  *
- * 尺寸/字号/边距仍逐条对照 `ref_docs/activity_detail.xml`（下文简称 XML，行号即该文件行号）：
- * - 内容容器：左右 padding 24dp、paddingBottom 0dp、整体贴底（L54-61）。
- * - 剧名：32sp 粗体 / 固定高 36dp / 贴底 / 阴影 #cc000000 2,2,12（L69-81）。
+ * 尺寸/字号/边距逐条对照 `ref_docs/activity_detail.xml`（下文简称 XML，行号即该文件行号），
+ * 本次需求（Logo 位、简介 4 行、按钮顺序、演职员可聚焦）与 XML 冲突处以需求为准：
+ * - 内容容器：左右 padding 24dp、paddingBottom 32dp、整体贴底。
+ * - 剧名：有 Logo → 高 72dp / 最宽 720dp / 等比靠左（XML `heroLogoImg` L82-89）；
+ *   无 Logo → 32sp 粗体 / 高 36dp / 贴底 / `basicMarquee()` 跑马灯防溢出 / 阴影 #cc000000 2,2,12（L69-81）。
  * - 元数据：14sp / #ccffffff / 固定高 20dp / marginTop 2dp / 阴影 #aa000000 1.5,1.5,8（L90-102）。
- * - 简介：12sp / #bbffffff / 固定高 40dp / marginTop 4dp / maxLines 2 / 行距 +3dp / 占父宽一半（L103-124）。
- * - 按钮组：高 36dp、13sp 粗体、左右 padding 16dp、图标文字间距 4dp、按钮间距 12dp（L125-189）。
+ * - 简介：12sp / #bbffffff / 最宽 440dp / 最多 4 行 / 行距 +3dp（XML 原为半宽 2 行，按需求放宽）。
+ * - 按钮组：播放 / 换源 / 收藏，高 36dp、13sp 粗体、左右 padding 16dp、图标文字间距 4dp、按钮间距 12dp（L125-189）。
+ * - 演职员：`LazyRow`，60dp 圆形头像 + 12sp 单行名字；焦点态红圈 + 1.08 倍放大。
  *
  * 焦点契约：
- * - 主页面只有按钮组可聚焦，默认落在「播放」；↑/↓ 无处可去，直接消费，不会掉到演职员或文本上。
+ * - 默认落在「播放」；←/→ 在按钮间移动。
+ * - 「播放」按 ↓ → 演职员行（落在上次停留的演员）；演员行 ↑ → 回到「播放」；行内 ←/→ 横移，↓ 消费。
  * - 点「播放」→ [HeroPlayDialog]：焦点强制进入弹窗并落到 `lastWatchedEpisode`（无历史则第 1 集）。
- * - 返回键关闭弹窗后，焦点回到「播放」。
+ * - 点某位演员 → [HeroActorDialog]（立即弹出、数据异步加载）；关闭后焦点**回到被点的那位演员**。
+ * - 纯展示文本（剧名/元数据/简介）没有任何 `focusable` / `clickable` 修饰符。
  */
 class HeroDetailActivity : ComponentActivity() {
 
@@ -144,14 +156,31 @@ class HeroDetailActivity : ComponentActivity() {
 
 @Composable
 private fun HeroDetailScreen(detail: HeroDetail) {
-    // 主页面只剩一组可聚焦按钮：跨区移动全部显式 requestFocus，不依赖 2D 焦点搜索。
+    // 两组可聚焦区域：按钮组 + 演职员行。跨区移动全部显式 requestFocus，不依赖 2D 焦点搜索。
     val actionRequesters = remember { List(DETAIL_ACTIONS.size) { FocusRequester() } }
-    var focusedAction by remember { mutableIntStateOf(0) }
+    val castRequesters = remember(detail.cast.size) { List(detail.cast.size) { FocusRequester() } }
+    var focusedAction by remember { mutableIntStateOf(DETAIL_ACTION_PLAY) }
+    var focusedCast by remember { mutableIntStateOf(0) }
     var showPlayDialog by remember { mutableStateOf(false) }
+    // 正在查看的演员下标；非 null 时演员详情弹窗可见。
+    var actorDialogIndex by remember { mutableStateOf<Int?>(null) }
+    // 弹窗关闭后要回去的演员下标；-1 表示「没有待恢复的演员焦点」。
+    var pendingCastFocus by remember { mutableIntStateOf(-1) }
 
-    // 首次进入落「播放」；弹窗关闭（含返回键）后也回到「播放」。
-    LaunchedEffect(showPlayDialog) {
-        if (showPlayDialog) return@LaunchedEffect
+    // 两个弹窗都关闭后才抢焦点：
+    // - 刚关掉演员弹窗 → 回到被点的那位演员（需求：焦点必须回到刚才点击的头像）；
+    // - 否则（首次进入 / 关闭播放弹窗）→ 回到「播放」。
+    LaunchedEffect(showPlayDialog, actorDialogIndex) {
+        if (showPlayDialog || actorDialogIndex != null) return@LaunchedEffect
+        val castTarget = pendingCastFocus
+        pendingCastFocus = -1
+        if (castTarget >= 0) {
+            repeat(5) {
+                if (requestDetailFocus(castRequesters, castTarget)) return@LaunchedEffect
+                withFrameNanos { }
+            }
+            return@LaunchedEffect
+        }
         repeat(3) {
             if (requestDetailFocus(actionRequesters, DETAIL_ACTION_PLAY)) return@LaunchedEffect
             withFrameNanos { }
@@ -172,33 +201,22 @@ private fun HeroDetailScreen(detail: HeroDetail) {
                 .padding(top = POSTER_TOP_GAP, end = POSTER_END_GAP),
         )
 
-        // ---- 左下内容区：整体贴底，左右 padding 各 24dp、paddingBottom 0dp（XML L54-61）----
+        // ---- 左下内容区：整体贴底，左右 24dp、底部 32dp 防贴屏幕边缘 ----
         Column(
             modifier = Modifier
                 .align(Alignment.BottomStart)
                 .fillMaxWidth()
-                .padding(start = HERO_PADDING, end = HERO_PADDING),
+                .padding(
+                    start = HERO_PADDING,
+                    end = HERO_PADDING,
+                    bottom = CONTENT_BOTTOM_PADDING,
+                ),
         ) {
-            // 纯展示文本：不挂 focusable / clickable，遥控器无法选中。
-            // 剧名固定 36dp、文字贴底（XML L69-81）。
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(DETAIL_TITLE_HEIGHT),
-                contentAlignment = Alignment.BottomStart,
-            ) {
-                Text(
-                    text = detail.title,
-                    color = Color.White,
-                    fontSize = DETAIL_TITLE_SP.sp,
-                    fontWeight = FontWeight.Bold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    style = TextStyle(shadow = DETAIL_TITLE_SHADOW),
-                )
-            }
+            // 1. 剧名：有 Logo 显示艺术字，没有则 32sp 文字跑马灯（纯展示，不可聚焦）。
+            HeroDetailTitle(detail = detail)
             Spacer(modifier = Modifier.height(DETAIL_TITLE_META_GAP))
-            // 元数据固定 20dp、marginTop 2dp、文字贴底（XML L90-102）。
+
+            // 2. 元数据固定 20dp、文字贴底（XML L90-102）。
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -215,23 +233,20 @@ private fun HeroDetailScreen(detail: HeroDetail) {
                 )
             }
             Spacer(modifier = Modifier.height(DETAIL_META_DESC_GAP))
-            // 简介：marginTop 4dp、固定 40dp、maxLines 2、行距 +3dp；
-            // 外层 weightSum=2 + 子项 weight=1 → 实际只占父宽的一半（XML L103-124）。
+
+            // 3. 简介：最宽 440dp、最多 4 行、超出省略（纯展示，不可聚焦）。
             Text(
                 text = detail.synopsis,
-                modifier = Modifier
-                    .fillMaxWidth(DETAIL_DESC_WIDTH_FRACTION)
-                    .height(DETAIL_DESC_HEIGHT),
+                modifier = Modifier.widthIn(max = DETAIL_DESC_MAX_WIDTH),
                 color = DETAIL_DESC_COLOR,
                 fontSize = DETAIL_DESC_SP.sp,
                 lineHeight = DETAIL_DESC_LINE_HEIGHT_SP.sp,
-                maxLines = 2,
+                maxLines = DETAIL_DESC_MAX_LINES,
                 overflow = TextOverflow.Ellipsis,
                 style = TextStyle(shadow = DETAIL_DESC_SHADOW),
             )
 
-            Spacer(modifier = Modifier.height(DETAIL_CAST_TOP_GAP))
-            HeroCastSection(cast = detail.cast)
+            // 4. 按钮组：紧跟在简介下方，默认焦点「播放」。
             Spacer(modifier = Modifier.height(DETAIL_ACTIONS_TOP_GAP))
             HeroDetailActionRow(
                 requesters = actionRequesters,
@@ -242,12 +257,84 @@ private fun HeroDetailScreen(detail: HeroDetail) {
                 onMoveRight = { index ->
                     if (index < actionRequesters.lastIndex) focusAction(actionRequesters, index + 1) { focusedAction = it }
                 },
+                // ↓ 进入最底部的演职员行，落在上次停留的那位演员。
+                onMoveDown = { focusCast(castRequesters, focusedCast) },
+            )
+
+            // 5. 演职员行（最底部）：可横向浏览、可点击，↑ 回按钮组。
+            Spacer(modifier = Modifier.height(DETAIL_CAST_TOP_GAP))
+            HeroCastSection(
+                cast = detail.cast,
+                requesters = castRequesters,
+                onFocused = { index -> focusedCast = index },
+                // 点击瞬间先记下「要回到哪个头像」，再同步打开弹窗（不等网络）。
+                onConfirm = { index ->
+                    pendingCastFocus = index
+                    actorDialogIndex = index
+                },
+                onMoveUp = { focusAction(actionRequesters, DETAIL_ACTION_PLAY) { focusedAction = it } },
+                onMoveLeft = { index -> if (index > 0) focusCast(castRequesters, index - 1) },
+                onMoveRight = { index ->
+                    if (index < castRequesters.lastIndex) focusCast(castRequesters, index + 1)
+                },
             )
         }
     }
 
     if (showPlayDialog) {
         HeroPlayDialog(detail = detail, onDismiss = { showPlayDialog = false })
+    }
+
+    // 演员详情：点击即弹出，数据在弹窗内部异步加载。
+    actorDialogIndex?.let { index ->
+        HeroActorDialog(
+            actor = detail.cast[index],
+            onDismiss = { actorDialogIndex = null },
+        )
+    }
+}
+
+/**
+ * 剧名区：兼容 TMDB 艺术字 Logo。
+ *
+ * - 有 Logo：高 72dp、最大宽 720dp、等比缩放、靠左（XML `heroLogoImg` L82-89，`scaleType=fitStart`）。
+ * - 无 Logo：32sp 粗体文字 + [basicMarquee]，长剧名持续滚动而不是被省略号吞掉。
+ * 两种情况都不挂 `focusable` / `clickable`，遥控器选不中。
+ */
+@Composable
+private fun HeroDetailTitle(detail: HeroDetail) {
+    val logo = detail.logoUrl
+    if (!logo.isNullOrBlank()) {
+        AsyncImage(
+            model = logo,
+            contentDescription = detail.title,
+            contentScale = ContentScale.Fit,
+            // 等比缩放后仍靠左，避免窄 Logo 在 720dp 的盒子里居中。
+            alignment = Alignment.CenterStart,
+            modifier = Modifier
+                .height(LOGO_HEIGHT)
+                .widthIn(max = LOGO_MAX_WIDTH),
+        )
+        return
+    }
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(DETAIL_TITLE_HEIGHT),
+        contentAlignment = Alignment.BottomStart,
+    ) {
+        Text(
+            text = detail.title,
+            modifier = Modifier
+                .fillMaxWidth()
+                .basicMarquee(),
+            color = Color.White,
+            fontSize = DETAIL_TITLE_SP.sp,
+            fontWeight = FontWeight.Bold,
+            maxLines = 1,
+            softWrap = false,
+            style = TextStyle(shadow = DETAIL_TITLE_SHADOW),
+        )
     }
 }
 
@@ -321,13 +408,21 @@ private fun HeroDetailPoster(url: String, modifier: Modifier = Modifier) {
 }
 
 /**
- * 演职员区（Netflix 风格）：标题「导演 / 主演」+ 10 个圆形头像。
+ * 演职员行（Netflix 风格）：标题「导演 / 主演」+ 横向 `LazyRow`。
  *
- * **刻意不可聚焦**：整块没有任何 focusable / clickable 修饰符，默认焦点永远留在按钮组。
- * 头像 60dp 圆形、1dp 浅灰描边、下方 12sp 名字单行省略。
+ * 与上一版不同，这里**可聚焦**：按钮组 ↓ 进入本行，行内 ←/→ 横移，↑ 回「播放」。
+ * 头像 60dp 圆形，焦点态加 2dp 红圈并放大到 1.08 倍；名字 12sp 单行省略。
  */
 @Composable
-private fun HeroCastSection(cast: List<HeroCast>) {
+private fun HeroCastSection(
+    cast: List<HeroCast>,
+    requesters: List<FocusRequester>,
+    onFocused: (Int) -> Unit,
+    onConfirm: (Int) -> Unit,
+    onMoveUp: () -> Unit,
+    onMoveLeft: (Int) -> Unit,
+    onMoveRight: (Int) -> Unit,
+) {
     HeroDetailSectionTitle(text = "导演 / 主演", fontSize = CAST_TITLE_SP.sp)
     Spacer(modifier = Modifier.height(CAST_TITLE_GAP))
     LazyRow(
@@ -336,25 +431,82 @@ private fun HeroCastSection(cast: List<HeroCast>) {
         // 列表铺到屏幕右缘，最后一位演员可以贴边滑出，不做硬性截断。
         contentPadding = PaddingValues(end = HERO_PADDING),
     ) {
-        itemsIndexed(items = cast, key = { _, item -> item.name }) { _, item ->
-            HeroCastItem(cast = item)
+        itemsIndexed(items = cast, key = { _, item -> item.id }) { index, item ->
+            HeroCastItem(
+                cast = item,
+                requester = requesters[index],
+                onFocused = { onFocused(index) },
+                onConfirm = { onConfirm(index) },
+                onMoveUp = onMoveUp,
+                onMoveLeft = { onMoveLeft(index) },
+                onMoveRight = { onMoveRight(index) },
+            )
         }
     }
 }
 
 @Composable
-private fun HeroCastItem(cast: HeroCast) {
+private fun HeroCastItem(
+    cast: HeroCast,
+    requester: FocusRequester,
+    onFocused: () -> Unit,
+    onConfirm: () -> Unit,
+    onMoveUp: () -> Unit,
+    onMoveLeft: () -> Unit,
+    onMoveRight: () -> Unit,
+) {
+    val interaction = remember { MutableInteractionSource() }
+    val isFocused by interaction.collectIsFocusedAsState()
+    // 焦点态轻微放大，配合红圈做选中反馈；160ms 过渡，避免 TV 上硬切。
+    val scale by animateFloatAsState(
+        targetValue = if (isFocused) CAST_FOCUS_SCALE else 1f,
+        label = "castScale",
+    )
+
     Column(
-        modifier = Modifier.width(CAST_ITEM_WIDTH),
+        modifier = Modifier
+            .width(CAST_ITEM_WIDTH)
+            .focusRequester(requester)
+            .onFocusChanged { if (it.isFocused) onFocused() }
+            .onPreviewKeyEvent { event ->
+                if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                when (event.key) {
+                    Key.DirectionUp -> {
+                        onMoveUp()
+                        true
+                    }
+
+                    Key.DirectionLeft -> {
+                        onMoveLeft()
+                        true
+                    }
+
+                    Key.DirectionRight -> {
+                        onMoveRight()
+                        true
+                    }
+
+                    // 演职员行是最底部区域，↓ 无处可去，直接消费。
+                    Key.DirectionDown -> true
+
+                    else -> false
+                }
+            }
+            .clickable(interactionSource = interaction, indication = null, onClick = onConfirm),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        // 圆形头像：先 clip 再 border，描边画在图片之上，1dp 也看得见。
+        // 圆形头像：先 clip 再 border，描边画在图片之上；焦点态换成 2dp 红圈。
         Box(
             modifier = Modifier
                 .size(CAST_AVATAR_SIZE)
+                .scale(scale)
                 .clip(CircleShape)
                 .background(CAST_AVATAR_BACKGROUND)
-                .border(CAST_AVATAR_BORDER, CAST_AVATAR_BORDER_COLOR, CircleShape),
+                .border(
+                    width = if (isFocused) CAST_FOCUS_BORDER else CAST_AVATAR_BORDER,
+                    color = if (isFocused) HeroAccentColor else CAST_AVATAR_BORDER_COLOR,
+                    shape = CircleShape,
+                ),
         ) {
             AsyncImage(
                 model = cast.avatarUrl,
@@ -367,7 +519,7 @@ private fun HeroCastItem(cast: HeroCast) {
         Text(
             text = cast.name,
             modifier = Modifier.fillMaxWidth(),
-            color = CAST_NAME_COLOR,
+            color = if (isFocused) Color.White else CAST_NAME_COLOR,
             fontSize = CAST_NAME_SP.sp,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
@@ -376,7 +528,159 @@ private fun HeroCastItem(cast: HeroCast) {
     }
 }
 
-/** 按钮组：播放 / 收藏 / 换源，横向排列、间距 12dp。 */
+// ---------------------------------------------------------------------------
+// 演员详情：点击即弹窗，文本走轻量缓存，图片全部交给 Coil
+// ---------------------------------------------------------------------------
+
+/**
+ * 演员详情弹窗（骨架）。
+ *
+ * **不阻塞 UI**：点击时只是把 [HeroDetailScreen] 里的 `actorDialogIndex` 置位，
+ * Dialog 当帧组合、立刻显示「加载中」，遥控器不会卡。
+ * 真正的数据请求在 [LaunchedEffect] 里切到 [Dispatchers.IO]；接 TMDB 时只改 [loadActorProfile]。
+ *
+ * 缓存策略：
+ * - **只缓存文本**（简介 / 生日 / 出生地）→ [ActorProfileCache]，进程内 Map，轻量、无磁盘 IO。
+ * - **头像与作品海报一律不落自定义缓存**，全交给 Coil 默认 LRU 磁盘缓存（满 250MB 自动淘汰），
+ *   这里只通过 `AsyncImage(model = url)` 走默认 ImageLoader，不写任何下载/保存逻辑。
+ */
+@Composable
+private fun HeroActorDialog(actor: HeroCast, onDismiss: () -> Unit) {
+    // 命中缓存时首帧就有内容；未命中则显示加载态。
+    var profile by remember(actor.id) { mutableStateOf(ActorProfileCache.get(actor.id)) }
+
+    LaunchedEffect(actor.id) {
+        if (profile != null) return@LaunchedEffect
+        val loaded = loadActorProfile(actor)
+        ActorProfileCache.put(actor.id, loaded)
+        profile = loaded
+    }
+
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(
+            dismissOnBackPress = true,
+            dismissOnClickOutside = true,
+            usePlatformDefaultWidth = false,
+        ),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth(ACTOR_DIALOG_WIDTH_FRACTION)
+                .clip(ACTOR_DIALOG_SHAPE)
+                .background(ACTOR_DIALOG_BACKGROUND)
+                .border(DIALOG_BORDER, DIALOG_BORDER_COLOR, ACTOR_DIALOG_SHAPE)
+                .padding(ACTOR_DIALOG_PADDING),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                AsyncImage(
+                    model = actor.avatarUrl,
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier
+                        .size(ACTOR_DIALOG_AVATAR)
+                        .clip(CircleShape)
+                        .background(CAST_AVATAR_BACKGROUND),
+                )
+                Spacer(modifier = Modifier.width(ACTOR_DIALOG_AVATAR_GAP))
+                Column {
+                    Text(
+                        text = actor.name,
+                        color = Color.White,
+                        fontSize = ACTOR_DIALOG_NAME_SP.sp,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(
+                        text = "演员档案",
+                        color = ACTOR_DIALOG_HINT_COLOR,
+                        fontSize = DIALOG_PAGE_INDICATOR_SP.sp,
+                        maxLines = 1,
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.height(ACTOR_DIALOG_HEADER_GAP))
+            val loaded = profile
+            if (loaded == null) {
+                // Loading 态：2 秒假延迟期间显示，绝不占用主线程。
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(ACTOR_DIALOG_SPINNER),
+                        strokeWidth = 2.dp,
+                        color = HeroAccentColor,
+                    )
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Text(
+                        text = "加载中…",
+                        color = ACTOR_DIALOG_HINT_COLOR,
+                        fontSize = ACTOR_DIALOG_BODY_SP.sp,
+                    )
+                }
+            } else {
+                Text(
+                    text = loaded.summary,
+                    color = Color.White,
+                    fontSize = ACTOR_DIALOG_BODY_SP.sp,
+                    lineHeight = ACTOR_DIALOG_BODY_LINE_HEIGHT.sp,
+                    maxLines = 6,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Spacer(modifier = Modifier.height(10.dp))
+                Text(
+                    text = "${loaded.birthday} · ${loaded.place}",
+                    color = ACTOR_DIALOG_HINT_COLOR,
+                    fontSize = DIALOG_PAGE_INDICATOR_SP.sp,
+                    maxLines = 1,
+                )
+            }
+        }
+    }
+}
+
+/**
+ * 取演员文本档案：当前是 2 秒假延迟 + 占位文案，接口接好后替换函数体即可。
+ *
+ * 真实实现建议：`GET /person/{person_id}?language=zh-CN`，只取 `biography`/`birthday`/`place_of_birth`；
+ * 头像（`profile_path`）与作品海报**不要**在这里下载，直接拼成 URL 交给 Coil。
+ */
+private suspend fun loadActorProfile(actor: HeroCast): ActorProfile = withContext(Dispatchers.IO) {
+    delay(ACTOR_PROFILE_FAKE_DELAY_MS)
+    ActorProfile(
+        name = actor.name,
+        birthday = "1988-06-12",
+        place = "中国 · 上海",
+        summary = "演员详情开发中。\n\n这里将展示 TMDB 返回的演员简介：出生地、生日、代表作与个人履历。",
+    )
+}
+
+/** 演员文本档案：只放文本字段，图片 URL 由调用方直接喂给 Coil，不参与缓存。 */
+private data class ActorProfile(
+    val name: String,
+    val birthday: String,
+    val place: String,
+    val summary: String,
+)
+
+/**
+ * 轻量文本缓存：进程内 Map，够用且零依赖。
+ *
+ * 换成 Room 时只需实现同样的 `get` / `put` 两个方法，调用点不动。
+ * **绝不缓存图片**：Coil 自己的磁盘 LRU 已经处理了淘汰，重复缓存只会白白占空间。
+ */
+private object ActorProfileCache {
+
+    private val store = java.util.concurrent.ConcurrentHashMap<String, ActorProfile>()
+
+    fun get(actorId: String): ActorProfile? = store[actorId]
+
+    fun put(actorId: String, profile: ActorProfile) {
+        store[actorId] = profile
+    }
+}
+
+/** 按钮组：播放 / 换源 / 收藏，横向排列、间距 12dp。 */
 @Composable
 private fun HeroDetailActionRow(
     requesters: List<FocusRequester>,
@@ -384,6 +688,7 @@ private fun HeroDetailActionRow(
     onConfirm: (Int) -> Unit,
     onMoveLeft: (Int) -> Unit,
     onMoveRight: (Int) -> Unit,
+    onMoveDown: (Int) -> Unit,
 ) {
     Row(horizontalArrangement = Arrangement.spacedBy(DETAIL_ACTION_GAP)) {
         DETAIL_ACTIONS.forEachIndexed { index, action ->
@@ -394,6 +699,7 @@ private fun HeroDetailActionRow(
                 onConfirm = { onConfirm(index) },
                 onMoveLeft = { onMoveLeft(index) },
                 onMoveRight = { onMoveRight(index) },
+                onMoveDown = { onMoveDown(index) },
             )
         }
     }
@@ -405,7 +711,7 @@ private fun HeroDetailActionRow(
  * 焦点态按需求取 [HeroAccentColor] 纯红底 + 纯白文字/图标；
  * 常态沿用原版 `shape_detail_item_normal` 的 `white_10`（`#1AFFFFFF`）底 + 4dp 圆角。
  *
- * 上下键直接消费：主页面下方已经没有其他可聚焦区域，不消费会让焦点搜索落到别处。
+ * 方向键：←/→ 在按钮间移动，↓ 进入演职员行，↑ 已到内容区顶部、直接消费。
  */
 @Composable
 private fun HeroDetailActionButton(
@@ -415,6 +721,7 @@ private fun HeroDetailActionButton(
     onConfirm: () -> Unit,
     onMoveLeft: () -> Unit,
     onMoveRight: () -> Unit,
+    onMoveDown: () -> Unit,
 ) {
     val interaction = remember { MutableInteractionSource() }
     val isFocused by interaction.collectIsFocusedAsState()
@@ -437,7 +744,12 @@ private fun HeroDetailActionButton(
                         true
                     }
 
-                    Key.DirectionUp, Key.DirectionDown -> true
+                    Key.DirectionDown -> {
+                        onMoveDown()
+                        true
+                    }
+
+                    Key.DirectionUp -> true
 
                     else -> false
                 }
@@ -811,6 +1123,14 @@ private fun focusAction(requesters: List<FocusRequester>, index: Int, onFocused:
     if (requestDetailFocus(requesters, index)) onFocused(index)
 }
 
+/**
+ * 演职员行移动：只负责请求焦点。
+ * 记忆索引由每个条目的 `onFocusChanged` 维护（Lazy 项未组合时 request 会失败，忽略即可）。
+ */
+private fun focusCast(requesters: List<FocusRequester>, index: Int) {
+    requestDetailFocus(requesters, index)
+}
+
 /** 按钮组定义：图标、图标尺寸、文案全部集中在这里，新增按钮只改这个列表。 */
 private data class HeroDetailAction(
     val label: String,
@@ -818,8 +1138,8 @@ private data class HeroDetailAction(
     val iconSize: Dp,
 )
 
-/** 演职员假数据：姓名 + 头像地址（picsum 稳定图，不依赖 TMDB）。 */
-private data class HeroCast(val name: String, val avatarUrl: String)
+/** 演职员：TMDB person id + 姓名 + 头像地址（picsum 稳定图，不依赖 TMDB）。 */
+private data class HeroCast(val id: String, val name: String, val avatarUrl: String)
 
 private data class HeroDetail(
     val title: String,
@@ -827,6 +1147,8 @@ private data class HeroDetail(
     val synopsis: String,
     val posterUrl: String,
     val backdropUrl: String,
+    /** TMDB 艺术字 Logo；null / 空串时回落 32sp 纯文字标题。 */
+    val logoUrl: String?,
     val cast: List<HeroCast>,
     val flags: List<String>,
     val episodes: List<String>,
@@ -838,15 +1160,24 @@ private data class HeroDetail(
 private val DEMO_DETAIL = HeroDetail(
     title = "后会无期",
     meta = "2026 · 剧情 · 全 24 集 · 9.1",
+    // 故意写长，用来验证「简介最多 4 行 + 省略号」以及 440dp 的换行宽度。
     synopsis = "三个男人一路向西，在公路尽头重新认识了自己。他们带着各自的秘密出发，" +
-        "却在无人区里把话说得比过去十年都清楚。",
+        "却在无人区里把话说得比过去十年都清楚。有人在加油站丢了钱包，有人在沙漠里捡回一条狗，" +
+        "还有人把最想说的话留到了最后一句。",
     posterUrl = "https://picsum.photos/seed/hero-detail-poster/300/420",
     backdropUrl = "https://picsum.photos/seed/hero-detail-backdrop/1280/720",
+    // 演示「无 Logo」分支：显示 32sp 文字 + 跑马灯。
+    // 要验证 Logo 分支，把下面换成 TMDB 的 logo 地址（`https://image.tmdb.org/t/p/w500/xxx.png`）即可。
+    logoUrl = null,
     cast = listOf(
         "李海潮", "陈屿", "林晚舟", "周野", "苏见月",
         "顾云深", "沈青禾", "许知白", "叶南", "宋一诺",
     ).mapIndexed { index, name ->
-        HeroCast(name = name, avatarUrl = "https://picsum.photos/seed/hero-cast-$index/120/120")
+        HeroCast(
+            id = "hero-cast-$index",
+            name = name,
+            avatarUrl = "https://picsum.photos/seed/hero-cast-$index/120/120",
+        )
     },
     flags = listOf("线路一", "线路二", "线路三"),
     episodes = (1..24).map { "第 $it 集" },
@@ -854,10 +1185,11 @@ private val DEMO_DETAIL = HeroDetail(
     lastWatchedEpisode = 7,
 )
 
+/** 按钮顺序按需求固定为 播放 | 换源 | 收藏。 */
 private val DETAIL_ACTIONS = listOf(
     HeroDetailAction(label = "播放", iconRes = R.drawable.ic_widget_play, iconSize = 24.dp),
-    HeroDetailAction(label = "收藏", iconRes = R.drawable.ic_detail_keep_off, iconSize = 20.dp),
     HeroDetailAction(label = "换源", iconRes = R.drawable.ic_detail_change, iconSize = 20.dp),
+    HeroDetailAction(label = "收藏", iconRes = R.drawable.ic_detail_keep_off, iconSize = 20.dp),
 )
 
 /** 全局左侧基准线：内容区左侧 padding 严格 24dp（原版详情页同值）。 */
@@ -872,6 +1204,11 @@ private const val DETAIL_ACTION_PLAY = 0
 // ---------------------------------------------------------------------------
 // 左下内容区（activity_detail.xml detailTop L62-190）
 // ---------------------------------------------------------------------------
+/** 内容区底部留白：防止最后一行演职员贴到屏幕边缘。 */
+private val CONTENT_BOTTOM_PADDING = 32.dp
+/** TMDB 艺术字 Logo：高 72dp、最宽 720dp（XML heroLogoImg L82-89）。 */
+private val LOGO_HEIGHT = 72.dp
+private val LOGO_MAX_WIDTH = 720.dp
 private const val DETAIL_TITLE_SP = 32f
 private val DETAIL_TITLE_HEIGHT = 36.dp
 private val DETAIL_TITLE_META_GAP = 2.dp
@@ -879,13 +1216,14 @@ private val DETAIL_META_HEIGHT = 20.dp
 private const val DETAIL_META_SP = 14f
 private val DETAIL_META_COLOR = Color(0xCCFFFFFF)
 private val DETAIL_META_DESC_GAP = 4.dp
-private val DETAIL_DESC_HEIGHT = 40.dp
-private const val DETAIL_DESC_WIDTH_FRACTION = 0.5f
+/** 简介最大宽度 440dp：每行约 30 个汉字，4 行刚好不喧宾夺主。 */
+private val DETAIL_DESC_MAX_WIDTH = 440.dp
+private const val DETAIL_DESC_MAX_LINES = 4
 private const val DETAIL_DESC_SP = 12f
 private const val DETAIL_DESC_LINE_HEIGHT_SP = 17f
 private val DETAIL_DESC_COLOR = Color(0xBBFFFFFF)
-private val DETAIL_ACTIONS_TOP_GAP = 18.dp
-private val DETAIL_CAST_TOP_GAP = 18.dp
+private val DETAIL_ACTIONS_TOP_GAP = 12.dp
+private val DETAIL_CAST_TOP_GAP = 16.dp
 
 // XML 阴影参数是 px 值，Compose 的 Shadow 同样按 px 解释，因此直接照抄。
 private val DETAIL_TITLE_SHADOW = Shadow(
@@ -905,7 +1243,7 @@ private val DETAIL_DESC_SHADOW = Shadow(
 )
 
 // ---------------------------------------------------------------------------
-// 演职员区（Netflix 风格）：60dp 圆形头像 + 12sp 名字，不可聚焦
+// 演职员区（Netflix 风格）：60dp 圆形头像 + 12sp 名字，可聚焦
 // ---------------------------------------------------------------------------
 private const val CAST_TITLE_SP = 14f
 private val CAST_TITLE_GAP = 10.dp
@@ -918,6 +1256,29 @@ private const val CAST_NAME_SP = 12f
 private val CAST_NAME_COLOR = Color(0xCCFFFFFF)
 private val CAST_ITEM_WIDTH = 76.dp
 private val CAST_ITEM_GAP = 12.dp
+
+/** 焦点态：2dp 红圈 + 1.08 倍放大。 */
+private val CAST_FOCUS_BORDER = 2.dp
+private const val CAST_FOCUS_SCALE = 1.08f
+
+// ---------------------------------------------------------------------------
+// 演员详情弹窗（轻量骨架）
+// ---------------------------------------------------------------------------
+private const val ACTOR_DIALOG_WIDTH_FRACTION = 0.5f
+private val ACTOR_DIALOG_SHAPE = RoundedCornerShape(20.dp)
+private val ACTOR_DIALOG_BACKGROUND = Color(0xF2141414)
+private val ACTOR_DIALOG_PADDING = 24.dp
+private val ACTOR_DIALOG_AVATAR = 56.dp
+private val ACTOR_DIALOG_AVATAR_GAP = 12.dp
+private val ACTOR_DIALOG_HEADER_GAP = 16.dp
+private val ACTOR_DIALOG_SPINNER = 18.dp
+private const val ACTOR_DIALOG_NAME_SP = 18f
+private const val ACTOR_DIALOG_BODY_SP = 14f
+private const val ACTOR_DIALOG_BODY_LINE_HEIGHT = 22f
+private val ACTOR_DIALOG_HINT_COLOR = Color(0x99FFFFFF)
+
+/** 假接口延迟：2 秒，用来验证 Loading 态与「不阻塞遥控器」。 */
+private const val ACTOR_PROFILE_FAKE_DELAY_MS = 2_000L
 
 // ---------------------------------------------------------------------------
 // 右上浮动海报 150dp × 210dp（activity_detail.xml posterCard L30-48）

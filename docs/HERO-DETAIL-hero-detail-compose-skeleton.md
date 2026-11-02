@@ -1,202 +1,203 @@
-# HERO-DETAIL — 详情页 Compose（假数据阶段：播放弹窗 + 演职员区）
+# HERO-DETAIL — 详情页 Compose（假数据阶段：播放弹窗 + 演职员 + 演员详情骨架）
 
 ## 1. 目标与验收标准
 
 用 Compose 复刻 TV 详情页的「结构 + 焦点」，数据全部为假数据；**不触碰** `PlayerManager` / `VideoActivity` 等既有播放链路。
 
-本任务分两阶段，第二阶段（本次）把「线路 + 选集」从主页整体搬进播放弹窗，并补上 Netflix 风格的演职员区：
+三个阶段累计交付：
 
-| # | 验收项 | 结果 |
-|---|---|---|
-| 1 | 全屏背景 + 横向遮罩（左纯黑 → 右透明）+ 纵向遮罩（下纯黑 → 上透明） | 已实现 |
-| 2 | 内容区左侧 padding 严格 24dp、整体贴底 | 已实现 |
-| 3 | 右上角浮动小海报 150dp × 210dp | 已实现 |
-| 4 | 剧名 32sp 加粗 / 元数据 14sp `#CCFFFFFF` / 简介 12sp `#BBFFFFFF` 最多两行，且均不可聚焦 | 已实现 |
-| 5 | 播放/收藏/换源：高 36dp、13sp、间距 12dp、图标在左（24dp / 20dp）、焦点红底白字 | 已实现 |
-| 6 | **主页面彻底移除「播放线路」「选集」两块**，只留背景 + 海报 + 文字 + 演职员 + 按钮 | 已实现 |
-| 7 | **「播放」弹出半透明深色大圆角弹窗**：顶部线路 Tab、下方 5 列 × 4 行选集网格，高度 240dp | 已实现 |
-| 8 | **弹窗焦点**：打开即进入弹窗；`lastWatchedEpisode` 吸附历史集；最右侧→下一组第一项；返回键关闭并回到「播放」 | 已实现 |
-| 9 | **演职员区**：标题「导演 / 主演」，`LazyRow` 10 人，60dp 圆形头像 + 浅灰描边 + 12sp 单行省略，**不可聚焦** | 已实现 |
-| 10 | 编译 + 打包通过 | `:app:assembleLeanbackArmeabi_v7aDebug` BUILD SUCCESSFUL |
+| # | 验收项 | 阶段 | 结果 |
+|---|---|---|---|
+| 1 | 全屏背景 + 横向遮罩（左纯黑 → 右透明）+ 纵向遮罩（下纯黑 → 上透明） | 一 | 已实现 |
+| 2 | 内容区左侧 24dp、整体贴底 | 一 | 已实现 |
+| 3 | 右上角浮动小海报 150dp × 210dp | 一 | 已实现 |
+| 4 | 剧名 32sp 加粗 / 元数据 14sp `#CCFFFFFF` / 简介 12sp `#BBFFFFFF`，均不可聚焦 | 一 | 已实现 |
+| 5 | 播放/换源/收藏：高 36dp、13sp、间距 12dp、图标在左（24dp / 20dp）、焦点红底白字 | 一/三 | 已实现 |
+| 6 | 主页面移除线路/选集，收进播放弹窗（线路 Tab + 5×4 选集网格 240dp） | 二 | 已实现 |
+| 7 | 弹窗焦点：打开吸附历史集、最右列切下一组、返回键回「播放」 | 二 | 已实现 |
+| 8 | **主页面从下往上**：剧名/Logo → 元数据 → 简介 → 按钮组 → 演职员，底部 padding 32dp | 三 | 已实现 |
+| 9 | **Logo 位**：高 72dp、最大宽 720dp、靠左；无 Logo 时 32sp 文字 + `basicMarquee` | 三 | 已实现 |
+| 10 | **简介最多 4 行**、最大宽度 440dp、超出省略 | 三 | 已实现 |
+| 11 | **按钮顺序 播放 → 换源 → 收藏**，默认焦点「播放」 | 三 | 已实现 |
+| 12 | **演职员可聚焦**：焦点红圈 + 1.08 倍放大；名字 12sp 单行 | 三 | 已实现 |
+| 13 | **演员详情弹窗**：点击立即弹出、IO 异步加载、文本缓存、图片交给 Coil | 三 | 已实现 |
+| 14 | 编译 + 打包通过 | 三 | `:app:assembleLeanbackArmeabi_v7aDebug` BUILD SUCCESSFUL |
 
 ## 2. 证据来源
 
 | 来源 | 用途 | 可信度 |
 |---|---|---|
-| `ref_docs/activity_detail.xml` | 主布局：遮罩、右上小海报、内容区、按钮、线路/选集区块的全部尺寸与字号 | 上游逆向资源（权威） |
-| `ref_docs/adapter_episode.xml` | 选集项：16sp、居中、单行 marquee、match_parent 宽 | 上游逆向资源（权威） |
-| `ref_docs/adapter_flag.xml` | 线路项：16sp、居中、selector_item 焦点背景 | 上游逆向资源（权威） |
-| `app/src/leanback/res/drawable/selector_item.xml` + `shape_item_*.xml` | 线路项三态：normal `black_20` / selected `black_40` / focused `black_40`+1.5dp 白描边、4dp 圆角、12dp 左右 padding | 仓库内同源资源 |
-| `app/src/main/res/drawable/shape_detail_item_normal.xml` / `shape_detail_play_*.xml` | 按钮常态 `white_10` + 4dp 圆角、焦点红渐变 | 仓库内逆向资源 |
+| `ref_docs/activity_detail.xml` | 主布局：遮罩、海报卡、内容区、`heroLogoImg`（L82-89，72dp/最大 720dp/fitStart）、按钮、线路/选集 | 上游逆向资源（权威） |
+| `ref_docs/adapter_episode.xml` | 选集项：16sp、居中、单行 marquee | 上游逆向资源（权威） |
+| `ref_docs/adapter_flag.xml` | 线路项：16sp、居中、`selector_item` | 上游逆向资源（权威） |
+| `app/src/leanback/res/drawable/selector_item.xml` + `shape_item_*.xml` | 线路项三态与 12dp 左右 padding | 仓库内同源资源 |
+| `app/src/main/res/drawable/shape_detail_item_normal.xml` | 按钮常态 `white_10` + 4dp 圆角 | 仓库内逆向资源 |
 | `app/src/main/res/drawable/shape_poster_card.xml` | 海报卡 12dp 圆角 + `black_20` 底 | 仓库内逆向资源 |
-| `HeroHomeActivity.kt` | 同套 HeroUI 的 Compose 写法：遮罩、显式焦点交接、`basicMarquee` | 本项目已合入代码 |
-| 本次需求原文（弹窗 / 演职员） | 第二阶段布局与交互的唯一依据；与 XML 冲突时以需求为准 | 用户明确指令 |
-
-> `bg_hero_mask_h` / `bg_hero_mask_v` 两个 drawable 在仓库与 `ref_docs/` 中都不存在，
-> 因此遮罩按需求原文实现：横向 `Color.Black → Color.Transparent`、纵向 `Color.Transparent → Color.Black`。
+| `HeroHomeActivity.kt` / `HeroImageLoader.kt` | 同套 HeroUI 写法：遮罩、显式焦点交接、Coil3 单例 | 本项目已合入代码 |
+| 本次需求原文 | 第三阶段布局与交互的唯一依据；与 XML 冲突处以需求为准 | 用户明确指令 |
 
 ## 3. 方案对比
 
 | 方案 | 结论 | 理由 |
 |---|---|---|
-| A. 不改（继续用 `VideoActivity` / `TmdbDetailActivity` 的 XML 详情页） | 不采用 | 与已定稿的 HeroUI 视觉体系不一致；首页已迁到 Compose，详情页需要同一套遮罩与字号基线 |
-| B. 原样照搬上游 XML（`activity_detail.xml` + Leanback `HorizontalGridView`/`RecyclerView`） | 不采用 | 上游布局深度绑定五模式详情页与 ViewBinding id 体系，直接搬会引入播放链路耦合，违反「不碰 PlayerManager」红线 |
-| C. Compose 重写 + 显式焦点交接 + XML 顶部区块留在主页、下部区块收进弹窗（本方案） | **采用** | 与 `HeroHomeActivity` 同一套实现范式；纯展示文本天然不可聚焦；焦点流转可逐区显式控制；假数据阶段零播放依赖 |
+| A. 继续用 `VideoActivity` / `TmdbDetailActivity` 的 XML 详情页 | 不采用 | 与已定稿的 HeroUI 视觉体系不一致 |
+| B. 原样照搬上游 XML（`HorizontalGridView` / `RecyclerView`） | 不采用 | 深度绑定五模式详情页与 ViewBinding id 体系，会引入播放链路耦合 |
+| C. Compose 重写 + 显式焦点交接（本方案） | **采用** | 与 `HeroHomeActivity` 同一范式；纯文本天然不可聚焦；焦点逐区显式控制；假数据阶段零播放依赖 |
 
-## 4. 与 `ref_docs/activity_detail.xml` 的逐项对齐结果
+## 4. 主页面布局（从下往上）
 
-### 4.1 主页面（保持不动部分）
+```
+Column(align = BottomStart, padding(start/end 24dp, bottom 32dp))
+├ 1. 剧名 / Logo
+├ 2. 元数据 14sp #ccffffff
+├ 3. 简介 12sp #bbffffff，最宽 440dp，最多 4 行
+├ 4. 按钮组：播放 | 换源 | 收藏
+└ 5. 演职员 LazyRow（最底部）
+```
 
-| 节点 | XML 值 | 实现值 | 结论 |
-|---|---|---|---|
-| 内容容器 padding | 左右 24dp、上下 0dp（L54-61） | 同 | 已对齐 |
-| 剧名 | 32sp bold / 高 36dp / 贴底 / 阴影 #cc000000 2,2,12（L69-81） | 同 | 已对齐 |
-| 元数据 | 14sp / #ccffffff / 高 20dp / marginTop 2dp / 阴影 #aa000000 1.5,1.5,8（L90-102） | 同 | 已对齐 |
-| 简介 | 12sp / #bbffffff / 高 40dp / marginTop 4dp / 2 行 / 行距+3dp / 占父宽 1/2 / 阴影 #aa000000 1.2,1.2,6（L103-124） | 同 | 已对齐 |
-| 按钮组间距 | marginTop 12dp（L131） | 同 | 已对齐 |
-| 按钮尺寸 | 高 36dp、左右 padding 16dp、drawablePadding 4dp、13sp **bold**（L132-188） | 同 | 已对齐 |
-| 按钮间间距 | layout_marginEnd 12dp（L149/L168） | 12dp | 已对齐 |
-| 右上小海报 | 150×210dp、marginTop 72dp、marginEnd 80dp、padding 4dp、12dp 圆角、`black_20` 底（L30-48） | 同 | 已对齐 |
-
-### 4.2 搬进播放弹窗部分（数值沿用 XML）
-
-| 节点 | XML 值 | 弹窗实现 |
+| 节点 | 取值 | 说明 |
 |---|---|---|
-| 区块标题 | 红条 4×16dp + marginEnd 10dp + 15sp bold（L212-223 / L245-256） | 同（`HeroDetailSectionTitle`） |
-| 线路标题文案 | `播放线路`（L223） | 同 |
-| 线路项 | 高 34dp、16sp、12dp 左右 padding、4dp 圆角（`adapter_flag.xml` + `shape_item_*.xml`） | 同 |
-| 线路项底色 | 常态 `black_20` / 已选 `black_40` | 同 |
-| 选集项字号 | 16sp、居中、单行（`adapter_episode.xml`） | 同（16sp 居中，焦点态跑马灯） |
+| 底部留白 | 32dp | 需求新增，防止演职员行贴屏幕边缘 |
+| Logo | 高 72dp、最宽 720dp、`ContentScale.Fit` + `CenterStart` | 对应 XML `heroLogoImg` L82-89 |
+| 无 Logo 文字 | 32sp bold、高 36dp、`basicMarquee()` | 长剧名滚动，不再省略号截断 |
+| 元数据 | 14sp `#ccffffff`、高 20dp、阴影 1.5/1.5/8 | 沿用 XML L90-102 |
+| 简介 | 12sp `#bbffffff`、`widthIn(max = 440.dp)`、`maxLines = 4`、行距 +3dp | XML 原为半宽 2 行，按需求放宽 |
+| 按钮 | 高 36dp、13sp bold、左右 16dp、图标间距 4dp、按钮间距 12dp | 焦点纯红底 + 纯白文字图标 |
+| 间距 | 简介→按钮 12dp、按钮→演职员 16dp | 需求「紧跟在简介下方」 |
 
-### 4.3 有意偏离（需求优先于原版）
+> 剧名/元数据/简介均为纯展示：没有任何 `focusable` / `clickable`，遥控器选不中。
 
-| 项 | 原版 | 本实现 | 原因 |
-|---|---|---|---|
-| 按钮焦点态 | 红色渐变 `shape_detail_*_focused` | 纯红 `HeroAccentColor` | 需求原文「选中时背景变红（HeroAccentColor）」 |
-| 线路项焦点态 | `black_40` 底 + 1.5dp 白描边 | `HeroAccentColor` 红底 | **已确认保留**：二开要求按钮/海报/线路焦点统一红色调；未选中/已选中底色仍照抄 `black_20`/`black_40` |
-| 线路行高 | XML 只有 `wrap_content` | 固定 34dp | **已确认保留**：固定行高渲染更稳定 |
-| 选集容器 | 主页 140dp 纵向列表（L271-280） | 弹窗内 240dp、5 列 × 4 行的 `LazyVerticalGrid` | 本次需求明确要求「做成一屏可见的网格弹窗」，属需求覆盖而非待确认偏离 |
-| 选集行高 | XML 只有 `wrap_content` 文本行 | 固定 46dp | 固定行高保证 240dp 精确容纳 4 行（16 + 46×4 + 8×3 + 16 = 240） |
-| 小海报可见性 | `visibility="gone"`（仅 TMDB 海报态显示） | 始终显示 | 需求原文「右上角放一个浮动小海报」 |
-
-## 5. 播放弹窗 `HeroPlayDialog`
-
-### 5.1 结构与尺寸
-
-```
-遮罩 0x99000000（全屏，让底图透出形成层次）
-└ 面板：宽 82% / 深色 0xE6141414 / 24dp 圆角 / 1dp 亮边 0x1FFFFFFF / 内边距 32dp
-  ├ 「播放线路」标题（红条 + 15sp bold）
-  ├ 线路 Tab 行：高 34dp，间距 12dp，横向滚动
-  ├ 间距 20dp
-  ├ 「选集」标题 + 右侧「第 N / M 组」页码（12sp 0x99FFFFFF）
-  └ 选集网格：LazyVerticalGrid 5 列、高 240dp、上下 padding 16dp、间距 8dp
-       └ 格子：高 46dp、6dp 圆角、常态 0x14FFFFFF、焦点 0x1FFFFFFF 底 + 2dp 红框
-```
-
-- 一页 20 集（5×4），页码随分组变化；总页数 = `ceil(集数 / 20)`，至少 1 页。
-- 当前播放集用红字标出（`playingEpisode`），与焦点红框区分：焦点看边框，播放看字色。
-
-### 5.2 焦点契约
-
-| 输入 | 行为 |
-|---|---|
-| 打开弹窗 | 强制进入弹窗，落 `lastWatchedEpisode`：1 基集号 → 页 = `(n-1)/20`、格 = `(n-1)%20`；`lastWatchedEpisode = 0`（新剧）→ 第 1 集 |
-| 网格内 ←/→ | 同一行内移动；最右列再 → 切下一组并落**新组第一项**；最左列再 ← 切上一组 |
-| 网格内 ↑/↓ | 行间移动；第 1 行 ↑ 回线路 Tab（停在记忆中的那条） |
-| 网格 ↓ 到底 | 消费事件，焦点停留原地 |
-| 线路 ←/→ | 线路间移动，端点消费 |
-| 线路 ↑ | 消费（无处可去，不掉出弹窗） |
-| 线路 ↓ | 回选集网格，停在离开时那一格 |
-| 返回键 | 关闭弹窗；主页面 `LaunchedEffect(showPlayDialog)` 把焦点还给「播放」 |
-| 点击面板外 | 不关闭（`dismissOnClickOutside = false`，避免误触丢焦点） |
-
-> 弹窗是独立 Window，首帧可能还没拿到 window focus，因此焦点请求做了逐帧重试（最多 5 帧）后才放弃。
-
-### 5.3 历史集吸附示例
-
-`DEMO_DETAIL.lastWatchedEpisode = 7` → 第 7 集 = 第 1 页第 7 格，弹窗一开焦点就在那儿。
-接真实数据时，把 `Vod` 里的历史进度（1 基）填进来即可；没有历史传 `0`。
-
-## 6. 演职员区 `HeroCastSection`
+## 5. 演职员行
 
 | 项 | 取值 |
 |---|---|
-| 位置 | 简介下方、按钮组上方（简介 → 18dp → 演职员 → 18dp → 按钮） |
-| 标题 | 「导演 / 主演」，14sp `#ccffffff`，前方 4dp × 16dp 红色圆角竖条（与区块标题同一 `HeroDetailSectionTitle`，只是字号 14sp） |
-| 容器 | `LazyRow`，10 个假数据，间距 12dp，右侧 contentPadding 24dp 让最后一位能贴边滑出 |
-| 卡片 | 宽 76dp；60dp × 60dp 圆形头像（`CircleShape` + 1dp `#66FFFFFF` 浅灰描边 + `#2A2A2A` 底）→ 6dp → 12sp 名字居中单行省略 |
-| 图片 | Coil `AsyncImage`，picsum 稳定假图（`?seed=hero-cast-N`），不依赖 TMDB Key |
-| 焦点 | **整块不可聚焦**：没有任何 `focusable` / `clickable` 修饰符，默认焦点永远在「播放」，↑/↓ 不会被它截走 |
+| 容器 | `LazyRow`，标题「导演 / 主演」14sp `#ccffffff` + 4×16dp 红色圆角竖条 |
+| 卡片 | 宽 76dp；60dp 圆形头像 → 6dp → 12sp 名字居中单行省略 |
+| 常态 | 1dp `#66FFFFFF` 浅灰描边 |
+| 焦点态 | 2dp `HeroAccentColor` 红圈 + 1.08 倍放大（`animateFloatAsState` 160ms），名字转纯白 |
+| 点击 | `clickable` → `onActorClick(actorId, actorName)` 语义（当前实现为 `onConfirm(index)` → 打开演员弹窗） |
+| 图片 | Coil `AsyncImage`，picsum 稳定假图，不依赖 TMDB Key |
 
-> 需求给了「可以横向滚动但不抢默认焦点」的备选。这里选不可聚焦：TV 端不聚焦的 `LazyRow` 无法用遥控器滚动，
-> 但 10 人 × 76dp + 间距 ≈ 868dp，在 960dp 宽的电视上基本一屏放得下；若后续要支持几十位演职员，
-> 再加 `focusable` 并把它接进 ↑/↓ 链路即可（改动只在本区块内）。
+## 6. 演员详情弹窗与异步架构
 
-## 7. 完整焦点契约（主页面）
+### 6.1 交互时序（不阻塞 UI）
 
 ```
-播放 ⇄ 收藏 ⇄ 换源            ← 左右：index ± 1，到端点消费不越界
-        │ ↓ / 确定
-     [播放弹窗]              ← 内部焦点独立，见 §5.2
-        │ 返回键
-      播放（焦点还原）
+确定键点击头像
+  → 同一帧：pendingCastFocus = index；actorDialogIndex = index
+  → Dialog 立即组合：显示头像 + 姓名 + 「加载中…」转圈
+  → LaunchedEffect 启动：withContext(Dispatchers.IO) { delay(2000) }  ← 主线程零阻塞
+  → 返回后：写缓存 → profile 状态更新 → 显示「演员详情开发中」占位文案
+  → 返回键关闭 → actorDialogIndex = null → 焦点回到被点的那位演员
 ```
 
-- 进页面：`LaunchedEffect(showPlayDialog)` → `requestDetailFocus(actionRequesters, 0)`（逐帧重试）。
-- 按钮 ↑/↓ 直接消费：主页面已无其他可聚焦区域，不消费会让焦点搜索落到别处。
-- 纯展示文本（剧名/元数据/简介/演职员）没有任何 `focusable` / `clickable` 修饰符。
+- 命中缓存时首帧直接出内容，不显示 Loading（`remember(actor.id)` 初始化即查缓存）。
+- `dismissOnClickOutside = true`：TV 上误触空白也能关。
 
-## 8. 关键设计决策
+### 6.2 缓存策略（需求核心）
 
-1. **遮罩取值**：横向 `Color.Black → Color.Transparent`、纵向 `Color.Transparent → Color.Black`，端点严格取纯黑/全透明，中间不加插值。
-2. **尺寸写死**：所有 dp/sp 集中在本文件末尾常量区，接真实数据不涉及尺寸改动。
-3. **焦点不用 2D 自动搜索**：按钮 / 线路 / 选集格三组 `FocusRequester` 全部显式 `requestFocus`，每颗可聚焦项用 `onPreviewKeyEvent` 抢先消费四方向键。
-4. **分组翻页而非连续滚动**：网格只渲染当前页 20 格，`FocusRequester` 数量固定为 20，避免长列表下 requester 列表随集数膨胀。
-5. **弹窗独立 Window**：`Dialog(usePlatformDefaultWidth = false)` 让面板能占到 82% 宽；遮罩让底图透出，形成「半透明」而非死黑。
-6. **跑马灯只在焦点态开启**（`basicMarquee`），常态省略号收尾。
+| 数据 | 处理 | 位置 |
+|---|---|---|
+| 演员文本（简介/生日/出生地） | 进程内 `ConcurrentHashMap` | `ActorProfileCache` |
+| 演员头像 | **不手动下载、不落自定义缓存** | Coil 默认 ImageLoader 的磁盘 LRU |
+| 参演作品海报 | 同上，交给 Coil | 同上 |
 
-## 9. 变更文件
+- 换 Room 时只需替换 `ActorProfileCache.get/put` 两个方法，调用点不动。
+- 项目里 `HeroImageLoader.install()` 只替换网络栈（OkHttp + DoH），**没有**自定义磁盘缓存；
+  因此头像/海报走的是 Coil 默认 LRU（`cacheDir/image_cache`，按可用空间比例上限，满后自动淘汰），
+  与需求「交给 Coil 默认缓存管理」一致，无需另配 250MB。
+
+### 6.3 假数据
+
+`loadActorProfile()` 内 `delay(2_000)` 后返回占位档案：
+生日 `1988-06-12`、出生地 `中国 · 上海`、简介「演员详情开发中。…」。
+接 TMDB 时只改这个函数体（`GET /person/{id}?language=zh-CN`，只取文本字段）。
+
+## 7. 播放弹窗（第二阶段，保持不变）
+
+```
+遮罩 0x99000000
+└ 面板 82% 宽 · 0xE6141414 · 24dp 圆角 · 1dp 亮边 · 内边距 32dp
+  ├ 「播放线路」标题 + 34dp 线路 Tab（焦点红底白字）
+  └ 「选集」标题 + 第 N/M 组 + 5 列 × 4 行网格（240dp，格高 46dp，焦点 2dp 红框）
+```
+
+焦点：打开吸附 `lastWatchedEpisode`（1 基，0 = 新剧落第 1 集）；网格最右列 → 切下一组落首项，
+最左列 ← 切上一组；第 1 行 ↑ 回线路 Tab；线路 ↓ 回网格记忆格；返回键关闭。
+
+## 8. 焦点契约（完整）
+
+```
+                 ┌──────── 播放 ⇄ 换源 ⇄ 收藏 ────────┐
+                 │  ↑                                    │ ↓
+                 └──────────── 演职员 LazyRow ⇄ ──────────┘
+                              （行内 ←/→，↓ 消费）
+播放 ──确定──▶ 播放弹窗（线路 ⇄ 选集网格）
+演员 ──确定──▶ 演员详情弹窗（加载 → 占位文案）
+```
+
+| 输入 | 行为 |
+|---|---|
+| 进页面 | 焦点落「播放」 |
+| 按钮 ←/→ | 三颗按钮间移动，端点消费 |
+| 按钮 ↓ | 进入演职员行，落在上次停留的演员（初始第 1 位） |
+| 按钮 ↑ | 内容区顶部，消费 |
+| 演职员 ←/→ | 行内横移，端点消费 |
+| 演职员 ↑ | 回「播放」 |
+| 演职员 ↓ | 最底部，消费 |
+| 关闭播放弹窗 | 焦点回「播放」 |
+| 关闭演员弹窗 | 焦点回**刚才点击的那位演员** |
+
+## 9. 有意偏离（需求优先于原版）
+
+| 项 | 原版 | 本实现 | 原因 |
+|---|---|---|---|
+| 按钮焦点态 | 红色渐变 `shape_detail_*_focused` | 纯红 `HeroAccentColor` | 需求原文「焦点态为红底白字白图标」 |
+| 线路项焦点态 | `black_40` + 1.5dp 白描边 | `HeroAccentColor` 红底 | 已确认：二开要求焦点统一红色调 |
+| 线路行高 | `wrap_content` | 固定 34dp | 已确认：固定行高渲染更稳定 |
+| 选集容器 | 主页 140dp 纵向列表 | 弹窗 240dp 5×4 网格 | 需求二阶段明确要求 |
+| 简介 | 半宽 2 行 | 最宽 440dp、4 行 | 需求三阶段明确要求 |
+| 按钮顺序 | 播放 / 收藏 / 换源 | 播放 / 换源 / 收藏 | 需求三阶段明确要求 |
+| 演职员 | 不可聚焦 | 可聚焦 + 红圈放大 + 点击弹窗 | 需求三阶段明确要求 |
+
+## 10. 变更文件
 
 | 文件 | 类型 |
 |---|---|
-| `app/src/main/java/com/fongmi/android/tv/ui/activity/HeroDetailActivity.kt` | 主页面删线路/选集、新增演职员区、新增播放弹窗；入口 `start(context, title)` |
-| `app/src/main/java/com/fongmi/android/tv/ui/activity/HeroHomeActivity.kt` | 海报卡确定键由「直接起播」改为「拉起详情页」 |
-| `app/src/main/AndroidManifest.xml` | 注册 `HeroDetailActivity`（`exported=true`，供 adb 拉起；不加 launcher intent-filter） |
+| `app/src/main/java/com/fongmi/android/tv/ui/activity/HeroDetailActivity.kt` | 主页面布局重排、Logo 位、4 行简介、按钮顺序、演职员可聚焦、演员详情弹窗与缓存 |
+| `app/src/main/java/com/fongmi/android/tv/ui/activity/HeroHomeActivity.kt` | （第二阶段）海报卡确定键改为拉起详情页 |
+| `app/src/main/AndroidManifest.xml` | （第一阶段）注册 `HeroDetailActivity` |
 
 **未改动**：`VideoActivity`、`PlayerManager` 及任何播放链路。
-`HeroHomeActivity.launchPlayback(...)` 播放桥接**刻意保留未删**：下一阶段详情页的「播放」按钮要复用它。
 
-## 10. 验证
+## 11. 验证
 
 ```bash
-# 编译 + 打包（本机需先设 JAVA_HOME / ANDROID_HOME）
 ./gradlew :app:compileLeanbackArmeabi_v7aDebugKotlin
 ./gradlew :app:assembleLeanbackArmeabi_v7aDebug
 # → app/build/outputs/apk/leanbackArmeabi_v7a/debug/app-leanback-armeabi_v7a-debug.apk
 
-# 拉起页面
 adb shell am start -n com.silent.android.webhtv/com.fongmi.android.tv.ui.activity.HeroDetailActivity
 ```
 
 实机清单：
 
-1. 首页海报确定键 → 详情页，标题为所点剧名。
-2. 默认焦点在「播放」，←→ 在三颗按钮间，↑/↓ 不丢焦点。
-3. 确定「播放」→ 弹窗出现，焦点直接落在第 7 集（`DEMO_DETAIL.lastWatchedEpisode` 演示值）。
-4. 网格最右侧 → 切到第 2 组且焦点在第 1 格；最左侧 ← 回到第 1 组。
-5. 第 1 行 ↑ → 线路 Tab；线路 ↓ → 回到离开的那一格。
-6. 返回键 → 弹窗关闭，焦点回到「播放」。
-7. 演职员头像正常加载，遥控器无法把焦点移到头像或名字上。
+1. 首页海报确定键 → 详情页；默认焦点「播放」。
+2. 简介显示 4 行后省略；标题在无 Logo 时按 32sp 显示。
+3. 「播放」↓ → 焦点落到第 1 位演员（红圈 + 放大）；←/→ 横移；↑ 回「播放」。
+4. 演员上按确定 → 弹窗**立刻**出现并转圈，2 秒后显示「演员详情开发中」；期间遥控器不卡。
+5. 返回键关弹窗 → 焦点回到刚才那位演员。
+6. 「播放」确定 → 播放弹窗吸附第 7 集；最右列 → 切第 2 组；返回键回「播放」。
 
-## 11. 回滚
+## 12. 回滚
 
-单文件新增 + 一段 manifest 注册，回滚只需删除该 Activity 文件与 manifest 中的 `<activity>` 节点，不影响任何既有页面与播放链路。
-若只想回退本次弹窗/演职员改造，回退到 `recovery/hero-detail-entry/*` 标签即恢复「主页带线路 + 选集」的上一版。
+- 本次改动集中在单文件：`git revert` 对应提交即可。
+- 整体回退到「主页带线路 + 选集」版本：回到标签 `recovery/hero-detail-entry/*`。
 
-## 12. 下一步（未开始）
+## 13. 下一步（未开始）
 
-1. 用真实 `Vod` / `Flag` / `Episode` / 演职员数据替换 `DEMO_DETAIL`（只换数据源，布局不动）。
-2. 弹窗里点选集 / 播放按钮接回既有 `VideoActivity.startDirect(...)` 桥接（复用 `HeroHomeActivity.launchPlayback`，不改 PlayerManager）。
-3. 收藏状态接入 `Keep`，换源接入既有搜索/聚合源入口。
-4. `lastWatchedEpisode` 接真实历史进度（`History` / `Keep`），实现「老剧吸附」的真实闭环。
+1. 用真实 `Vod` / `Flag` / `Episode` / 演职员数据替换 `DEMO_DETAIL`。
+2. `loadActorProfile` 接 TMDB `/person/{id}`，`logoUrl` 接 `images.logos`（`iso_639_1 = zh`）。
+3. 播放按钮与选集点击接 `VideoActivity.startDirect(...)`（复用 `HeroHomeActivity.launchPlayback`，不改 PlayerManager）。
+4. 收藏接 `Keep`，换源接既有搜索/聚合源入口。
+5. `lastWatchedEpisode` 接真实历史进度。
