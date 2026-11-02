@@ -4,7 +4,7 @@
 
 用 Compose 复刻 TV 详情页的「结构 + 焦点」，数据全部为假数据；**不触碰** `PlayerManager` / `VideoActivity` 等既有播放链路。
 
-三个阶段累计交付：
+四个阶段累计交付：
 
 | # | 验收项 | 阶段 | 结果 |
 |---|---|---|---|
@@ -13,7 +13,7 @@
 | 3 | 右上角浮动小海报 150dp × 210dp | 一 | 已实现 |
 | 4 | 剧名 32sp 加粗 / 元数据 14sp `#CCFFFFFF` / 简介 12sp `#BBFFFFFF`，均不可聚焦 | 一 | 已实现 |
 | 5 | 播放/换源/收藏：高 36dp、13sp、间距 12dp、图标在左（24dp / 20dp）、焦点红底白字 | 一/三 | 已实现 |
-| 6 | 主页面移除线路/选集，收进播放弹窗（线路 Tab + 5×4 选集网格 240dp） | 二 | 已实现 |
+| 6 | 主页面移除线路/选集，收进弹窗 | 二 | 已实现 |
 | 7 | 弹窗焦点：打开吸附历史集、最右列切下一组、返回键回「播放」 | 二 | 已实现 |
 | 8 | **主页面从下往上**：剧名/Logo → 元数据 → 简介 → 按钮组 → 演职员，底部 padding 32dp | 三 | 已实现 |
 | 9 | **Logo 位**：高 72dp、最大宽 720dp、靠左；无 Logo 时 32sp 文字 + `basicMarquee` | 三 | 已实现 |
@@ -21,13 +21,19 @@
 | 11 | **按钮顺序 播放 → 换源 → 收藏**，默认焦点「播放」 | 三 | 已实现 |
 | 12 | **演职员可聚焦**：焦点红圈 + 1.08 倍放大；名字 12sp 单行 | 三 | 已实现 |
 | 13 | **演员详情弹窗**：点击立即弹出、IO 异步加载、文本缓存、图片交给 Coil | 三 | 已实现 |
-| 14 | 编译 + 打包通过 | 三 | `:app:assembleLeanbackArmeabi_v7aDebug` BUILD SUCCESSFUL |
+| 14 | **统一弹窗外壳**：`#E6000000` + 16dp 圆角 + 18dp 内边距（选集 / 演员弹窗共用） | 四 | 已实现 |
+| 15 | **顶部栏**：「选集」红底白字徽章 24dp/11sp + 剧名 12sp `basicMarquee` | 四 | 已实现 |
+| 16 | **控制栏**：原始/正序/倒序 + 少列/多列，14sp，选中红字下划线、未选中浅灰 | 四 | 已实现 |
+| 17 | **动态网格**：多列 4 列 / 少列 2 列，高 240dp、格高 34dp、焦点红框 | 四 | 已实现 |
+| 18 | 焦点：控制栏 ↓ 进网格、网格第 1 行 ↑ 回控制栏、跨组与记忆逻辑保持 | 四 | 已实现 |
+| 19 | 编译 + 打包通过 | 四 | `:app:assembleLeanbackArmeabi_v7aDebug` BUILD SUCCESSFUL |
 
 ## 2. 证据来源
 
 | 来源 | 用途 | 可信度 |
 |---|---|---|
 | `ref_docs/activity_detail.xml` | 主布局：遮罩、海报卡、内容区、`heroLogoImg`（L82-89，72dp/最大 720dp/fitStart）、按钮、线路/选集 | 上游逆向资源（权威） |
+| `ref_docs/dialog_source.xml` | 弹窗外壳：18dp 内边距、32dp 顶部栏、24dp/11sp 徽章、12sp 剧名跑马灯 | 上游逆向资源（权威） |
 | `ref_docs/adapter_episode.xml` | 选集项：16sp、居中、单行 marquee | 上游逆向资源（权威） |
 | `ref_docs/adapter_flag.xml` | 线路项：16sp、居中、`selector_item` | 上游逆向资源（权威） |
 | `app/src/leanback/res/drawable/selector_item.xml` + `shape_item_*.xml` | 线路项三态与 12dp 左右 padding | 仓库内同源资源 |
@@ -113,17 +119,40 @@ Column(align = BottomStart, padding(start/end 24dp, bottom 32dp))
 生日 `1988-06-12`、出生地 `中国 · 上海`、简介「演员详情开发中。…」。
 接 TMDB 时只改这个函数体（`GET /person/{id}?language=zh-CN`，只取文本字段）。
 
-## 7. 播放弹窗（第二阶段，保持不变）
+## 7. 选集弹窗（第四阶段重构，外壳对齐 `dialog_source.xml`）
 
 ```
 遮罩 0x99000000
-└ 面板 82% 宽 · 0xE6141414 · 24dp 圆角 · 1dp 亮边 · 内边距 32dp
-  ├ 「播放线路」标题 + 34dp 线路 Tab（焦点红底白字）
-  └ 「选集」标题 + 第 N/M 组 + 5 列 × 4 行网格（240dp，格高 46dp，焦点 2dp 红框）
+└ 统一外壳 HeroDialogShell：82% 宽 · 0xE6000000 · 16dp 圆角 · 内边距 18dp
+  ├ 顶部栏 32dp：红底白字「选集」徽章（24dp 高 / 11sp / 左右 10dp / 4dp 圆角）
+  │              + 12dp + 剧名 12sp #99ffffff · basicMarquee 跑马灯
+  ├ 8dp
+  ├ 控制栏 32dp：原始 / 正序 / 倒序 ┃ 少列 / 多列     …… 右侧「第 N / M 组」11sp
+  ├ 8dp
+  └ LazyVerticalGrid 高 240dp · 格高 34dp · 间距 8dp · 上下 padding 16dp
+      多列 = GridCells.Fixed(4)，少列 = GridCells.Fixed(2)
 ```
 
-焦点：打开吸附 `lastWatchedEpisode`（1 基，0 = 新剧落第 1 集）；网格最右列 → 切下一组落首项，
-最左列 ← 切上一组；第 1 行 ↑ 回线路 Tab；线路 ↓ 回网格记忆格；返回键关闭。
+| 项 | 取值 | 依据 |
+|---|---|---|
+| 外壳底色 | `#E6000000` | 需求一 |
+| 圆角 | 16dp | 需求一 |
+| 内边距 | 18dp | 需求一 / `dialog_source.xml` L5 |
+| 徽章 | 高 24dp、11sp 粗体白字、`HeroAccentColor` 底、左右 10dp | `dialog_source.xml` L19-30 |
+| 剧名 | 12sp `#99ffffff`、`basicMarquee()` | `dialog_source.xml` L122-133 |
+| 控制栏字号 | 14sp | 需求二 |
+| 选中态 | 红字 + 红色下划线（`TextDecoration.Underline`） | 需求二 |
+| 未选中态 | `#99ffffff` 浅灰 | 需求二 |
+| 网格 | 高 240dp、格高 34dp、焦点 2dp 红框 | 需求三 |
+
+**分组与翻页**：每组 5 行 —— 多列 4×5 = 20 集/组，少列 2×5 = 10 集/组；
+240dp 内正好 5 行不裁切，`LazyVerticalGrid` 本身仍可上下滚动（单组超出时会自动滚）。
+
+**记忆模型**：焦点按「**集号**」而不是下标记忆（`currentNumber`），因此切排序、切列数后
+仍停在原来那一集，不会回退到第一格。
+
+**排序**：原始 = 源顺序；正序 = 集号升序；倒序 = 集号降序。演示数据本身就是升序，
+所以「原始」与「正序」看起来一致，「倒序」会明显翻转。
 
 ## 8. 焦点契约（完整）
 
@@ -132,7 +161,7 @@ Column(align = BottomStart, padding(start/end 24dp, bottom 32dp))
                  │  ↑                                    │ ↓
                  └──────────── 演职员 LazyRow ⇄ ──────────┘
                               （行内 ←/→，↓ 消费）
-播放 ──确定──▶ 播放弹窗（线路 ⇄ 选集网格）
+播放 ──确定──▶ 选集弹窗：控制栏（原始/正序/倒序 ┃ 少列/多列）⇄ 选集网格
 演员 ──确定──▶ 演员详情弹窗（加载 → 占位文案）
 ```
 
@@ -147,24 +176,31 @@ Column(align = BottomStart, padding(start/end 24dp, bottom 32dp))
 | 演职员 ↓ | 最底部，消费 |
 | 关闭播放弹窗 | 焦点回「播放」 |
 | 关闭演员弹窗 | 焦点回**刚才点击的那位演员** |
+| 弹窗打开 | 焦点落历史集（`lastWatchedEpisode`；新剧即第 1 集） |
+| 控制栏 ←/→ | 5 个选项间移动，端点消费；↑ 消费 |
+| 控制栏 ↓ | 进网格，回到离开时那一格 |
+| 网格第 1 行 ↑ | 回控制栏，回到离开时那一项 |
+| 网格最右列 → | 切下一组，落新组第一项 |
+| 网格最左列 ← | 切上一组，落该组第一项 |
+| 切排序 / 切列数 | 焦点跟随当前集，不跳回第一格 |
 
 ## 9. 有意偏离（需求优先于原版）
 
 | 项 | 原版 | 本实现 | 原因 |
 |---|---|---|---|
 | 按钮焦点态 | 红色渐变 `shape_detail_*_focused` | 纯红 `HeroAccentColor` | 需求原文「焦点态为红底白字白图标」 |
-| 线路项焦点态 | `black_40` + 1.5dp 白描边 | `HeroAccentColor` 红底 | 已确认：二开要求焦点统一红色调 |
-| 线路行高 | `wrap_content` | 固定 34dp | 已确认：固定行高渲染更稳定 |
-| 选集容器 | 主页 140dp 纵向列表 | 弹窗 240dp 5×4 网格 | 需求二阶段明确要求 |
+| 选集容器 | 主页 140dp 纵向列表 | 弹窗 240dp 网格（4 列 / 2 列可切） | 需求三、四阶段明确要求 |
 | 简介 | 半宽 2 行 | 最宽 440dp、4 行 | 需求三阶段明确要求 |
 | 按钮顺序 | 播放 / 收藏 / 换源 | 播放 / 换源 / 收藏 | 需求三阶段明确要求 |
 | 演职员 | 不可聚焦 | 可聚焦 + 红圈放大 + 点击弹窗 | 需求三阶段明确要求 |
+| 弹窗初始焦点 | — | 历史集（不是控制栏第一项） | 需求四阶段允许「视最佳实践而定」；延续二阶段已确认的「吸附历史集」，少按一次键 |
+| 线路 Tab | `dialog_source.xml` 有站点行 | **本期移除**，弹窗只做选集 | 需求四阶段给的弹窗结构只有 顶部栏 / 控制栏 / 网格；`flags` 数据保留，留给后续「换源」入口 |
 
 ## 10. 变更文件
 
 | 文件 | 类型 |
 |---|---|
-| `app/src/main/java/com/fongmi/android/tv/ui/activity/HeroDetailActivity.kt` | 主页面布局重排、Logo 位、4 行简介、按钮顺序、演职员可聚焦、演员详情弹窗与缓存 |
+| `app/src/main/java/com/fongmi/android/tv/ui/activity/HeroDetailActivity.kt` | 主页面布局重排、Logo 位、4 行简介、按钮顺序、演职员可聚焦、演员详情弹窗与缓存、**选集弹窗外壳/控制栏/动态网格** |
 | `app/src/main/java/com/fongmi/android/tv/ui/activity/HeroHomeActivity.kt` | （第二阶段）海报卡确定键改为拉起详情页 |
 | `app/src/main/AndroidManifest.xml` | （第一阶段）注册 `HeroDetailActivity` |
 
@@ -187,7 +223,10 @@ adb shell am start -n com.silent.android.webhtv/com.fongmi.android.tv.ui.activit
 3. 「播放」↓ → 焦点落到第 1 位演员（红圈 + 放大）；←/→ 横移；↑ 回「播放」。
 4. 演员上按确定 → 弹窗**立刻**出现并转圈，2 秒后显示「演员详情开发中」；期间遥控器不卡。
 5. 返回键关弹窗 → 焦点回到刚才那位演员。
-6. 「播放」确定 → 播放弹窗吸附第 7 集；最右列 → 切第 2 组；返回键回「播放」。
+6. 「播放」确定 → 选集弹窗：顶部「选集」徽章 + 剧名，控制栏 5 个选项，焦点吸附第 7 集。
+7. 控制栏 ←/→ 切到「少列」→ 网格变 2 列，焦点仍在第 7 集；切「倒序」→ 顺序翻转，焦点仍在第 7 集。
+8. 网格第 1 行 ↑ → 回控制栏；控制栏 ↓ → 回网格原格。
+9. 多列下最右列 → 切第 2 组第一项；返回键 → 焦点回「播放」。
 
 ## 12. 回滚
 
@@ -196,8 +235,10 @@ adb shell am start -n com.silent.android.webhtv/com.fongmi.android.tv.ui.activit
 
 ## 13. 下一步（未开始）
 
-1. 用真实 `Vod` / `Flag` / `Episode` / 演职员数据替换 `DEMO_DETAIL`。
+1. 用真实 `Vod` / `Flag` / `Episode` / 演职员数据替换 `DEMO_DETAIL`（`episodes` 需填真实集号 `number`）。
 2. `loadActorProfile` 接 TMDB `/person/{id}`，`logoUrl` 接 `images.logos`（`iso_639_1 = zh`）。
 3. 播放按钮与选集点击接 `VideoActivity.startDirect(...)`（复用 `HeroHomeActivity.launchPlayback`，不改 PlayerManager）。
-4. 收藏接 `Keep`，换源接既有搜索/聚合源入口。
+4. 收藏接 `Keep`，换源接既有搜索/聚合源入口；**线路（flags）选择器待归位到「换源」**——
+   第四阶段按需求把弹窗收敛成纯选集，`detail.flags` 数据仍保留未删。
 5. `lastWatchedEpisode` 接真实历史进度。
+6. 排序「原始/正序」在演示数据里等价（数据本身升序），接真实源后可体现差异。

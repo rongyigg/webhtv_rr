@@ -18,6 +18,7 @@ import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -68,6 +69,7 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.TextUnit
@@ -564,14 +566,7 @@ private fun HeroActorDialog(actor: HeroCast, onDismiss: () -> Unit) {
             usePlatformDefaultWidth = false,
         ),
     ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth(ACTOR_DIALOG_WIDTH_FRACTION)
-                .clip(ACTOR_DIALOG_SHAPE)
-                .background(ACTOR_DIALOG_BACKGROUND)
-                .border(DIALOG_BORDER, DIALOG_BORDER_COLOR, ACTOR_DIALOG_SHAPE)
-                .padding(ACTOR_DIALOG_PADDING),
-        ) {
+        HeroDialogShell(modifier = Modifier.fillMaxWidth(ACTOR_DIALOG_WIDTH_FRACTION)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 AsyncImage(
                     model = actor.avatarUrl,
@@ -596,7 +591,7 @@ private fun HeroActorDialog(actor: HeroCast, onDismiss: () -> Unit) {
                     Text(
                         text = "演员档案",
                         color = ACTOR_DIALOG_HINT_COLOR,
-                        fontSize = DIALOG_PAGE_INDICATOR_SP.sp,
+                        fontSize = ACTOR_DIALOG_HINT_SP.sp,
                         maxLines = 1,
                     )
                 }
@@ -631,7 +626,7 @@ private fun HeroActorDialog(actor: HeroCast, onDismiss: () -> Unit) {
                 Text(
                     text = "${loaded.birthday} · ${loaded.place}",
                     color = ACTOR_DIALOG_HINT_COLOR,
-                    fontSize = DIALOG_PAGE_INDICATOR_SP.sp,
+                    fontSize = ACTOR_DIALOG_HINT_SP.sp,
                     maxLines = 1,
                 )
             }
@@ -800,88 +795,101 @@ private fun HeroDetailSectionTitle(text: String, fontSize: TextUnit = SECTION_TI
 }
 
 // ---------------------------------------------------------------------------
-// 播放弹窗：线路 Tab + 选集网格
+// 选集弹窗：统一外壳 + 顶部栏 + 控制栏 + 动态网格
 // ---------------------------------------------------------------------------
 
 /**
- * 播放弹窗：半透明深色 + 24dp 大圆角。
+ * 选集弹窗：统一外壳 + 顶部栏 + 控制栏 + 动态列数网格。
+ *
+ * 外壳严格对齐 `ref_docs/dialog_source.xml`：深色半透明 `#E6000000`、16dp 圆角、18dp 内边距；
+ * 顶部栏 32dp（红底白字「选集」徽章 24dp / 11sp + 12sp 剧名跑马灯）。
  *
  * 焦点契约：
- * - 打开即强制进入弹窗，并落到 `lastWatchedEpisode`（1 基，无历史时落第 1 集）。
- * - 线路 Tab 与选集网格双向：Tab ↓ 回网格、网格第 1 行 ↑ 回 Tab。
- * - 网格最右列按右键切下一组，焦点落新组第一项；最左列按左键切上一组。
- * - 返回键由 Dialog 自己消费并回调 [onDismiss]，主页面随即把焦点还给「播放」。
+ * - 打开即进入弹窗，落在历史集（`lastWatchedEpisode`，新剧即第 1 集）——比落在控制栏少按一次键。
+ * - 控制栏 ←/→ 在 5 个选项间移动，↓ 进网格，↑ 消费。
+ * - 网格第 1 行 ↑ 回控制栏（回到离开时那一项）；控制栏 ↓ 回到离开时那一格。
+ * - 网格最右列 → 切下一组第一项；最左列 ← 切上一组第一项。
+ * - 切排序 / 切列数后，焦点跟着「当前集」走，不回到第一格。
+ * - 返回键关闭弹窗，主页面把焦点还给「播放」。
  */
 @Composable
 private fun HeroPlayDialog(detail: HeroDetail, onDismiss: () -> Unit) {
-    val pageCount = ((detail.episodes.size + EPISODE_PAGE_SIZE - 1) / EPISODE_PAGE_SIZE).coerceAtLeast(1)
-    val initialEpisode = (detail.lastWatchedEpisode - 1).coerceIn(0, detail.episodes.lastIndex.coerceAtLeast(0))
-    val initialPage = initialEpisode / EPISODE_PAGE_SIZE
-    val initialCell = initialEpisode % EPISODE_PAGE_SIZE
+    var sort by remember { mutableStateOf(EpisodeSort.ORIGINAL) }
+    var columnMode by remember { mutableStateOf(EpisodeColumns.MANY) }
 
-    var page by remember { mutableIntStateOf(initialPage) }
-    var focusedCell by remember { mutableIntStateOf(initialCell) }
-    var focusedFlag by remember { mutableIntStateOf(0) }
-    var playingEpisode by remember { mutableIntStateOf(initialEpisode) }
-    // 换组/首次打开后要点亮的格子下标，由 page 的 LaunchedEffect 消费。
-    var pendingCell by remember { mutableIntStateOf(initialCell) }
+    val ordered = remember(sort, detail.episodes) { sortEpisodes(detail.episodes, sort) }
+    val columns = if (columnMode == EpisodeColumns.MANY) EPISODE_COLUMNS_MANY else EPISODE_COLUMNS_FEW
+    val pageSize = columns * EPISODE_ROWS_PER_PAGE
+    val pageCount = ((ordered.size + pageSize - 1) / pageSize).coerceAtLeast(1)
 
-    val flagRequesters = remember { List(detail.flags.size) { FocusRequester() } }
-    val cellRequesters = remember { List(EPISODE_PAGE_SIZE) { FocusRequester() } }
-
-    val pageItems = remember(page, detail.episodes) {
-        detail.episodes.drop(page * EPISODE_PAGE_SIZE).take(EPISODE_PAGE_SIZE)
+    // 当前集用「集号」记忆而不是下标：切排序 / 切列数后自动跟随。
+    var currentNumber by remember {
+        mutableIntStateOf(
+            ordered.firstOrNull { it.number == detail.lastWatchedEpisode }?.number
+                ?: ordered.firstOrNull()?.number
+                ?: 0,
+        )
     }
+    var playingNumber by remember { mutableIntStateOf(currentNumber) }
+    var focusedControl by remember { mutableIntStateOf(CONTROL_COLUMN_MANY) }
 
-    // 弹窗是独立窗口：首帧可能还没拿到 window focus，逐帧重试到焦点真正落下为止。
-    LaunchedEffect(page) {
-        val target = pendingCell.coerceIn(0, pageItems.lastIndex.coerceAtLeast(0))
+    val currentIndex = ordered.indexOfFirst { it.number == currentNumber }.coerceAtLeast(0)
+    val page = (currentIndex / pageSize).coerceIn(0, pageCount - 1)
+    val cellInPage = currentIndex - page * pageSize
+    val pageItems = ordered.drop(page * pageSize).take(pageSize)
+
+    val controlRequesters = remember { List(CONTROL_INDEX_COUNT) { FocusRequester() } }
+    val cellRequesters = remember { List(EPISODE_COLUMNS_MANY * EPISODE_ROWS_PER_PAGE) { FocusRequester() } }
+
+    // 弹窗是独立窗口：首帧可能还没拿到 window focus，逐帧重试。
+    // 页 / 列数 / 排序变化后也走这里，把焦点落回「当前集」所在格。
+    LaunchedEffect(page, columns, sort) {
         repeat(5) {
-            if (requestDetailFocus(cellRequesters, target)) {
-                focusedCell = target
-                return@LaunchedEffect
-            }
+            if (requestDetailFocus(cellRequesters, cellInPage)) return@LaunchedEffect
             withFrameNanos { }
         }
     }
 
-    fun focusCell(index: Int) {
-        val target = index.coerceIn(0, pageItems.lastIndex.coerceAtLeast(0))
-        if (requestDetailFocus(cellRequesters, target)) focusedCell = target
+    fun focusControl(index: Int) {
+        if (requestDetailFocus(controlRequesters, index)) focusedControl = index
     }
 
-    fun focusFlag(index: Int) {
-        val target = index.coerceIn(0, flagRequesters.lastIndex.coerceAtLeast(0))
-        if (requestDetailFocus(flagRequesters, target)) focusedFlag = target
-    }
-
-    // 切组：先把 pendingCell 归零，等 page 变化后的 LaunchedEffect 把焦点放到新组第一项。
-    fun switchPage(targetPage: Int) {
-        if (targetPage !in 0 until pageCount) return
-        focusedCell = 0
-        pendingCell = 0
-        page = targetPage
+    /** 记住集号并同步焦点；跨页时交给上面的 LaunchedEffect 接手。 */
+    fun moveTo(index: Int) {
+        val target = index.coerceIn(0, ordered.lastIndex)
+        val targetPage = target / pageSize
+        currentNumber = ordered[target].number
+        if (targetPage == page) requestDetailFocus(cellRequesters, target - page * pageSize)
     }
 
     fun handleCellKey(cellIndex: Int, key: Key) {
-        val column = cellIndex % EPISODE_COLUMNS
+        val column = cellIndex % columns
         val lastIndex = pageItems.lastIndex
         when (key) {
             Key.DirectionLeft ->
-                if (column > 0) focusCell(cellIndex - 1) else switchPage(page - 1)
+                if (column > 0) {
+                    moveTo(page * pageSize + cellIndex - 1)
+                } else if (page > 0) {
+                    // 与右键对称：进入上一组的第一项。
+                    moveTo((page - 1) * pageSize)
+                }
 
             Key.DirectionRight ->
-                if (column == EPISODE_COLUMNS - 1) {
-                    switchPage(page + 1)
+                if (column == columns - 1) {
+                    if (page < pageCount - 1) moveTo((page + 1) * pageSize)
                 } else if (cellIndex < lastIndex) {
-                    focusCell(cellIndex + 1)
+                    moveTo(page * pageSize + cellIndex + 1)
                 }
 
             Key.DirectionUp ->
-                if (cellIndex >= EPISODE_COLUMNS) focusCell(cellIndex - EPISODE_COLUMNS) else focusFlag(focusedFlag)
+                if (cellIndex >= columns) {
+                    moveTo(page * pageSize + cellIndex - columns)
+                } else {
+                    focusControl(focusedControl)
+                }
 
             Key.DirectionDown ->
-                if (cellIndex + EPISODE_COLUMNS <= lastIndex) focusCell(cellIndex + EPISODE_COLUMNS)
+                if (cellIndex + columns <= lastIndex) moveTo(page * pageSize + cellIndex + columns)
         }
     }
 
@@ -893,64 +901,70 @@ private fun HeroPlayDialog(detail: HeroDetail, onDismiss: () -> Unit) {
             usePlatformDefaultWidth = false,
         ),
     ) {
-        // 全屏遮罩 + 居中的深色面板；遮罩让底图继续透出来一点，形成「半透明」层次。
+        // 全屏遮罩 + 居中面板；遮罩让底图继续透出来一点，形成「半透明」层次。
         Box(
             modifier = Modifier
                 .fillMaxSize()
                 .background(DIALOG_SCRIM),
             contentAlignment = Alignment.Center,
         ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth(DIALOG_WIDTH_FRACTION)
-                    .clip(DIALOG_SHAPE)
-                    .background(DIALOG_BACKGROUND)
-                    .border(DIALOG_BORDER, DIALOG_BORDER_COLOR, DIALOG_SHAPE)
-                    .padding(DIALOG_PADDING),
-            ) {
-                HeroDetailSectionTitle(text = "播放线路")
-                Spacer(modifier = Modifier.height(DIALOG_TITLE_GAP))
-                LazyRow(
+            HeroDialogShell(modifier = Modifier.fillMaxWidth(DIALOG_WIDTH_FRACTION)) {
+                // ---- 顶部栏：红色「选集」徽章 + 剧名跑马灯（dialog_source.xml L11-50）----
+                Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(DETAIL_FLAG_ROW_HEIGHT),
-                    horizontalArrangement = Arrangement.spacedBy(DETAIL_FLAG_GAP),
+                        .height(DIALOG_TOP_BAR_HEIGHT),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    itemsIndexed(items = detail.flags, key = { index, _ -> index }) { index, label ->
-                        HeroDetailFlagItem(
-                            label = label,
-                            selected = index == 0,
-                            requester = flagRequesters[index],
-                            onFocused = { focusedFlag = index },
-                            onConfirm = { },
-                            // Tab ↑ 无处可去，直接消费。
-                            onMoveUp = { },
-                            // Tab ↓ 回选集网格，停在离开时的那一格。
-                            onMoveDown = { focusCell(focusedCell) },
-                            onMoveLeft = { if (index > 0) focusFlag(index - 1) },
-                            onMoveRight = { if (index < detail.flags.lastIndex) focusFlag(index + 1) },
+                    Box(
+                        modifier = Modifier
+                            .height(DIALOG_BADGE_HEIGHT)
+                            .clip(DIALOG_BADGE_SHAPE)
+                            .background(HeroAccentColor)
+                            .padding(horizontal = DIALOG_BADGE_H_PADDING),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            text = "选集",
+                            color = Color.White,
+                            fontSize = DIALOG_BADGE_SP.sp,
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1,
                         )
                     }
-                }
-
-                Spacer(modifier = Modifier.height(DIALOG_SECTION_GAP))
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    HeroDetailSectionTitle(text = "选集")
-                    Spacer(modifier = Modifier.weight(1f))
+                    Spacer(modifier = Modifier.width(DIALOG_BADGE_GAP))
+                    // 剧名过长滚动显示，绝不生硬截断。
                     Text(
-                        text = "第 ${page + 1} / $pageCount 组",
-                        color = DIALOG_PAGE_INDICATOR_COLOR,
-                        fontSize = DIALOG_PAGE_INDICATOR_SP.sp,
+                        text = detail.title,
+                        modifier = Modifier
+                            .weight(1f)
+                            .basicMarquee(),
+                        color = DIALOG_TITLE_COLOR,
+                        fontSize = DIALOG_TITLE_SP.sp,
                         maxLines = 1,
+                        softWrap = false,
                     )
                 }
-                Spacer(modifier = Modifier.height(DIALOG_TITLE_GAP))
+                Spacer(modifier = Modifier.height(DIALOG_TOP_BAR_GAP))
+
+                // ---- 控制栏：排序（原始/正序/倒序）+ 列数（少列/多列）----
+                HeroEpisodeControlBar(
+                    sort = sort,
+                    columnMode = columnMode,
+                    pageLabel = "第 ${page + 1} / $pageCount 组",
+                    requesters = controlRequesters,
+                    onFocused = { focusedControl = it },
+                    onSelectSort = { sort = it },
+                    onSelectColumns = { columnMode = it },
+                    onMoveLeft = { index -> if (index > 0) focusControl(index - 1) },
+                    onMoveRight = { index -> if (index < CONTROL_INDEX_COUNT - 1) focusControl(index + 1) },
+                    onMoveDown = { requestDetailFocus(cellRequesters, cellInPage) },
+                )
+                Spacer(modifier = Modifier.height(DIALOG_CONTROL_GAP))
+
+                // ---- 动态列数网格：多列 4 列 / 少列 2 列，高 240dp、格高 34dp ----
                 LazyVerticalGrid(
-                    columns = GridCells.Fixed(EPISODE_COLUMNS),
+                    columns = GridCells.Fixed(columns),
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(DIALOG_GRID_HEIGHT),
@@ -958,14 +972,13 @@ private fun HeroPlayDialog(detail: HeroDetail, onDismiss: () -> Unit) {
                     horizontalArrangement = Arrangement.spacedBy(DIALOG_GRID_GAP),
                     verticalArrangement = Arrangement.spacedBy(DIALOG_GRID_GAP),
                 ) {
-                    pageItems.forEachIndexed { index, label ->
-                        item(key = page * EPISODE_PAGE_SIZE + index) {
+                    pageItems.forEachIndexed { index, episode ->
+                        item(key = "${sort.name}-$page-$index-${episode.number}") {
                             HeroEpisodeCell(
-                                label = label,
-                                playing = page * EPISODE_PAGE_SIZE + index == playingEpisode,
+                                label = episode.label,
+                                playing = episode.number == playingNumber,
                                 requester = cellRequesters[index],
-                                onFocused = { focusedCell = index },
-                                onConfirm = { playingEpisode = page * EPISODE_PAGE_SIZE + index },
+                                onConfirm = { playingNumber = episode.number },
                                 onMove = { key -> handleCellKey(index, key) },
                             )
                         }
@@ -976,43 +989,137 @@ private fun HeroPlayDialog(detail: HeroDetail, onDismiss: () -> Unit) {
     }
 }
 
-/** 线路项：焦点/选中红底白字，常态 `white_10`。 */
+/**
+ * 统一弹窗外壳（`ref_docs/dialog_source.xml`）：深色半透明 `#E6000000` + 16dp 圆角 + 18dp 内边距。
+ * 选集弹窗与演员详情弹窗都套这一层，保证所有弹窗视觉一致。
+ */
 @Composable
-private fun HeroDetailFlagItem(
-    label: String,
-    selected: Boolean,
+private fun HeroDialogShell(
+    modifier: Modifier = Modifier,
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    Column(
+        modifier = modifier
+            .clip(DIALOG_SHELL_SHAPE)
+            .background(DIALOG_SHELL_BACKGROUND)
+            .padding(DIALOG_SHELL_PADDING),
+        content = content,
+    )
+}
+
+/** 排序方式：原始（源顺序）/ 正序（集号升序）/ 倒序（集号降序）。 */
+private enum class EpisodeSort { ORIGINAL, ASC, DESC }
+
+/** 列数：少列 2 列 / 多列 4 列。 */
+private enum class EpisodeColumns { FEW, MANY }
+
+/** 排序实现：`number` 是稳定集号；「原始」完全保留源数据顺序。 */
+private fun sortEpisodes(episodes: List<HeroEpisode>, sort: EpisodeSort): List<HeroEpisode> = when (sort) {
+    EpisodeSort.ORIGINAL -> episodes
+    EpisodeSort.ASC -> episodes.sortedBy { it.number }
+    EpisodeSort.DESC -> episodes.sortedByDescending { it.number }
+}
+
+/** 控制栏单项定义：文案 + 是否选中 + 是否在本项前画分组竖线。 */
+private data class HeroControlSpec(
+    val index: Int,
+    val label: String,
+    val selected: Boolean,
+    val dividerBefore: Boolean,
+    val onSelect: () -> Unit,
+)
+
+/** 控制栏：排序三选一 + 列数二选一，右侧显示当前分组。 */
+@Composable
+private fun HeroEpisodeControlBar(
+    sort: EpisodeSort,
+    columnMode: EpisodeColumns,
+    pageLabel: String,
+    requesters: List<FocusRequester>,
+    onFocused: (Int) -> Unit,
+    onSelectSort: (EpisodeSort) -> Unit,
+    onSelectColumns: (EpisodeColumns) -> Unit,
+    onMoveLeft: (Int) -> Unit,
+    onMoveRight: (Int) -> Unit,
+    onMoveDown: () -> Unit,
+) {
+    val specs = listOf(
+        HeroControlSpec(CONTROL_SORT_ORIGINAL, "原始", sort == EpisodeSort.ORIGINAL, false) {
+            onSelectSort(EpisodeSort.ORIGINAL)
+        },
+        HeroControlSpec(CONTROL_SORT_ASC, "正序", sort == EpisodeSort.ASC, false) {
+            onSelectSort(EpisodeSort.ASC)
+        },
+        HeroControlSpec(CONTROL_SORT_DESC, "倒序", sort == EpisodeSort.DESC, false) {
+            onSelectSort(EpisodeSort.DESC)
+        },
+        HeroControlSpec(CONTROL_COLUMN_FEW, "少列", columnMode == EpisodeColumns.FEW, true) {
+            onSelectColumns(EpisodeColumns.FEW)
+        },
+        HeroControlSpec(CONTROL_COLUMN_MANY, "多列", columnMode == EpisodeColumns.MANY, false) {
+            onSelectColumns(EpisodeColumns.MANY)
+        },
+    )
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(DIALOG_CONTROL_HEIGHT),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        specs.forEach { spec ->
+            if (spec.dividerBefore) {
+                Box(
+                    modifier = Modifier
+                        .padding(horizontal = DIALOG_DIVIDER_GAP)
+                        .width(DIALOG_DIVIDER_WIDTH)
+                        .height(DIALOG_DIVIDER_HEIGHT)
+                        .background(DIALOG_DIVIDER_COLOR),
+                )
+            }
+            HeroControlItem(
+                spec = spec,
+                requester = requesters[spec.index],
+                onFocused = { onFocused(spec.index) },
+                onMoveLeft = { onMoveLeft(spec.index) },
+                onMoveRight = { onMoveRight(spec.index) },
+                onMoveDown = onMoveDown,
+            )
+        }
+        Spacer(modifier = Modifier.weight(1f))
+        Text(
+            text = pageLabel,
+            color = DIALOG_HINT_COLOR,
+            fontSize = DIALOG_HINT_SP.sp,
+            maxLines = 1,
+        )
+    }
+}
+
+/**
+ * 控制栏单项：14sp。
+ * 选中 = 红字 + 红色下划线；未选中 = 浅灰；焦点 = 文字转白 + `white_10` 圆角底。
+ */
+@Composable
+private fun HeroControlItem(
+    spec: HeroControlSpec,
     requester: FocusRequester,
     onFocused: () -> Unit,
-    onConfirm: () -> Unit,
-    onMoveUp: () -> Unit,
-    onMoveDown: () -> Unit,
     onMoveLeft: () -> Unit,
     onMoveRight: () -> Unit,
+    onMoveDown: () -> Unit,
 ) {
     val interaction = remember { MutableInteractionSource() }
     val isFocused by interaction.collectIsFocusedAsState()
-    val active = selected || isFocused
 
     Box(
         modifier = Modifier
-            .height(DETAIL_FLAG_ROW_HEIGHT)
+            .height(DIALOG_CONTROL_HEIGHT)
             .focusRequester(requester)
-            .onFocusChanged {
-                if (it.isFocused) onFocused()
-            }
+            .onFocusChanged { if (it.isFocused) onFocused() }
             .onPreviewKeyEvent { event ->
                 if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
                 when (event.key) {
-                    Key.DirectionUp -> {
-                        onMoveUp()
-                        true
-                    }
-
-                    Key.DirectionDown -> {
-                        onMoveDown()
-                        true
-                    }
-
                     Key.DirectionLeft -> {
                         onMoveLeft()
                         true
@@ -1023,42 +1130,48 @@ private fun HeroDetailFlagItem(
                         true
                     }
 
+                    Key.DirectionDown -> {
+                        onMoveDown()
+                        true
+                    }
+
+                    // 控制栏上方只有不可聚焦的顶部栏，↑ 直接消费。
+                    Key.DirectionUp -> true
+
                     else -> false
                 }
             }
-            .clip(DETAIL_FLAG_SHAPE)
-            .background(
-                when {
-                    isFocused -> HeroAccentColor
-                    selected -> DETAIL_FLAG_SELECTED_BACKGROUND
-                    else -> DETAIL_FLAG_IDLE_BACKGROUND
-                },
-            )
-            .clickable(interactionSource = interaction, indication = null, onClick = onConfirm)
-            .padding(horizontal = DETAIL_FLAG_H_PADDING),
+            .clip(DIALOG_CONTROL_SHAPE)
+            .background(if (isFocused) DIALOG_CONTROL_FOCUS_BG else Color.Transparent)
+            .clickable(interactionSource = interaction, indication = null, onClick = spec.onSelect)
+            .padding(horizontal = DIALOG_CONTROL_H_PADDING),
         contentAlignment = Alignment.Center,
     ) {
         Text(
-            text = label,
-            // `adapter_flag.xml` L3：textSize=16sp、gravity=center。
-            color = Color.White,
-            fontSize = DETAIL_FLAG_SP.sp,
-            fontWeight = if (active) FontWeight.Medium else FontWeight.Normal,
+            text = spec.label,
+            color = when {
+                spec.selected -> HeroAccentColor
+                isFocused -> Color.White
+                else -> DIALOG_CONTROL_IDLE_COLOR
+            },
+            fontSize = DIALOG_CONTROL_SP.sp,
+            fontWeight = if (spec.selected || isFocused) FontWeight.Medium else FontWeight.Normal,
+            // 选中态：红字 + 红色下划线（下划线颜色跟随文字色）。
+            textDecoration = if (spec.selected) TextDecoration.Underline else null,
             maxLines = 1,
         )
     }
 }
 
 /**
- * 选集格子：焦点态红框，当前播放集用红字区分。
- * 四方向键全部在本组件内消费，交给 `onMove` 统一做边界与跨组处理。
+ * 选集格子：高 34dp，焦点态红框，当前播放集用红字区分。
+ * 四方向键全部在本组件内消费，交给 `onMove` 统一做边界、翻组与回控制栏。
  */
 @Composable
 private fun HeroEpisodeCell(
     label: String,
     playing: Boolean,
     requester: FocusRequester,
-    onFocused: () -> Unit,
     onConfirm: () -> Unit,
     onMove: (Key) -> Unit,
 ) {
@@ -1070,7 +1183,6 @@ private fun HeroEpisodeCell(
             .fillMaxWidth()
             .height(EPISODE_CELL_HEIGHT)
             .focusRequester(requester)
-            .onFocusChanged { if (it.isFocused) onFocused() }
             .onPreviewKeyEvent { event ->
                 if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
                 when (event.key) {
@@ -1141,6 +1253,12 @@ private data class HeroDetailAction(
 /** 演职员：TMDB person id + 姓名 + 头像地址（picsum 稳定图，不依赖 TMDB）。 */
 private data class HeroCast(val id: String, val name: String, val avatarUrl: String)
 
+/**
+ * 单集：`number` 是稳定集号（排序、历史进度都按它对齐），`label` 是显示文案。
+ * 用集号而不是列表下标做记忆，切排序 / 切列数后焦点不会漂移。
+ */
+private data class HeroEpisode(val number: Int, val label: String)
+
 private data class HeroDetail(
     val title: String,
     val meta: String,
@@ -1151,7 +1269,7 @@ private data class HeroDetail(
     val logoUrl: String?,
     val cast: List<HeroCast>,
     val flags: List<String>,
-    val episodes: List<String>,
+    val episodes: List<HeroEpisode>,
     /** 历史播放进度（1 基集号）；0 表示新剧，焦点落第 1 集。 */
     val lastWatchedEpisode: Int,
 )
@@ -1180,7 +1298,7 @@ private val DEMO_DETAIL = HeroDetail(
         )
     },
     flags = listOf("线路一", "线路二", "线路三"),
-    episodes = (1..24).map { "第 $it 集" },
+    episodes = (1..24).map { HeroEpisode(number = it, label = "第 $it 集") },
     // 演示「老剧吸附历史集」：第 7 集。新剧传 0 即可落回第 1 集。
     lastWatchedEpisode = 7,
 )
@@ -1265,9 +1383,6 @@ private const val CAST_FOCUS_SCALE = 1.08f
 // 演员详情弹窗（轻量骨架）
 // ---------------------------------------------------------------------------
 private const val ACTOR_DIALOG_WIDTH_FRACTION = 0.5f
-private val ACTOR_DIALOG_SHAPE = RoundedCornerShape(20.dp)
-private val ACTOR_DIALOG_BACKGROUND = Color(0xF2141414)
-private val ACTOR_DIALOG_PADDING = 24.dp
 private val ACTOR_DIALOG_AVATAR = 56.dp
 private val ACTOR_DIALOG_AVATAR_GAP = 12.dp
 private val ACTOR_DIALOG_HEADER_GAP = 16.dp
@@ -1275,6 +1390,7 @@ private val ACTOR_DIALOG_SPINNER = 18.dp
 private const val ACTOR_DIALOG_NAME_SP = 18f
 private const val ACTOR_DIALOG_BODY_SP = 14f
 private const val ACTOR_DIALOG_BODY_LINE_HEIGHT = 22f
+private const val ACTOR_DIALOG_HINT_SP = 12f
 private val ACTOR_DIALOG_HINT_COLOR = Color(0x99FFFFFF)
 
 /** 假接口延迟：2 秒，用来验证 Loading 态与「不阻塞遥控器」。 */
@@ -1312,40 +1428,59 @@ private val SECTION_BAR_GAP = 10.dp
 private const val SECTION_TITLE_SP = 15f
 
 // ---------------------------------------------------------------------------
-// 弹窗内线路 Tab（activity_detail.xml L225-232 + adapter_flag.xml）
-// ---------------------------------------------------------------------------
-private val DETAIL_FLAG_ROW_HEIGHT = 34.dp
-private val DETAIL_FLAG_GAP = 12.dp
-private val DETAIL_FLAG_H_PADDING = 12.dp
-private val DETAIL_FLAG_SHAPE = RoundedCornerShape(4.dp)
-private const val DETAIL_FLAG_SP = 16f
-private val DETAIL_FLAG_IDLE_BACKGROUND = Color(0x33000000)     // black_20
-private val DETAIL_FLAG_SELECTED_BACKGROUND = Color(0x66000000) // black_40
-
-// ---------------------------------------------------------------------------
-// 播放弹窗
+// 统一弹窗外壳（ref_docs/dialog_source.xml：padding 18dp、深色半透明、16dp 圆角）
 // ---------------------------------------------------------------------------
 private const val DIALOG_WIDTH_FRACTION = 0.82f
 private val DIALOG_SCRIM = Color(0x99000000)
-private val DIALOG_SHAPE = RoundedCornerShape(24.dp)
-private val DIALOG_BACKGROUND = Color(0xE6141414)   // 半透明深色面板
-private val DIALOG_BORDER = 1.dp
-private val DIALOG_BORDER_COLOR = Color(0x1FFFFFFF)
-private val DIALOG_PADDING = 32.dp
-private val DIALOG_TITLE_GAP = 10.dp
-private val DIALOG_SECTION_GAP = 20.dp
-private val DIALOG_PAGE_INDICATOR_COLOR = Color(0x99FFFFFF)
-private const val DIALOG_PAGE_INDICATOR_SP = 12f
+private val DIALOG_SHELL_BACKGROUND = Color(0xE6000000)
+private val DIALOG_SHELL_SHAPE = RoundedCornerShape(16.dp)
+private val DIALOG_SHELL_PADDING = 18.dp
+
+// 顶部栏：32dp 行高 / 8dp 下间距；徽章 24dp、11sp；剧名 12sp 跑马灯（dialog_source.xml L11-50）
+private val DIALOG_TOP_BAR_HEIGHT = 32.dp
+private val DIALOG_TOP_BAR_GAP = 8.dp
+private val DIALOG_BADGE_HEIGHT = 24.dp
+private val DIALOG_BADGE_SHAPE = RoundedCornerShape(4.dp)
+private val DIALOG_BADGE_H_PADDING = 10.dp
+private const val DIALOG_BADGE_SP = 11f
+private val DIALOG_BADGE_GAP = 12.dp
+private const val DIALOG_TITLE_SP = 12f
+private val DIALOG_TITLE_COLOR = Color(0x99FFFFFF)
+
+// 控制栏：14sp / 32dp 高；选中红字+红色下划线，未选中浅灰
+private val DIALOG_CONTROL_HEIGHT = 32.dp
+private val DIALOG_CONTROL_GAP = 8.dp
+private val DIALOG_CONTROL_SHAPE = RoundedCornerShape(4.dp)
+private val DIALOG_CONTROL_H_PADDING = 10.dp
+private val DIALOG_CONTROL_FOCUS_BG = Color(0x1FFFFFFF)
+private const val DIALOG_CONTROL_SP = 14f
+private val DIALOG_CONTROL_IDLE_COLOR = Color(0x99FFFFFF)
+private val DIALOG_DIVIDER_COLOR = Color(0x33FFFFFF)
+private val DIALOG_DIVIDER_GAP = 6.dp
+private val DIALOG_DIVIDER_WIDTH = 1.dp
+private val DIALOG_DIVIDER_HEIGHT = 14.dp
+private const val DIALOG_HINT_SP = 11f
+private val DIALOG_HINT_COLOR = Color(0x59FFFFFF)
+
+/** 控制栏 5 个可聚焦项的下标。 */
+private const val CONTROL_SORT_ORIGINAL = 0
+private const val CONTROL_SORT_ASC = 1
+private const val CONTROL_SORT_DESC = 2
+private const val CONTROL_COLUMN_FEW = 3
+private const val CONTROL_COLUMN_MANY = 4
+private const val CONTROL_INDEX_COUNT = 5
 
 // ---------------------------------------------------------------------------
-// 选集网格：5 列 × 4 行 = 20 集/组；240dp 高度正好容纳 4 行（16+46×4+8×3+16 = 240）
+// 选集网格：高 240dp、格高 34dp、每组 5 行；多列 4 列 / 少列 2 列
+// 240 = 16(上) + 34×5 + 8×4 + 16(下) - 6 余量，五整行不裁切
 // ---------------------------------------------------------------------------
-private const val EPISODE_COLUMNS = 5
-private const val EPISODE_PAGE_SIZE = EPISODE_COLUMNS * 4
 private val DIALOG_GRID_HEIGHT = 240.dp
 private val DIALOG_GRID_VERTICAL_PADDING = 16.dp
 private val DIALOG_GRID_GAP = 8.dp
-private val EPISODE_CELL_HEIGHT = 46.dp
+private const val EPISODE_COLUMNS_MANY = 4
+private const val EPISODE_COLUMNS_FEW = 2
+private const val EPISODE_ROWS_PER_PAGE = 5
+private val EPISODE_CELL_HEIGHT = 34.dp
 private val EPISODE_CELL_SHAPE = RoundedCornerShape(6.dp)
 private val EPISODE_CELL_BORDER = 2.dp
 private val EPISODE_CELL_H_PADDING = 8.dp
