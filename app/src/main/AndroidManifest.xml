@@ -94,6 +94,15 @@
             </intent-filter>
         </activity>
 
+        <!-- HeroUI（Compose）详情页骨架：假数据阶段，仅用于验证结构与焦点流转。 -->
+        <activity
+            android:name=".ui.activity.HeroDetailActivity"
+            android:configChanges="screenSize|smallestScreenSize|screenLayout|orientation"
+            android:exported="true"
+            android:label="Hero Detail"
+            android:screenOrientation="sensorLandscape"
+            android:theme="@style/Theme.App" />
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.provider"
