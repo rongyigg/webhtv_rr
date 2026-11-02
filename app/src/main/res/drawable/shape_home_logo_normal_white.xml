@@ -1,7 +1,4 @@
 <?xml version="1.0" encoding="utf-8"?>
-<shape xmlns:android="http://schemas.android.com/apk/res/android"
-    android:shape="rectangle">
-    <!-- 半透明白（逆向 white_10）：白色 ic_home_logo 叠在上面才看得见 -->
-    <solid android:color="#1AFFFFFF" />
-    <corners android:radius="13dp" />
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="oval">
+    <solid android:color="@color/white_10" />
 </shape>

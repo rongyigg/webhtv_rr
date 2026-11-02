@@ -1,142 +1,111 @@
-# HERO-SOURCE · 换源弹窗 + 全局接口源侧边栏（View 体系重写）
+# HERO-SOURCE · 换源弹窗 + 接口源侧边栏（照搬 ref_docs 逆向源码）
 
-本阶段把上一版 Compose 实现整体废弃，改为 View 体系：
-`ChangeSourceDialog` 与 `SourceSidebar` 都是独立 `Dialog`，直接 inflate 逆向布局，
-视觉参数全部来自 `ref_docs/`，不再自造外壳、圆角、渐变占位或放大动画。
+上一版凭手写 dp 自造布局，出现三个可见缺陷：侧边栏过宽、站点标签灰底连成一条、首页小房子颜色不对。
+本版改为**逐项照搬 `ref_docs/` 逆向源码**，只保留因编译约束与工程缺资源所必需的替换，并在文件内逐条注明。
 
 ## 1. 目标与验收标准
 
-1. 首页「小房子」确定键 → 右侧滑出全局接口源侧边栏；返回键关闭，焦点回小房子。
+1. 首页「小房子」确定键 → 右侧滑出接口源侧边栏；返回键关闭，焦点回小房子。
 2. 详情页「换源」→ 换源弹窗；关闭后焦点回「换源」而不是默认「播放」。
-3. 换源弹窗内「小房子」→ 同一个侧边栏，层级盖在换源弹窗之上；关闭后焦点回该小房子。
-4. 侧边栏：宽 320dp、靠右、铺满高、深灰底；顶部全选/全不选；列表 40dp 行高、18sp、勾选圈四态。
-5. 换源弹窗：12dp 圆角 `#f214171f`；红底徽章 4dp 圆角 `#e50914`；站点标签 39dp/14sp；
-   结果区横向卡片；小房子 26dp + 16dp 图标。
-6. 不新增依赖；不改首页/详情页 layout、样式、焦点链；组件内零网络、零数据层写入。
+3. 换源弹窗内「小房子」→ 同一个侧边栏，层级在弹窗之上；关闭后焦点回该小房子。
+4. 站点标签：焦点 = 白色圆角胶囊（`shape_site_item_focused`），常态 = 纯透明，不再出现灰底条。
+5. 首页小房子：常态 = `white_10` 椭圆，焦点 = 红色椭圆。
+6. 不新增依赖；不改首页/详情页 layout、样式与焦点链；组件内零网络、零数据层写入。
 
-## 2. 视觉参数 → 逆向来源对照
+## 2. 视觉参数 → ref_docs 对应关系
 
-| 落地值 | 逆向来源 |
-| --- | --- |
-| 弹窗 12dp 圆角 + `#f214171f`，内边距 18dp / paddingBottom 0 | `ref_docs/dialog_source.xml` L4-6 + 本任务给定的 `shape_dialog_source` |
-| 徽章 4dp 圆角 `#e50914`、11sp 粗体、高 24dp | `ref_docs/dialog_source.xml` L19-30 + `shape_tmdb_badge` |
-| 统计文案 11sp `#59ffffff` | `dialog_source.xml` L43-49 |
-| 站点栏高 32dp、小房子 26dp / 图标 16dp | `dialog_source.xml` L51-78 |
-| 站点标签 39dp / 14sp、选中与焦点用胶囊底 + 文字变色 | `ref_docs/adapter_v2_site.xml` L14-25；`selector_site_item_background` / `selector_site_item_text` 的 source 化副本 |
-| 结果卡片 120×174 + 13sp `#ccffffff` 标题 | `ref_docs/adapter_vod_rect.xml`（f23 结果 Presenter 的 rect 版式） |
-| 分隔线 1dp 渐变 | `ref_docs/shape_line_tapered.xml` |
-| 侧边栏行高 40dp / 18sp / 勾选圈 24dp | `ref_docs/adapter_site.xml` L14-39 |
-| 勾选圈四态（focused / selected） | `ref_docs/selector_check_circle.xml` + `shape_check_circle_*` |
-| 侧边栏顶部按钮 12sp + 16dp 勾选圈 | `ref_docs/dialog_search_site.xml` L10-71 |
+| 落地文件 | 来源 | 说明 |
+| --- | --- | --- |
+| `layout/dialog_source.xml` | `ref_docs/dialog_source.xml` | 根 padding 18dp / paddingBottom 0、`shape_dialog_source`、头 32dp、siteLayout 32dp、homeBtn 26dp + 16dp 图标、结果区 3dp 红条 + 13sp 标题 + 16dp 内边距，全部逐字保留 |
+| `layout/adapter_source_site.xml` | `ref_docs/adapter_v2_site.xml` | `item` 39dp→填满 26dp 行、宽度 wrap_content（横向栏），14sp、`selector_source_site_item_text`、`selector_source_site_item_background` 原样 |
+| `layout/adapter_source_result.xml` | `ref_docs/adapter_vod_rect.xml` | imageWrapper + 120×180 + `@style/Vod.Grid.Large` + 13sp `#ccffffff` 标题 + `@color/black_20` 占位 |
+| `layout/dialog_source_sidebar.xml` | `ref_docs/dialog_search_site.xml` | 全选/全不选 39dp、12sp 文字 + 16dp 勾选圈、站点列表 |
+| `layout/adapter_source_sidebar_item.xml` | `ref_docs/adapter_site.xml` | 40dp 行高、18sp 文字、24dp 勾选圈 |
+| `drawable/shape_source_site_item_focused.xml` | `ref_docs/shape_site_item_focused.xml` | inset 8/4dp + 白底 + 28dp 圆角（焦点胶囊） |
+| `drawable/shape_source_chip_round_{normal,activated}.xml` | `ref_docs/shape_chip_round_*.xml` | 只有 28dp 圆角 + 6dp 横向 padding，**无 solid**（上一版的灰底/红底就是这里多加的） |
+| `color/selector_source_site_item_text.xml` | `ref_docs/selector_site_item_text.xml` | focused→black，否则 white |
+| `drawable/selector_source_site_item_background.xml` | `ref_docs/selector_site_item_background.xml` | focused→白胶囊，selected→activated，默认→normal |
+| `drawable/selector_check_circle.xml` + `shape_check_circle_*` | `ref_docs/selector_check_circle.xml` + `shape_check_circle_*` | 勾选圈四态 |
+| `drawable/shape_home_logo_normal_white.xml` | `ref_docs/shape_home_logo_normal_white.xml` | **oval + `@color/white_10`**（上一版误做成 13dp 圆角矩形 + 纯白/半透明白） |
+| `drawable/shape_home_logo_source_focused.xml` | `ref_docs/selector_home_logo_source.xml` 的 focused 分支（其 shape 未随包提供） | 红色椭圆 `#e50914`，与 `shape_home_logo_normal_white` 同为 oval |
+| 窗口尺寸 / 间距 / 缩放 | `ref_docs/f23.java` | 宽 `0.82×`屏宽、高 `min(360dp, 0.65×`屏高`)`、站点间距 12dp、结果间距 16dp、结果卡焦点缩放 1.08 |
 
-## 3. 命名冲突处理（不动既有蓝色样式）
+## 3. 必需的替换（每处都在对应文件头部注释里写明）
 
-工程 `app/src/leanback/res/drawable/` 已存在 `shape_site_item_focused`（#2F6FED）、
-`shape_chip_round_activated`、`shape_chip_round_normal`，供既有站点管理界面使用。
-因此换源体系一律加 `source` 前缀，现有资源零改动：
+1. **Leanback → RecyclerView**：`libs.leanback` 只在 `leanbackImplementation`，而这两个弹窗位于 `main`
+   （`main` 还要编 `mobile` 变体），因此 `HorizontalGridView` → `RecyclerView`，
+   `app:focusOutEnd/focusOutFront` 一并移除；`setHorizontalSpacing` 用等价 `ItemDecoration` 实现。
+2. **`TypingDotsView` → `ProgressBar`**：工程内无 `com.fongmi.android.tv.ui.custom.TypingDotsView`。
+3. **`adapter_vod_rect` 的 `tmdbTag` 删除**：依赖本工程不存在的 `@drawable/bg_tmdb_tag` 与
+   `@string/home_tmdb_tag`，且原版默认 `gone`。
+4. **`siteLayout` 由 `invisible` 改 `visible`**：原版该行由代码控制显隐，Hero 版要求常显站点栏。
+5. **侧边栏缺资源**：`selector_search_action_background`、`check_circle`、`selector_site_item_check`
+   在本工程都不存在，改用同源的白胶囊选择器与 `selector_check_circle`；
+   原版面板背景由 BaseSheetDialog 的 sheet 容器提供，独立 Dialog 改用 `shape_dialog_source`。
+6. **侧边栏宽度不再写死**：原版是贴底整宽 sheet（根 `match_parent`），Hero 要右侧栏；
+   因此根布局与行宽改 `wrap_content`，窗口 `WRAP_CONTENT × MATCH_PARENT` + `Gravity.END`，
+   面板宽度完全由内容（18sp 站点名 + 24dp 勾选圈）决定。
+   代价：`shape_line_tapered` 的两条分隔线（`match_parent` 宽的 1dp View）会反过来把面板撑到整屏，
+   故删除；这也是唯一牺牲的视觉元素。
 
-- `shape_source_site_item_focused`（#E50914 / 6dp）
-- `shape_source_chip_round_activated`（#33FFFFFF / 6dp）
-- `shape_source_chip_round_normal`（#1AFFFFFF / 6dp）
-- `selector_source_site_item_background` / `selector_source_site_item_text`
-- `selector_source_result` / `shape_source_result_focused`（结果卡焦点红框 #FF0000）
-
-## 4. 架构决策：为什么不用 Leanback
-
-`libs.leanback` 只在 `leanbackImplementation` 里，而 Hero 首页/详情页位于 `main` 源集，
-`main` 还必须能编译 `mobile` 变体。因此：
-
-- `ChangeSourceDialog` 的 `siteRecycler` / `recycler` / `keywordRow` 统一改为
-  `RecyclerView` + 横向 `LinearLayoutManager`；
-- 布局里不再出现 `HorizontalGridView`、`TypingDotsView`（改用 `ProgressBar`）；
-- 焦点链用 `nextFocusUp/Down/Left/Right` 属性 + `nextFocus*Id` 代码设置实现，
-  不依赖 Leanback 的 `focusOutEnd/focusOutFront`。
-
-验证：`:app:compileLeanbackArmeabi_v7aDebugKotlin` 与 `:app:compileMobileArmeabi_v7aDebugKotlin` 均通过。
-
-## 5. 焦点契约
+## 4. 焦点契约
 
 换源弹窗：
 
-- 打开 → 当前站点标签；站点标签首个 LEFT → 小房子；RIGHT 在站点内滚动。
-- 站点 ↓ → 结果卡片（item 的 `nextFocusDown=@id/recycler`）。
-- 结果 ↑ → 站点栏（item 的 `nextFocusUp=@id/siteRecycler`）。
+- 打开 → 当前站点标签；站点标签首个 LEFT → 小房子，其余在站点栏内滚动。
+- 站点 ↓ → 结果卡片（`@id/recycler` 的 `nextFocusDown`）；结果 ↑ → 站点栏。
 - 结果确定 → `onSourceSelected` 后关闭；返回键 → 关闭。
-- 小房子确定 → 拉起 `SourceSidebar`（后创建的 Dialog 窗口天然在弹窗之上）；
-  侧边栏关闭 → `homeBtn.post { requestFocus() }`。
+- 小房子确定 → `SourceSidebar`（后创建的窗口在弹窗之上）；关闭 → `homeBtn.requestFocus()`。
 
 侧边栏：
 
-- 打开 → 列表第 1 条；顶部按钮 ↓ → 列表；列表第 1 条 ↑ → 「全选」。
-- 左右键在列表内被消费（`setOnKeyListener`），不会掉出侧边栏。
-- 确定键切换勾选；顶部按钮批量全选/全不选；返回键关闭 → `onClosed` 交还焦点。
+- 打开 → 列表第 1 条；顶部「全选/全不选」↓ → 列表；列表第 1 条 ↑ → 「全选」。
+- 左右键在列表内被消费，不掉出侧边栏；确定键切换勾选；返回键关闭 → `onClosed` 交还焦点。
 
-详情页：`showSourceDialog` 只作为「弹窗是否打开」的闸门，
-关闭时置 false，由既有 `LaunchedEffect` 把焦点送回 `pendingActionFocus`（换源按钮）。
+详情页：`showSourceDialog` 只作为「弹窗是否打开」的闸门，关闭时置 false，由既有 `LaunchedEffect`
+把焦点送回 `pendingActionFocus`（换源按钮）。
 
-## 6. 文件清单
+## 5. 文件清单
 
-新增资源：
-
-- `res/drawable/`：`shape_dialog_source`、`shape_tmdb_badge`、`selector_home_logo_source`、
+新增（main 源集）：
+- `layout/`：`dialog_source`、`dialog_source_sidebar`、`adapter_source_site`、`adapter_source_result`、
+  `adapter_source_sidebar_item`
+- `drawable/`：`shape_dialog_source`、`shape_tmdb_badge`、`selector_home_logo_source`、
   `shape_home_logo_source_focused`、`shape_home_logo_normal_white`、
   `shape_source_site_item_focused`、`shape_source_chip_round_activated|normal`、
-  `selector_source_site_item_background`、`selector_check_circle`、
-  `shape_check_circle_on|off|on_focused|off_focused`、`shape_line_tapered`、
-  `selector_source_result`、`shape_source_result_focused`
-- `res/color/`：`selector_source_site_item_text`（文字颜色选择器必须放在 `res/color/`，
-  布局里以 `@color/...` 引用；背景选择器 `selector_source_site_item_background` 仍留在 `res/drawable/`）
-- `res/layout/`：`dialog_source`、`dialog_source_sidebar`、
-  `adapter_source_site`、`adapter_source_result`、`adapter_source_sidebar_item`
-- `res/anim/`：`source_sidebar_in`、`source_sidebar_out`
-- `values/colors.xml`：`source_sidebar_background`（#1E1E1E，新增）
-- `values/styles.xml`：`SourceDialogTheme`、`SourceSidebarAnimation`
+  `selector_source_site_item_background`、`selector_check_circle`、`shape_check_circle_on|off|
+  on_focused|off_focused`、`shape_line_tapered`（当前无引用，保留备用）
+- `color/selector_source_site_item_text.xml`
+- `anim/source_sidebar_in|out`、`values/styles.xml` 的 `SourceDialogTheme` / `SourceSidebarAnimation`
 - `values/strings.xml`（+ zh-rCN / zh-rTW）：`play_change_result`、`play_change_empty`、
-  `play_change_count`、`source_sidebar_select_all`、`source_sidebar_select_none`
-  （`play_change` 三语已存在，未重复添加）
+  `play_change_count`、`source_sidebar_select_all|none`
 
 改写：
+- `ui/hero/ChangeSourceDialog.kt`：独立 Dialog + `R.layout.dialog_source`，窗口尺寸/间距/缩放照搬 f23
+- `ui/hero/SourceSidebar.kt`：独立 Dialog + `R.layout.dialog_source_sidebar`，宽度由内容决定
+- `ui/hero/HeroSourceDemo.kt`：纯 Kotlin 假数据
 
-- `ui/hero/ChangeSourceDialog.kt`：View Dialog，inflate `R.layout.dialog_source`
-- `ui/hero/SourceSidebar.kt`：View Dialog，inflate `R.layout.dialog_source_sidebar`
-- `ui/hero/HeroSourceDemo.kt`：纯 Kotlin 假数据（去掉 Compose Color）
+入口（只加回调）：
+- `HeroHomeActivity.kt`：小房子 → `SourceSidebar.show(...)`，关闭回焦小房子
+- `HeroDetailActivity.kt`：「换源」→ `ChangeSourceDialog.show(...)`，关闭回焦「换源」
 
-入口（只加回调，不动 layout / 焦点链）：
+保留：`HeroCommonUi.kt` 整份（`HeroDialogShell` 仍供选集 / 演员弹窗）。
 
-- `HeroHomeActivity.kt`：小房子 `onHomeConfirm` 调 `SourceSidebar.show(...)`；
-  删除 Compose 侧边栏状态与覆盖层，初始焦点仍落小房子。
-- `HeroDetailActivity.kt`：「换源」分支调 `ChangeSourceDialog.show(...)`；删除 Compose 弹窗块。
+## 6. 验证
 
-保留：
+- `:app:assembleLeanbackArmeabi_v7aDebug` → BUILD SUCCESSFUL
+- `:app:assembleMobileArmeabi_v7aDebug` → BUILD SUCCESSFUL
+  （两个变体同时验证 `main` 未引入 Leanback；2026-11-02，AAPT 资源链接通过）
 
-- `HeroCommonUi.kt` 整份保留（`HeroDialogShell` 仍被选集/演员弹窗使用，删除会违反「选集页零改动」）。
-- `HeroHomeLogoButton` 仍是首页 Compose 组件；换源弹窗内的小房子是 `dialog_source.xml` 里独立实现的 View。
+## 7. 已知限制 / 风险
 
-## 7. 验证
+1. 侧边栏删除两条 `shape_line_tapered` 分隔线（原因见 §3.6），这是与 ref 的唯一视觉差异。
+2. `shape_home_logo_source_focused` 不在 ref_docs 内，按红色椭圆实现；若原版另有取值需要再对一次截图。
+3. 站点切换刷新结果、结果卡确定键写库、海报加载仍是 `TODO(数据层对接)`；侧边栏勾选只存会话内。
+4. `keywordRow` 按 ref 保留 id 且 `gone`；`progress` 为三态之一，默认隐藏。
+5. 结果卡暂无海报地址，显示原版的 `@color/black_20` 占位底色 + 「站点 · 日期」。
 
-- `:app:compileLeanbackArmeabi_v7aDebugKotlin` → BUILD SUCCESSFUL（2026-11-02）
-- `:app:compileMobileArmeabi_v7aDebugKotlin` → BUILD SUCCESSFUL（同日，验证 main 源集未引入 Leanback 依赖）
-- 后续 `shape_home_logo_normal_white` 仅改 `solid` 颜色值（`#FFFFFF` → `#1AFFFFFF`），
-  纯资源改动、无新增引用，不回退上述两次编译结论。
-- CI 报 `resource color/selector_source_site_item_text not found` 后修正：该文件由
-  `res/drawable/` 移到 `res/color/`（文字颜色选择器只能以 `@color/` 引用）。
-  `:app:assembleMobileArmeabi_v7aDebug` → BUILD SUCCESSFUL（2026-11-02 22:22，产出
-  `app-mobile-armeabi_v7a-debug.apk`）。
+## 8. 回滚
 
-## 8. 已知限制 / 风险
-
-1. ~~`shape_home_logo_normal_white` 按指令写成纯白实心~~ **已修复**：`solid` 改为
-   `#1AFFFFFF`（逆向原值 `white_10`），白色 `ic_home_logo` 叠在半透明圆底上可见。
-2. 顶部「全选/全不选」的焦点态用 source 红色胶囊（`selector_source_site_item_background`），
-   因为逆向的 `overlay_focus` 布局不在本工程资源里，无法直接复用。**用户已确认无需修改**。
-3. 站点切换后的结果刷新、结果卡确定键的写库仍是 `TODO(数据层对接)`；
-   侧边栏勾选状态只保存在本次会话。
-4. 结果卡片暂无海报地址，只显示「站点 · 日期」；接入真实数据后补图片加载。
-5. `keywordRow` 按定稿保持 `gone`，只保留 id；`progress` 默认隐藏，三态结构完整保留。
-
-## 9. 回滚
-
-删除本次新增的 source 系列 drawable/layout/anim 与
-`ChangeSourceDialog` / `SourceSidebar` / `HeroSourceDemo` 的改写，
-把两个 Activity 的入口回调还原为上一版 Compose 调用即可；
-不改动既有蓝色站点样式与其他页面，回滚面仅限本文件清单。
+删除本文件 §5 列出的新增资源与两个 Dialog 的改写，把两个 Activity 的入口回调还原即可；
+不触碰既有蓝色站点样式、`HeroDialogShell` 与其它页面，回滚面仅限 §5 清单。

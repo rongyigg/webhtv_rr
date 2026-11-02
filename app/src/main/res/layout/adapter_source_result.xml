@@ -1,33 +1,48 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+  照搬 ref_docs/adapter_vod_rect.xml（换源结果卡，f23 用 vs3 → VodRectPresenter）。
+  仅删除 tmdbTag：它依赖本工程不存在的 @drawable/bg_tmdb_tag 与 @string/home_tmdb_tag，
+  且原版默认 gone，不参与布局。占位底色沿用原版 @color/black_20（不是纯黑块）。
+-->
 <RelativeLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
-    android:layout_width="120dp"
-    android:layout_height="wrap_content"
-    android:background="@drawable/selector_source_result"
-    android:clipChildren="false"
+    android:background="@null"
+    android:paddingBottom="0dp"
     android:focusable="true"
     android:focusableInTouchMode="true"
-    android:nextFocusUp="@id/siteRecycler"
-    android:padding="2dp">
-
-    <com.google.android.material.imageview.ShapeableImageView
-        android:id="@+id/image"
-        android:layout_width="116dp"
-        android:layout_height="174dp"
-        android:background="@color/black_20"
-        android:scaleType="centerCrop"
-        app:shapeAppearanceOverlay="@style/Vod.Grid" />
-
+    android:clipChildren="false"
+    android:clipToPadding="false"
+    android:layout_width="wrap_content"
+    android:layout_height="wrap_content"
+    android:stateListAnimator="@null"
+    android:outlineProvider="none"
+    android:defaultFocusHighlightEnabled="false">
+    <FrameLayout
+        android:id="@+id/imageWrapper"
+        android:duplicateParentState="true"
+        android:clipChildren="false"
+        android:clipToPadding="false"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content">
+        <com.google.android.material.imageview.ShapeableImageView
+            android:id="@+id/image"
+            android:background="@color/black_20"
+            android:layout_width="120dp"
+            android:layout_height="180dp"
+            android:scaleType="centerCrop"
+            app:shapeAppearanceOverlay="@style/Vod.Grid.Large"/>
+    </FrameLayout>
     <com.google.android.material.textview.MaterialTextView
-        android:id="@+id/name"
-        android:layout_width="116dp"
-        android:layout_height="wrap_content"
-        android:layout_below="@id/image"
-        android:layout_marginTop="8dp"
+        android:textSize="13sp"
+        android:textColor="#ccffffff"
         android:ellipsize="marquee"
         android:gravity="center"
-        android:maxLines="1"
+        android:id="@+id/name"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
         android:singleLine="true"
-        android:textColor="#ccffffff"
-        android:textSize="13sp" />
+        android:layout_below="@+id/imageWrapper"
+        android:layout_alignStart="@+id/imageWrapper"
+        android:layout_alignEnd="@+id/imageWrapper"/>
 </RelativeLayout>

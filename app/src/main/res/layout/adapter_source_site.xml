@@ -1,26 +1,35 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+  照搬 ref_docs/adapter_v2_site.xml（站点标签 item）。
+  两处取值随宿主变化（结构、字号、颜色、选择器全部原样）：
+  1. 外层宽度 match_parent → wrap_content：原版用于竖向列表，这里是 dialog_source 的横向站点栏；
+  2. 高度 39dp / wrap_content → match_parent：宿主行高由 ref_docs/dialog_source.xml 的 siteLayout 32dp
+     - 3dp*2 内边距决定，标签必须填满该行，否则会被 siteLayout 的 clipChildren 裁切。
+  原版底部的 line（竖向列表分隔线）在横向标签行中没有语义，故删除。
+-->
 <androidx.appcompat.widget.LinearLayoutCompat xmlns:android="http://schemas.android.com/apk/res/android"
-    android:layout_width="wrap_content"
-    android:layout_height="39dp"
-    android:background="@drawable/selector_source_site_item_background"
-    android:focusable="true"
-    android:focusableInTouchMode="true"
-    android:gravity="center"
-    android:minWidth="56dp"
-    android:nextFocusDown="@id/recycler"
     android:orientation="horizontal"
-    android:paddingStart="12dp"
-    android:paddingEnd="12dp">
-
-    <com.google.android.material.textview.MaterialTextView
-        android:id="@+id/sourceSiteName"
+    android:layout_width="wrap_content"
+    android:layout_height="match_parent">
+    <androidx.appcompat.widget.LinearLayoutCompat
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:id="@+id/item"
+        android:background="@drawable/selector_source_site_item_background"
+        android:focusable="true"
+        android:focusableInTouchMode="true"
         android:layout_width="wrap_content"
-        android:layout_height="match_parent"
-        android:duplicateParentState="true"
-        android:ellipsize="marquee"
-        android:gravity="center"
-        android:includeFontPadding="false"
-        android:singleLine="true"
-        android:textColor="@color/selector_source_site_item_text"
-        android:textSize="14sp" />
+        android:layout_height="match_parent">
+        <androidx.appcompat.widget.AppCompatTextView
+            android:textSize="14sp"
+            android:textColor="@color/selector_source_site_item_text"
+            android:ellipsize="marquee"
+            android:gravity="center"
+            android:id="@+id/text"
+            android:duplicateParentState="true"
+            android:layout_width="wrap_content"
+            android:layout_height="match_parent"
+            android:singleLine="true"
+            android:includeFontPadding="false"/>
+    </androidx.appcompat.widget.LinearLayoutCompat>
 </androidx.appcompat.widget.LinearLayoutCompat>
