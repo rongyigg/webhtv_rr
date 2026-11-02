@@ -83,6 +83,9 @@ import androidx.core.view.WindowInsetsControllerCompat
 import coil3.compose.AsyncImage
 import com.fongmi.android.tv.R
 import com.fongmi.android.tv.ui.hero.ChangeSourceDialog
+import com.fongmi.android.tv.ui.hero.HERO_SOURCE_RESULTS
+import com.fongmi.android.tv.ui.hero.HERO_SOURCE_RESULT_TOTAL
+import com.fongmi.android.tv.ui.hero.HERO_SOURCE_SITES
 import com.fongmi.android.tv.ui.hero.HeroAccentColor
 import com.fongmi.android.tv.ui.hero.HeroDialogShell
 import com.fongmi.android.tv.ui.hero.HeroImageLoader
@@ -163,6 +166,7 @@ class HeroDetailActivity : ComponentActivity() {
 
 @Composable
 private fun HeroDetailScreen(detail: HeroDetail) {
+    val context = LocalContext.current
     // 两组可聚焦区域：按钮组 + 演职员行。跨区移动全部显式 requestFocus，不依赖 2D 焦点搜索。
     val actionRequesters = remember { List(DETAIL_ACTIONS.size) { FocusRequester() } }
     val castRequesters = remember(detail.cast.size) { List(detail.cast.size) { FocusRequester() } }
@@ -279,6 +283,15 @@ private fun HeroDetailScreen(detail: HeroDetail) {
                         DETAIL_ACTION_CHANGE_SOURCE -> {
                             pendingActionFocus = DETAIL_ACTION_CHANGE_SOURCE
                             showSourceDialog = true
+                            // 换源弹窗改为 View 体系独立 Dialog；showSourceDialog 只用于关闭后的焦点交还。
+                            ChangeSourceDialog.show(
+                                context = context,
+                                sites = HERO_SOURCE_SITES,
+                                currentSite = 0,
+                                results = HERO_SOURCE_RESULTS,
+                                total = HERO_SOURCE_RESULT_TOTAL,
+                                onClosed = { showSourceDialog = false },
+                            )
                         }
                     }
                 },
@@ -320,15 +333,6 @@ private fun HeroDetailScreen(detail: HeroDetail) {
             // TODO(接入历史库)：History.push(detail.title, index)，目前只占位、不改播放链路。
             onEpisodeSelected = { _ -> },
             onDismiss = { showPlayDialog = false },
-        )
-    }
-
-    // 换源弹窗：复用选集弹窗外壳；内部的小房子再拉起全局 SourceSidebar。
-    // 关闭后由上面的 LaunchedEffect 把焦点送回「换源」按钮。
-    if (showSourceDialog) {
-        ChangeSourceDialog(
-            detailTitle = detail.title,
-            onDismiss = { showSourceDialog = false },
         )
     }
 

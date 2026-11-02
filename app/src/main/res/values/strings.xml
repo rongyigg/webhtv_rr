@@ -2426,4 +2426,9 @@
     <string name="remote_trust_config_name">Config name, optional</string>
     <string name="remote_trust_config_add">Add</string>
     <string name="playback_webhook_incomplete">Incomplete</string>
+    <string name="play_change_result">Source results</string>
+    <string name="play_change_empty">No source available</string>
+    <string name="play_change_count">%1$d items</string>
+    <string name="source_sidebar_select_all">All</string>
+    <string name="source_sidebar_select_none">None</string>
 </resources>

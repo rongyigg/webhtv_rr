@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<androidx.appcompat.widget.LinearLayoutCompat xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="wrap_content"
+    android:layout_height="39dp"
+    android:background="@drawable/selector_source_site_item_background"
+    android:focusable="true"
+    android:focusableInTouchMode="true"
+    android:gravity="center"
+    android:minWidth="56dp"
+    android:nextFocusDown="@id/recycler"
+    android:orientation="horizontal"
+    android:paddingStart="12dp"
+    android:paddingEnd="12dp">
+
+    <com.google.android.material.textview.MaterialTextView
+        android:id="@+id/sourceSiteName"
+        android:layout_width="wrap_content"
+        android:layout_height="match_parent"
+        android:duplicateParentState="true"
+        android:ellipsize="marquee"
+        android:gravity="center"
+        android:includeFontPadding="false"
+        android:singleLine="true"
+        android:textColor="@color/selector_source_site_item_text"
+        android:textSize="14sp" />
+</androidx.appcompat.widget.LinearLayoutCompat>

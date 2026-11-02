@@ -223,4 +223,19 @@
         <item name="backgroundTint">#174EA6</item>
     </style>
 
+    <!-- 换源弹窗 / 接口源侧边栏：透明背景悬浮窗，尺寸与重力由代码设置 -->
+    <style name="SourceDialogTheme" parent="Theme.AppCompat.Dialog">
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:windowIsFloating">true</item>
+        <item name="android:backgroundDimEnabled">true</item>
+        <item name="android:windowCloseOnTouchOutside">true</item>
+    </style>
+
+    <!-- 侧边栏右侧滑入/滑出 -->
+    <style name="SourceSidebarAnimation">
+        <item name="android:windowEnterAnimation">@anim/source_sidebar_in</item>
+        <item name="android:windowExitAnimation">@anim/source_sidebar_out</item>
+    </style>
+
 </resources>

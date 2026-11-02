@@ -2363,4 +2363,9 @@
     <string name="remote_trust_config_name">接口名稱，可選</string>
     <string name="remote_trust_config_add">新增</string>
     <string name="playback_webhook_incomplete">未完成</string>
+    <string name="play_change_result">換源結果</string>
+    <string name="play_change_empty">暫無可用源</string>
+    <string name="play_change_count">%1$d個條目</string>
+    <string name="source_sidebar_select_all">全選</string>
+    <string name="source_sidebar_select_none">全不選</string>
 </resources>

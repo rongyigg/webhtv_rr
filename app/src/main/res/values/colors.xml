@@ -55,4 +55,6 @@
     <!-- 详情页焦点态用色（原版 red / red_500）：补上逆向资源缺失的引用。 -->
     <color name="red">#E50914</color>
     <color name="red_500">#F44336</color>
+    <!-- 接口源侧边栏背景（深灰），换源弹窗/侧边栏专用 -->
+    <color name="source_sidebar_background">#1E1E1E</color>
 </resources>

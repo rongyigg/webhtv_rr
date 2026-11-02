@@ -82,11 +82,14 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.platform.LocalContext
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import coil3.compose.AsyncImage
 import com.fongmi.android.tv.api.SiteApi
+import com.fongmi.android.tv.ui.hero.HERO_SOURCE_ENTRIES
+import com.fongmi.android.tv.ui.hero.HERO_SOURCE_INITIAL_CHECKED
 import com.fongmi.android.tv.ui.hero.HeroAccentColor
 import com.fongmi.android.tv.ui.hero.HeroHomeLogoButton
 import com.fongmi.android.tv.ui.hero.HeroImageLoader
@@ -203,6 +206,7 @@ private fun HeroHomeScreen(onOpenDetail: (String) -> Unit) {
     val posterState = rememberLazyListState()
     val tabState = rememberLazyListState()
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
 
     // 三个焦点区各自持有一组 FocusRequester：跨区移动用显式 requestFocus，
     // 避免 2D 焦点搜索在“顶栏项宽 ≠ 卡片宽”时落空。
@@ -214,7 +218,6 @@ private fun HeroHomeScreen(onOpenDetail: (String) -> Unit) {
     var rememberedTabIndex by remember { mutableIntStateOf(0) }
     var selectedTabIndex by remember { mutableIntStateOf(0) }
     var focusedPosterIndex by remember { mutableIntStateOf(0) }
-    var showSourceSidebar by remember { mutableStateOf(false) }
 
     // 换分类时用同一批假数据做轮转，视觉上列表确实换了，但不需要第二套资源。
     val posters = remember(selectedTabIndex) { postersForTab(selectedTabIndex) }
@@ -261,9 +264,8 @@ private fun HeroHomeScreen(onOpenDetail: (String) -> Unit) {
         focusPoster(target)
     }
 
-    // 启动时、以及接口源侧边栏关闭后，焦点都落回“小房子”。
-    LaunchedEffect(showSourceSidebar) {
-        if (showSourceSidebar) return@LaunchedEffect
+    // 启动时焦点落在“小房子”；侧边栏关闭后的焦点由 onClosed 回调交还。
+    LaunchedEffect(Unit) {
         requestFocus(topBarRequesters, 0)
     }
 
@@ -284,7 +286,20 @@ private fun HeroHomeScreen(onOpenDetail: (String) -> Unit) {
         Column(modifier = Modifier.fillMaxSize()) {
             HeroTopBar(
                 requesters = topBarRequesters,
-                onHomeConfirm = { showSourceSidebar = true },
+                onHomeConfirm = {
+                    // 小房子确定键拉起全局接口源侧边栏（View Dialog），关闭后焦点回到小房子。
+                    SourceSidebar.show(
+                        context = context,
+                        entries = HERO_SOURCE_ENTRIES,
+                        initialChecked = HERO_SOURCE_INITIAL_CHECKED,
+                        onClosed = {
+                            scope.launch {
+                                withFrameNanos { }
+                                requestFocus(topBarRequesters, 0)
+                            }
+                        },
+                    )
+                },
                 // 顶栏 ↓ 进入 Tab 栏：落到记忆中的 Tab，而不是与顶栏项横向对齐的那一个。
                 onMoveDown = { focusTab() },
             )
@@ -320,10 +335,6 @@ private fun HeroHomeScreen(onOpenDetail: (String) -> Unit) {
                 onMoveRight = { index -> focusPosterHorizontal(index, 1) },
             )
         }
-    }
-
-    if (showSourceSidebar) {
-        SourceSidebar(onDismissRequest = { showSourceSidebar = false })
     }
 }
 
