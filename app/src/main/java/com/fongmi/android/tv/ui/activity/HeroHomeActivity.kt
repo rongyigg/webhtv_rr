@@ -22,12 +22,14 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -457,32 +459,34 @@ private fun HeroTopBarItem(
     )
     val interaction = remember { MutableInteractionSource() }
 
-    Column(
-        modifier = Modifier
-            .focusRequester(requester)
-            .onFocusChanged { focused = it.isFocused }
-            .onPreviewKeyEvent { event ->
-                // 顶栏任意一项按“下”都显式交给分类 Tab，保证边界处不会丢焦点。
-                if (event.type == KeyEventType.KeyDown && event.key == Key.DirectionDown) {
-                    onMoveDown()
-                    true
-                } else {
-                    false
-                }
+    // 三个尺寸严格按 XML navBar 的 homeBtn 锁定：
+    // 可点击容器 28dp → 圆底/白圈 24dp → 房子图标 16dp，逐层居中。
+    val itemModifier = Modifier
+        .focusRequester(requester)
+        .onFocusChanged { focused = it.isFocused }
+        .onPreviewKeyEvent { event ->
+            // 顶栏任意一项按“下”都显式交给分类 Tab，保证边界处不会丢焦点。
+            if (event.type == KeyEventType.KeyDown && event.key == Key.DirectionDown) {
+                onMoveDown()
+                true
+            } else {
+                false
             }
-            .clickable(interactionSource = interaction, indication = null, onClick = onConfirm)
-            // 不加左右 padding：顶栏第一项的左边线必须与 Tab / 海报的 24dp 基准线完全重合。
-            .padding(vertical = 4.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        if (isHome) {
-            // 首页按钮（原版 ic_home_logo）：32dp 圆形按钮，图标 24dp 且恒为纯白。
-            // - 未选中：透明底、无边框；
-            // - 焦点态：HeroAccentColor 红底 + 2dp 纯白外框（与原版选中态一致）；
-            // - 放大走 graphicsLayer，不参与布局，因此不会顶动整排。
+        }
+        .clickable(interactionSource = interaction, indication = null, onClick = onConfirm)
+
+    if (isHome) {
+        // 可点击容器固定 28dp；红底/白圈只有 24dp，图标 16dp 且绝对居中。
+        // - 未选中：透明底、无边框；
+        // - 焦点态：HeroAccentColor 红底 + 2dp 纯白外框；
+        // - 放大走 graphicsLayer，不参与布局，因此不会顶动整排。
+        Box(
+            modifier = itemModifier.size(NAV_HOME_CLICK_SIZE),
+            contentAlignment = Alignment.Center,
+        ) {
             Box(
                 modifier = Modifier
-                    .size(NAV_HOME_BUTTON_SIZE)
+                    .size(NAV_HOME_CIRCLE_SIZE)
                     .graphicsLayer {
                         scaleX = focusScale
                         scaleY = focusScale
@@ -504,7 +508,14 @@ private fun HeroTopBarItem(
                     modifier = Modifier.size(NAV_HOME_ICON_SIZE),
                 )
             }
-        } else {
+        }
+    } else {
+        Column(
+            modifier = itemModifier
+                // 不加左右 padding：顶栏第一项的左边线必须与 Tab / 海报的 24dp 基准线完全重合。
+                .padding(vertical = 4.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
             // 文字项固定 20dp 内容区，字号固定 [HERO_LABEL_SP]（与 Tab 栏同号），
             // 放大只走 graphicsLayer，不参与布局，下划线不会跳动。
             Box(
@@ -823,9 +834,17 @@ private fun PosterCard(
     onMoveLeft: () -> Unit,
     onMoveRight: () -> Unit,
 ) {
-    var focused by remember { mutableStateOf(false) }
+    // 真实焦点状态一律从 interactionSource 取（Modifier.clickable 会派发 FocusInteraction），
+    // 不再用 border(width = 0.dp) 表达“无边框”——0dp 描边在 Skia 里等于 hairline，
+    // 会给未选中的卡片画出一圈 1px 红边。
+    val interaction = remember { MutableInteractionSource() }
+    val isFocused by interaction.collectIsFocusedAsState()
+    // 只有真正获得焦点时才存在描边；否则传 null，Modifier.border 完全不绘制。
+    val borderStroke: BorderStroke? =
+        if (isFocused) BorderStroke(POSTER_FOCUS_BORDER, HeroAccentColor) else null
+
     val scale by animateFloatAsState(
-        targetValue = if (focused) POSTER_FOCUS_SCALE else 1f,
+        targetValue = if (isFocused) POSTER_FOCUS_SCALE else 1f,
         animationSpec = spring(
             dampingRatio = POSTER_SPRING_DAMPING,
             stiffness = POSTER_SPRING_STIFFNESS,
@@ -833,29 +852,20 @@ private fun PosterCard(
         label = "posterScale",
     )
     val elevation by animateDpAsState(
-        targetValue = if (focused) POSTER_FOCUS_ELEVATION else 0.dp,
+        targetValue = if (isFocused) POSTER_FOCUS_ELEVATION else 0.dp,
         animationSpec = spring(
             dampingRatio = POSTER_SPRING_DAMPING,
             stiffness = POSTER_SPRING_STIFFNESS,
         ),
         label = "posterElevation",
     )
-    val borderWidth by animateDpAsState(
-        targetValue = if (focused) POSTER_FOCUS_BORDER else 0.dp,
-        animationSpec = spring(
-            dampingRatio = POSTER_SPRING_DAMPING,
-            stiffness = POSTER_SPRING_STIFFNESS,
-        ),
-        label = "posterBorder",
-    )
-    val interaction = remember { MutableInteractionSource() }
 
     Column(
         modifier = Modifier
             .width(POSTER_CARD_WIDTH)
             .focusRequester(requester)
             .onFocusChanged {
-                focused = it.isFocused
+                // 这里只负责把“焦点换到哪一张”通知给上层，焦点样式统一走 interactionSource。
                 if (it.isFocused) onFocused()
             }
             .onPreviewKeyEvent { event ->
@@ -900,8 +910,9 @@ private fun PosterCard(
                 .shadow(elevation = elevation, shape = POSTER_SHAPE, clip = false)
                 .clip(POSTER_SHAPE)
                 .background(POSTER_PLACEHOLDER)
-                // 焦点边框统一用主题红（HeroAccentColor），不再是白色。
-                .border(width = borderWidth, color = HeroAccentColor, shape = POSTER_SHAPE),
+                // 焦点框：未聚焦时 borderStroke 为 null，直接跳过 border 修饰符，一行都不会画；
+                // 只有聚焦时才是 2dp 主题红（用 0dp 描边“隐藏”在 Skia 里仍会画出 hairline 红边）。
+                .then(if (borderStroke != null) Modifier.border(borderStroke, POSTER_SHAPE) else Modifier),
         ) {
             AsyncImage(
                 model = poster.url,
@@ -921,8 +932,8 @@ private fun PosterCard(
                 text = poster.title,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .then(if (focused) Modifier.basicMarquee(iterations = Int.MAX_VALUE) else Modifier),
-                color = if (focused) Color.White else POSTER_TITLE_COLOR,
+                    .then(if (isFocused) Modifier.basicMarquee(iterations = Int.MAX_VALUE) else Modifier),
+                color = if (isFocused) Color.White else POSTER_TITLE_COLOR,
                 fontSize = POSTER_TITLE_SP.sp,
                 maxLines = 1,
                 softWrap = false,
@@ -1021,9 +1032,10 @@ private val HERO_PADDING = 24.dp
 // 顶部导航 navBar（L199-262）
 // ---------------------------------------------------------------------------
 private val NAV_BAR_HEIGHT = 64.dp          // L207 layout_height
-private val NAV_HOME_BUTTON_SIZE = 32.dp      // 圆形按钮直径（容纳 2dp 白框 + 24dp 图标）
-private val NAV_HOME_ICON_SIZE = 24.dp        // ic_home_logo 的渲染尺寸
-private val NAV_HOME_BORDER = 2.dp            // 焦点态白色外框
+private val NAV_HOME_CLICK_SIZE = 28.dp        // 可点击容器（XML navBar homeBtn）
+private val NAV_HOME_CIRCLE_SIZE = 24.dp       // 红底/白圈直径
+private val NAV_HOME_ICON_SIZE = 16.dp         // ic_home_logo 渲染尺寸（圆内居中）
+private val NAV_HOME_BORDER = 2.dp             // 焦点态白色外框
 private val NAV_ITEMS_START_GAP = 20.dp     // L259 navRecycler layout_marginStart
 private val TOP_BAR_TEXT_BOX = 20.dp        // 文字项固定内容区（13sp 的贴合高度）
 private const val TOP_BAR_FOCUS_SCALE = 1.1f // 焦点态整体放大 1.1 倍（只走 graphicsLayer，不动布局）
