@@ -30,7 +30,6 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -79,6 +78,7 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -731,17 +731,18 @@ private fun HeroTabChip(
 }
 
 /**
- * 海报区（XML `posterArea`，L142-191）：整块固定高 215dp（L147），内部 recycler 同为 215dp（L156），
- * 左右 padding 24dp（L157-158）。
+ * 海报区（XML `posterArea`，L142-191）：整块固定高 215dp（L147），内部 recycler 同为 215dp（L156）。
  *
- * 卡片尺寸来自 `ref_docs/adapter_vod_rect.xml`：120dp × 180dp（L24-25）+ 8dp 圆角（L27 `Vod.Grid.Large`）。
- * 由于卡片宽度不再随屏幕缩放，“一屏 7 张半”只能由**间距**来保证：
+ * 一屏 = 7 张完整卡片 + 第 8 张只露出自身宽度的 1/7（合计 7.1428 张）。换算过程：
  *
- *     第 8 张卡露出半张 → 7 × (120 + gap) + 60 = 屏宽 − 24（起始 padding）
- *     ⇒ gap = (屏宽 − 24 − 120 × 7.5) / 7
+ *   1) 总可用宽度 = 屏宽 − 左 24dp − 右 24dp
+ *   2) 间距总宽   = 12dp × 7（6 个卡与卡之间的间距 + 1 个通往第 8 张的空隙）= 84dp
+ *   3) 卡片宽度   = (总可用宽度 − 84dp) / 7.1428
+ *      验证：7 × 宽 + 7 × 12dp + 宽/7 = 总可用宽度 ✔
+ *   4) 卡片高度   = 卡片宽度 × 1.5（严格 2:3）
  *
- * 960dp 宽屏：gap = (960 − 24 − 900) / 7 = 5.14dp，第 8 张正好露出 60dp。
- * 屏宽不足 924dp 时 gap 取 0（卡片不允许再压缩），此时只能靠滚动查看后续卡片。
+ * 960dp 宽屏：可用宽度 = 912dp → 卡片宽度 = (912 − 84) / 7.1428 = 115.92dp，高 = 173.88dp。
+ * 卡片宽度会按实际屏宽重算并 `println` 到控制台，方便对照真机。
  */
 @Composable
 private fun PosterArea(
@@ -755,36 +756,35 @@ private fun PosterArea(
     onMoveLeft: (Int) -> Unit,
     onMoveRight: (Int) -> Unit,
 ) {
-    BoxWithConstraints(
+    // 1) 总可用宽度：屏宽 − 左 24dp − 右 24dp
+    val availableWidth = LocalConfiguration.current.screenWidthDp - HERO_PADDING.value * 2
+    // 2) 间距总宽 = 12dp × 7；3) 卡片宽度 = (可用宽度 − 间距总宽) / 7.1428
+    val cardWidth = (availableWidth - POSTER_GAP.value * POSTER_GAP_COUNT) / POSTER_VISIBLE_CARDS
+    println("计算出的卡片宽度: $cardWidth")
+
+    LazyRow(
+        state = state,
+        // 24dp 的左右留白挂在这里（公式第 1 步已经把它扣掉了），LazyRow 自身不再设 contentPadding，
+        // 否则会二次扣减、第 8 张就会多露出 24dp，切不到 1/7。
         modifier = Modifier
             .fillMaxWidth()
-            .height(POSTER_AREA_HEIGHT),
+            .height(POSTER_AREA_HEIGHT)
+            .padding(horizontal = HERO_PADDING),
+        horizontalArrangement = Arrangement.spacedBy(POSTER_GAP),
     ) {
-        // 用实际测量宽度（而不是配置里的 screenWidthDp）反推间距，保证任何分辨率下都是 7 张半。
-        val cardGap = (
-            (maxWidth - HERO_PADDING - POSTER_CARD_WIDTH * POSTER_VISIBLE_CARDS) /
-                POSTER_FULL_COUNT
-            ).coerceAtLeast(0.dp)
-
-        LazyRow(
-            state = state,
-            modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(start = HERO_PADDING, end = HERO_PADDING),
-            horizontalArrangement = Arrangement.spacedBy(cardGap),
-        ) {
-            itemsIndexed(items = posters, key = { _, poster -> poster.id }) { index, poster ->
-                PosterCard(
-                    poster = poster,
-                    requester = requesters[index],
-                    onFocused = { onFocused(index) },
-                    onClick = { onClick(poster.title) },
-                    // 把“从哪一张发起”带回上层：滚动锚点与左右边界都在上层统一处理。
-                    onMoveUp = { onMoveUp(index) },
-                    onMoveDown = { onMoveDown(index) },
-                    onMoveLeft = { onMoveLeft(index) },
-                    onMoveRight = { onMoveRight(index) },
-                )
-            }
+        itemsIndexed(items = posters, key = { _, poster -> poster.id }) { index, poster ->
+            PosterCard(
+                poster = poster,
+                cardWidth = cardWidth,
+                requester = requesters[index],
+                onFocused = { onFocused(index) },
+                onClick = { onClick(poster.title) },
+                // 把“从哪一张发起”带回上层：滚动锚点与左右边界都在上层统一处理。
+                onMoveUp = { onMoveUp(index) },
+                onMoveDown = { onMoveDown(index) },
+                onMoveLeft = { onMoveLeft(index) },
+                onMoveRight = { onMoveRight(index) },
+            )
         }
     }
 }
@@ -793,7 +793,8 @@ private fun PosterArea(
  * 单张海报卡片：图片区与文字区完全剥离。
  *
  * 尺寸与样式全部对齐参考文件（`ref_docs/adapter_vod_rect.xml`）：
- * - 图片：120dp × 180dp（L24-25），严格 2:3；圆角 8dp（L27 指向 `Vod.Grid.Large`）。
+ * - 图片：宽度由 [PosterArea] 按“7 张 + 第 8 张 1/7”算出，高度 = 宽度 × 1.5，严格 2:3
+ *   （XML 基准 120dp × 180dp 是 960dp 屏下的原值，圆角 8dp 见 L27 `Vod.Grid.Large`）。
  * - 标题：13sp（L46）+ marginTop 8dp（L53）+ `#ccffffff`（L47）+ marquee（L48），
  *   这里用 13sp + 8dp 间距 + [basicMarquee]（仅焦点态跑马灯，未聚焦时省略号收尾）。
  * - 焦点缩放：`ref_docs/VodRectPresenter.java` 第 39-41 行 `1.08f`，本项目按产品要求取 1.05。
@@ -805,6 +806,7 @@ private fun PosterArea(
 @Composable
 private fun PosterCard(
     poster: HeroPoster,
+    cardWidth: Float,
     requester: FocusRequester,
     onFocused: () -> Unit,
     onClick: () -> Unit,
@@ -842,7 +844,7 @@ private fun PosterCard(
 
     Column(
         modifier = Modifier
-            .width(POSTER_CARD_WIDTH)
+            .width(cardWidth.dp)
             .focusRequester(requester)
             .onFocusChanged {
                 focused = it.isFocused
@@ -878,11 +880,11 @@ private fun PosterCard(
             .clickable(interactionSource = interaction, indication = null, onClick = onClick),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        // 图片区：只有这一层参与缩放、描边与阴影。120×180dp 是 XML 的固定尺寸。
+        // 图片区：只有这一层参与缩放、描边与阴影。高度 = 宽度 × 1.5，锁定 2:3。
         Box(
             modifier = Modifier
-                .width(POSTER_CARD_WIDTH)
-                .height(POSTER_CARD_HEIGHT)
+                .width(cardWidth.dp)
+                .height((cardWidth * POSTER_CARD_ASPECT).dp)
                 .graphicsLayer {
                     scaleX = scale
                     scaleY = scale
@@ -1100,15 +1102,18 @@ private val HERO_TAB_FOCUS_BORDER = 3.dp
 // 海报区 posterArea（L142-191）+ 卡片 adapter_vod_rect（L24-27、L45-57）
 // ---------------------------------------------------------------------------
 private val POSTER_AREA_HEIGHT = 215.dp     // L147 / L156
-private val POSTER_CARD_WIDTH = 120.dp      // adapter_vod_rect L24
-private val POSTER_CARD_HEIGHT = 180.dp     // adapter_vod_rect L25
 private val POSTER_TITLE_GAP = 8.dp         // adapter_vod_rect L53 layout_marginTop
 private const val POSTER_TITLE_SP = 13f     // adapter_vod_rect L46 textSize
 private val POSTER_TITLE_COLOR = Color(0xCCFFFFFF) // adapter_vod_rect L47
 
-// 一屏 7 张完整卡片 + 第 8 张露出半张（合计 7.5 张）；间距由实际测量宽度反推。
-private const val POSTER_FULL_COUNT = 7
-private const val POSTER_VISIBLE_CARDS = 7.5f
+// 一屏 = 7 张完整卡片 + 第 8 张露出自身宽度的 1/7（合计 7.1428 张）。
+// 卡宽 = (屏宽 − 24dp×2 − 12dp×7) / 7.1428；间距固定 12dp，共 7 段（含通往第 8 张的那一段）。
+private val POSTER_GAP = 12.dp
+private const val POSTER_GAP_COUNT = 7
+private const val POSTER_VISIBLE_CARDS = 7.1428f
+
+// 高度 = 宽度 × 1.5（严格 2:3，对应 adapter_vod_rect 的 120×180dp）。
+private const val POSTER_CARD_ASPECT = 1.5f
 
 // 焦点卡片停在第 5 个槽位（0-based 4）：索引 0..4 时行不动，索引 ≥ 5 起每按一次右键整行左移一张。
 private const val POSTER_FOCUS_SLOT = 4
