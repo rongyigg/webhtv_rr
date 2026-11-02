@@ -1,17 +1,18 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  照搬 ref_docs/adapter_site.xml（原版 SiteDialog 列表行，由 s82 SitePresenter 绑定）：
-  行高 40dp、18sp 文字、24dp 勾选圈（layout_marginStart 12dp）、行底 1dp 渐隐分隔线。
-
-  唯一替换：原版勾选圈是
-    MaterialCheckBox(enabled=false, button=@drawable/check_circle, app:buttonTint=@color/selector_site_item_check)
-  这两个资源（check_circle / selector_site_item_check）在本工程不存在，
-  改用 ref_docs 同源的 @drawable/selector_check_circle + AppCompatImageView（四态、24dp 不变）。
-  其余结构、尺寸、颜色、选择器全部原样。
+  照搬 ref_docs/adapter_site.xml（站点选择列表行：40dp / 18sp / 24dp 勾选圈）。
+  两处替换：
+  1. MaterialCheckBox + @drawable/check_circle + @color/selector_site_item_check（本工程均缺失）
+     → AppCompatImageView + @drawable/selector_check_circle（ref_docs 同源的四态选择器）；
+  2. 行宽与文字宽度由 match_parent / weight 改为 wrap_content：原版是整宽 sheet，
+     Hero 侧边栏的宽度由内容决定，否则面板会被撑到整屏；
+  3. 行底部的 shape_line_tapered 分隔线删除：match_parent 宽的 1dp View 在 wrap_content
+     面板里同样会把面板撑到整屏。
 -->
 <androidx.appcompat.widget.LinearLayoutCompat xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     android:orientation="vertical"
-    android:layout_width="match_parent"
+    android:layout_width="wrap_content"
     android:layout_height="wrap_content">
     <androidx.appcompat.widget.LinearLayoutCompat
         android:gravity="center_vertical"
@@ -21,7 +22,9 @@
         android:focusable="true"
         android:focusableInTouchMode="true"
         android:layout_width="match_parent"
-        android:layout_height="40dp">
+        android:layout_height="40dp"
+        android:paddingStart="8dp"
+        android:paddingEnd="8dp">
         <com.google.android.material.textview.MaterialTextView
             android:textSize="18sp"
             android:textColor="@color/selector_source_site_item_text"
@@ -30,11 +33,10 @@
             android:id="@+id/text"
             android:focusable="false"
             android:duplicateParentState="true"
-            android:layout_width="0dp"
+            android:layout_width="wrap_content"
             android:layout_height="match_parent"
             android:singleLine="true"
-            android:includeFontPadding="false"
-            android:layout_weight="1"/>
+            android:includeFontPadding="false"/>
         <androidx.appcompat.widget.AppCompatImageView
             android:id="@+id/check"
             android:duplicateParentState="true"
@@ -43,13 +45,4 @@
             android:background="@drawable/selector_check_circle"
             android:layout_marginStart="12dp"/>
     </androidx.appcompat.widget.LinearLayoutCompat>
-    <View
-        android:id="@+id/line"
-        android:background="@drawable/shape_line_tapered"
-        android:layout_width="match_parent"
-        android:layout_height="1dp"
-        android:layout_marginLeft="24dp"
-        android:layout_marginTop="16dp"
-        android:layout_marginRight="24dp"
-        android:layout_marginHorizontal="24dp"/>
 </androidx.appcompat.widget.LinearLayoutCompat>

@@ -2,7 +2,7 @@ package com.fongmi.android.tv.ui.hero
 
 import android.app.Dialog
 import android.content.Context
-import android.graphics.Rect
+import android.graphics.Color
 import android.graphics.drawable.ColorDrawable
 import android.os.Bundle
 import android.view.Gravity
@@ -11,37 +11,30 @@ import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
 import android.widget.TextView
-import androidx.recyclerview.widget.GridLayoutManager
+import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.fongmi.android.tv.R
-import com.fongmi.android.tv.ui.custom.CustomRecyclerView
-import kotlin.math.min
-import kotlin.math.roundToInt
 
 /**
- * 全局接口源侧边栏（View 体系，独立 Dialog）。
+ * 全局接口源侧边栏（View 体系，独立 Dialog 窗口）。
  *
- * 布局照搬 `ref_docs/dialog_site.xml`（原版 SiteDialog / `kz2`）：
- * 根横向 `padding 24dp` + `CustomRecyclerView`（weight 1、wrap_content 高、`app:maxHeight=480dp`），
- * 列表行照搬 `ref_docs/adapter_site.xml`（40dp 行高、18sp 文字、24dp 勾选圈）。
+ * 结构与全部尺寸直接照搬 `ref_docs/dialog_search_site.xml`（原版站点选择面板）：
+ * 顶部「全选 / 全不选」（12sp + 16dp 勾选圈，行高 39dp）→ 1dp 渐隐分隔线 → 站点列表。
+ * 列表行照搬 `ref_docs/adapter_site.xml`：40dp 行高、18sp 文字、24dp 勾选圈、底部渐隐分隔线。
  *
- * 数值全部照搬 `kz2.java`：
- * - 窗口宽度 = 屏幕宽 × `((cols-1)*0.2 + 0.4)`，单列（`site_mode` 默认 0）即 **0.4 × 屏宽**；
- * - 列表高度 = `(min(max(1, ceil(条目数/cols)), 4) * 73 - 16) dp`，同时设为 maxHeight；
- *   73 = 行高 40 + 底部分隔线 16 + 1dp 线，与 16dp 间距装饰器一致，因此最多显示 4 行；
- * - 列表用 `GridLayoutManager(context, cols)`，条目间距 16dp（`h23(cols, 16)`）；
- * - `itemAnimator = null`、`itemViewCacheSize = 6`（原版的 `hasFixedSize(true)` 不复用，见 [bindList]）。
+ * 焦点态照搬 `ref_docs/selector_site_item_background.xml`：
+ * focused → `shape_source_site_item_focused`（白色圆角胶囊，inset 8dp/4dp）；
+ * selected → `shape_source_chip_round_activated`；常态 → `shape_source_chip_round_normal`（纯透明、无底色）。
+ * 勾选圈照搬 `ref_docs/selector_check_circle.xml` 的四态。
  *
- * 焦点 / 选中态照搬 `ref_docs/selector_site_item_background.xml` 与
- * `ref_docs/selector_site_item_text.xml`（焦点白色胶囊、常态透明）。
+ * 与 ref 的差异（因为本工程缺资源 / 宿主改为独立 Dialog）：
+ * - `selector_search_action_background` 缺失 → 用上面同源的白胶囊选择器；
+ * - `check_circle` + `selector_site_item_check` 缺失 → 用 `selector_check_circle` 的 ImageView；
+ * - 原版由 BaseSheetDialog 的 sheet 容器提供背景 → 这里用 `shape_dialog_source`；
+ * - 原版贴底整宽 → 这里靠右、宽度由内容决定（窗口 WRAP_CONTENT，不写死 dp）。
  *
- * 与 ref 的差异（均在 `dialog_source_sidebar.xml` 头部注明）：
- * - 原版根布局无背景（由 MaterialAlertDialog 的 surface 提供）→ 用 `shape_dialog_source`；
- * - 原版右侧 `@id/action` 图标列整列删除：默认 gone，且 3 个资源本工程没有、4 个只在 leanback/mobile；
- * - 行内勾选圈用 `selector_check_circle` 的 ImageView 替代缺失的 `check_circle` + `selector_site_item_check`。
- *
- * 交互沿用 Hero 需求：确定键切换该条目勾选（多选），勾选快照通过 [onCheckedChanged] 回调；
- * 返回键关闭并把焦点交还 [onClosed]。组件内零网络、零数据层写入。
+ * 行为：确定键切换勾选；顶部「全选 / 全不选」批量切换；返回键关闭并把焦点交还 [onClosed]。
+ * 组件内零网络、零数据层写入，数据全部由外部传入。
  */
 internal class SourceSidebar private constructor(
     context: Context,
@@ -53,7 +46,9 @@ internal class SourceSidebar private constructor(
 
     private val checked = BooleanArray(entries.size)
 
-    private lateinit var list: CustomRecyclerView
+    private lateinit var list: RecyclerView
+    private lateinit var selectAll: View
+    private lateinit var selectNone: View
     private lateinit var adapter: Adapter
 
     init {
@@ -65,12 +60,15 @@ internal class SourceSidebar private constructor(
         super.onCreate(savedInstanceState)
         setContentView(R.layout.dialog_source_sidebar)
         setupWindow()
-        bindList()
+        bindViews()
+        bindBulkActions()
+        syncBulkState()
         setOnDismissListener { onClosed() }
     }
 
     override fun onStart() {
         super.onStart()
+        // 默认焦点落在列表第 1 条；布局完成后再请求，避免取不到 ViewHolder。
         list.post {
             val first = list.findViewHolderForAdapterPosition(0)?.itemView
             if (first != null && first.requestFocus()) return@post
@@ -78,62 +76,55 @@ internal class SourceSidebar private constructor(
         }
     }
 
-    /** kz2：`d0(((cols-1)*0.2f)+0.4f)` + `layoutParams.width = 同一比例 × 屏宽`。 */
     private fun setupWindow() {
-        val metrics = context.resources.displayMetrics
-        val width = (metrics.widthPixels * widthFraction()).toInt()
         window?.apply {
-            setBackgroundDrawable(ColorDrawable(android.graphics.Color.TRANSPARENT))
-            setLayout(width, ViewGroup.LayoutParams.WRAP_CONTENT)
-            setGravity(Gravity.CENTER)
+            setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+            // 宽度交给布局内容决定（ref 的面板本身没有固定宽度），高度铺满右侧。
+            setLayout(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT)
+            setGravity(Gravity.END)
             addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
-            setDimAmount(DIM_AMOUNT)
+            setDimAmount(SIDEBAR_DIM)
+            setWindowAnimations(R.style.SourceSidebarAnimation)
         }
-        // 原版同时把根布局宽度写成同一比例（kz2 b0() 里的 layoutParams.width）。
-        val root = findViewById<ViewGroup>(android.R.id.content)?.getChildAt(0) ?: return
-        root.layoutParams = root.layoutParams.apply { this.width = width }
     }
 
-    /** kz2：单列 `site_mode=0` → 0.4；三列 `site_mode=1` → 0.8。 */
-    private fun widthFraction(): Float = ((COLUMNS - 1) * 0.2f) + 0.4f
+    private fun bindViews() {
+        selectAll = findViewById(R.id.all)
+        selectNone = findViewById(R.id.none)
+        selectAll.nextFocusDownId = R.id.recycler
+        selectNone.nextFocusDownId = R.id.recycler
 
-    private fun bindList() {
         list = findViewById(R.id.recycler)
-        // 原版 kz2 调用 setHasFixedSize(true)，但原版列表高度是运行时算出的固定高度；
-        // 这里 dialog_source_sidebar 的列表是 android:layout_height="wrap_content"，
-        // 两者并存会触发 Lint `InvalidSetHasFixedSize`（CI 失败），故不设置该标志。
+        list.layoutManager = LinearLayoutManager(context)
         list.itemAnimator = null
-        list.setItemViewCacheSize(6)
-        list.layoutManager = GridLayoutManager(context, COLUMNS)
-        list.addItemDecoration(SpacingDecoration(dp(ITEM_SPACING_DP)))
+        list.descendantFocusability = ViewGroup.FOCUS_AFTER_DESCENDANTS
         adapter = Adapter()
         list.adapter = adapter
-        // kz2：高度 = (min(max(1, ceil(n/cols)), 4) * 73 - 16) dp，同时作为 maxHeight。
-        val rows = min(maxOf(1, (entries.size + COLUMNS - 1) / COLUMNS), MAX_ROWS)
-        val height = dp(rows * ROW_UNIT_DP - ROW_UNIT_GAP_DP)
-        list.setMaxHeight(height)
-        list.layoutParams = list.layoutParams.apply { this.height = height }
+    }
+
+    private fun bindBulkActions() {
+        selectAll.setOnClickListener { setAll(true) }
+        selectNone.setOnClickListener { setAll(false) }
     }
 
     private fun toggle(position: Int) {
         if (position !in checked.indices) return
         checked[position] = !checked[position]
         adapter.notifyItemChanged(position)
+        syncBulkState()
         onCheckedChanged(checked.copyOf())
     }
 
-    private fun dp(value: Int): Int = (value * context.resources.displayMetrics.density).roundToInt()
+    private fun setAll(value: Boolean) {
+        for (index in checked.indices) checked[index] = value
+        adapter.notifyDataSetChanged()
+        syncBulkState()
+        onCheckedChanged(checked.copyOf())
+    }
 
-    /** kz2 的 `h23(cols, 16)`：多列时补右间距，每行补下间距。 */
-    private class SpacingDecoration(private val spacing: Int) : RecyclerView.ItemDecoration() {
-        override fun getItemOffsets(outRect: Rect, view: View, parent: RecyclerView, state: RecyclerView.State) {
-            val position = parent.getChildAdapterPosition(view)
-            if (position == RecyclerView.NO_POSITION) return
-            val total = state.itemCount
-            val column = position % COLUMNS
-            if (column != COLUMNS - 1 && position != total - 1) outRect.right = spacing
-            if (position + COLUMNS < total) outRect.bottom = spacing
-        }
+    private fun syncBulkState() {
+        selectAll.isSelected = checked.isNotEmpty() && checked.all { it }
+        selectNone.isSelected = checked.none { it }
     }
 
     private inner class Adapter : RecyclerView.Adapter<Adapter.Holder>() {
@@ -149,8 +140,10 @@ internal class SourceSidebar private constructor(
             holder.name.text = entries[position].label
             holder.check.isSelected = checked[position]
             holder.itemView.isSelected = checked[position]
+            holder.itemView.nextFocusUpId = if (position == 0) R.id.all else View.NO_ID
+            // 勾选圈用 duplicateParentState 跟随行状态，这里只需要行本身的点击与选中态。
             holder.itemView.setOnClickListener { toggle(holder.bindingAdapterPosition) }
-            // 左右键在列表内被消费，不会把焦点甩出面板。
+            // 左右键在列表内被消费，不会把焦点甩出侧边栏。
             holder.itemView.setOnKeyListener { _, keyCode, event ->
                 event.action == KeyEvent.ACTION_DOWN &&
                     (keyCode == KeyEvent.KEYCODE_DPAD_LEFT || keyCode == KeyEvent.KEYCODE_DPAD_RIGHT)
@@ -165,18 +158,7 @@ internal class SourceSidebar private constructor(
 
     companion object {
 
-        /** kz2：`site_mode` 默认 0 → 单列。 */
-        private const val COLUMNS = 1
-
-        /** kz2：`Math.min(..., 4) * 73 - 16`。 */
-        private const val MAX_ROWS = 4
-        private const val ROW_UNIT_DP = 73
-        private const val ROW_UNIT_GAP_DP = 16
-
-        /** kz2：`h23(cols, 16)`。 */
-        private const val ITEM_SPACING_DP = 16
-
-        private const val DIM_AMOUNT = 0.3f
+        private const val SIDEBAR_DIM = 0.25f
 
         /**
          * 打开全局接口源侧边栏。

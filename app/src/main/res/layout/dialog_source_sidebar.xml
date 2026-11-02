@@ -1,33 +1,93 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  照搬 ref_docs/dialog_site.xml（原版 SiteDialog / kz2）：
-  根布局横向、padding 24dp、wrap_content 高度、baselineAligned=false，
-  左侧 CustomRecyclerView（weight 1、wrap_content 高、app:maxHeight=480dp）。
-
-  与原版的两处差异：
-  1. 原版根布局没有 android:background —— 它由 MaterialAlertDialog 的 surface 提供；
-     本工程的换源弹窗是透明主题的独立 Dialog，故用同源的 @drawable/shape_dialog_source。
-  2. 原版右侧的 @id/action 图标列（search / sort / change / select / cancel）整列删除：
-     它默认就是 gone，而它引用的 selector_config_delete_background、selector_config_item_delete、
-     ic_site_sort 在本工程不存在，ic_site_search / ic_site_change / ic_site_select / ic_site_cancel
-     只存在于 leanback 与 mobile 源集（main 布局引用会破坏另一个变体的编译）。
+  照搬 ref_docs/dialog_search_site.xml（原版 SearchSiteDialog 站点选择面板：全选 / 全不选 → 淡出分隔线 → 站点列表）。
+  与原版的差异仅三处，均因本工程资源缺失或宿主为独立 Dialog：
+  1. @drawable/selector_search_action_background（缺失）→ @drawable/selector_source_site_item_background
+     （同样是「焦点白色胶囊、其余透明」，见 ref_docs/selector_site_item_background.xml + shape_site_item_focused.xml）；
+  2. @string/search_select_all|none → 已存在的 source_sidebar_select_all|none（文案一致）；
+  3. 原版根布局没有背景（由 BaseSheetDialog 的 sheet 容器提供），独立 Dialog 需要自己给面板，
+     故用 ref 同源的 @drawable/shape_dialog_source；
+     根布局与「全选/全不选」由 match_parent/weight 改为 wrap_content，使面板宽度由内容决定
+     （原版为贴底整宽 sheet，不再是 Hero 的右侧栏形态）；
+  4. 原版两条 shape_line_tapered 分隔线（标题下 / 每行下）删除：它们是 match_parent 宽的 1dp View，
+     在 wrap_content 根布局里会把面板重新撑到整屏宽。
 -->
 <androidx.appcompat.widget.LinearLayoutCompat xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:app="http://schemas.android.com/apk/res-auto"
-    android:gravity="center_vertical"
-    android:orientation="horizontal"
-    android:padding="24dp"
-    android:layout_width="match_parent"
-    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:paddingTop="4dp"
+    android:paddingBottom="16dp"
+    android:layout_width="wrap_content"
+    android:layout_height="match_parent"
     android:background="@drawable/shape_dialog_source"
-    android:baselineAligned="false">
+    android:paddingStart="4dp"
+    android:paddingEnd="4dp">
+    <androidx.appcompat.widget.LinearLayoutCompat
+        android:orientation="horizontal"
+        android:layout_width="wrap_content"
+        android:layout_height="39dp">
+        <androidx.appcompat.widget.LinearLayoutCompat
+            android:gravity="center"
+            android:orientation="horizontal"
+            android:id="@+id/all"
+            android:background="@drawable/selector_source_site_item_background"
+            android:focusable="true"
+            android:focusableInTouchMode="true"
+            android:nextFocusUp="@+id/all"
+            android:layout_width="wrap_content"
+            android:layout_height="match_parent">
+            <androidx.appcompat.widget.AppCompatTextView
+                android:textSize="12sp"
+                android:textColor="@color/selector_source_site_item_text"
+                android:gravity="center"
+                android:duplicateParentState="true"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/source_sidebar_select_all"
+                android:singleLine="true"
+                android:includeFontPadding="false"/>
+            <androidx.appcompat.widget.AppCompatImageView
+                android:id="@+id/all_check"
+                android:background="@drawable/selector_check_circle"
+                android:duplicateParentState="true"
+                android:layout_width="16dp"
+                android:layout_height="16dp"
+                android:layout_marginStart="6dp"/>
+        </androidx.appcompat.widget.LinearLayoutCompat>
+        <androidx.appcompat.widget.LinearLayoutCompat
+            android:gravity="center"
+            android:orientation="horizontal"
+            android:id="@+id/none"
+            android:background="@drawable/selector_source_site_item_background"
+            android:focusable="true"
+            android:focusableInTouchMode="true"
+            android:nextFocusUp="@+id/none"
+            android:layout_width="wrap_content"
+            android:layout_height="match_parent">
+            <androidx.appcompat.widget.AppCompatTextView
+                android:textSize="12sp"
+                android:textColor="@color/selector_source_site_item_text"
+                android:gravity="center"
+                android:duplicateParentState="true"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/source_sidebar_select_none"
+                android:singleLine="true"
+                android:includeFontPadding="false"/>
+            <androidx.appcompat.widget.AppCompatImageView
+                android:id="@+id/none_check"
+                android:background="@drawable/selector_check_circle"
+                android:duplicateParentState="true"
+                android:layout_width="16dp"
+                android:layout_height="16dp"
+                android:layout_marginStart="6dp"/>
+        </androidx.appcompat.widget.LinearLayoutCompat>
+    </androidx.appcompat.widget.LinearLayoutCompat>
     <com.fongmi.android.tv.ui.custom.CustomRecyclerView
         android:id="@+id/recycler"
         android:clipChildren="false"
         android:clipToPadding="false"
-        android:layout_width="0dp"
-        android:layout_height="wrap_content"
+        android:layout_width="wrap_content"
+        android:layout_height="0dp"
         android:layout_weight="1"
-        android:overScrollMode="never"
-        app:maxHeight="480dp"/>
+        android:overScrollMode="never"/>
 </androidx.appcompat.widget.LinearLayoutCompat>
