@@ -390,8 +390,9 @@ private fun HeroMaskBottom() {
  * - 高 64dp（L207），左右 padding 各 24dp（L208-209），内容垂直居中（L200 `gravity=center_vertical`）。
  * - `homeBtn` 28dp（L219-220），`navRecycler` 距它 20dp（L259 `layout_marginStart=20dp`）。
  *
- * 文字样式与第二排 Tab 栏完全一致（同为 [HERO_LABEL_SP]）：未选中纯白 60% 透明度，
- * 焦点态纯白 + 平滑放大 1.1 倍 + 下方红色短横线（[HeroAccentColor]）。
+ * 文字样式：第一排独立使用 [TOP_BAR_SP] = 16sp，比第二排 Tab 的 13sp 大一档，形成视觉层级；
+ * 字重常态 Medium、焦点 SemiBold；未选中纯白 60% 透明度，
+ * 焦点态纯白 + 平滑放大 1.1 倍 + 下方 2dp 红色短横线（[HeroAccentColor]）。
  */
 @Composable
 private fun HeroTopBar(
@@ -459,8 +460,8 @@ private fun HeroTopBarItem(
     )
     val interaction = remember { MutableInteractionSource() }
 
-    // 三个尺寸严格按 XML navBar 的 homeBtn 锁定：
-    // 可点击容器 28dp → 圆底/白圈 24dp → 房子图标 16dp，逐层居中。
+    // 尺寸按 16sp 文字重新配比，逐层居中：
+    // 可点击容器 32dp → 圆底/白圈 28dp → 房子图标 20dp。
     val itemModifier = Modifier
         .focusRequester(requester)
         .onFocusChanged { focused = it.isFocused }
@@ -476,7 +477,7 @@ private fun HeroTopBarItem(
         .clickable(interactionSource = interaction, indication = null, onClick = onConfirm)
 
     if (isHome) {
-        // 可点击容器固定 28dp；红底/白圈只有 24dp，图标 16dp 且绝对居中。
+        // 可点击容器固定 32dp；红底/白圈 28dp，图标 20dp 且绝对居中。
         // - 未选中：透明底、无边框；
         // - 焦点态：HeroAccentColor 红底 + 2dp 纯白外框；
         // - 放大走 graphicsLayer，不参与布局，因此不会顶动整排。
@@ -516,7 +517,7 @@ private fun HeroTopBarItem(
                 .padding(vertical = 4.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            // 文字项固定 20dp 内容区，字号固定 [HERO_LABEL_SP]（与 Tab 栏同号），
+            // 文字项固定 24dp 内容区，字号为第一排专属的 [TOP_BAR_SP] = 16sp，
             // 放大只走 graphicsLayer，不参与布局，下划线不会跳动。
             Box(
                 modifier = Modifier.height(TOP_BAR_TEXT_BOX),
@@ -529,8 +530,9 @@ private fun HeroTopBarItem(
                         scaleY = focusScale
                     },
                     color = textColor,
-                    fontSize = HERO_LABEL_SP.sp,
-                    fontWeight = if (focused) FontWeight.Medium else FontWeight.Normal,
+                    // 第一排 16sp（第二排 Tab 仍是 13sp），常态 Medium、焦点 SemiBold。
+                    fontSize = TOP_BAR_SP.sp,
+                    fontWeight = if (focused) FontWeight.SemiBold else FontWeight.Medium,
                     maxLines = 1,
                 )
             }
@@ -1032,16 +1034,17 @@ private val HERO_PADDING = 24.dp
 // 顶部导航 navBar（L199-262）
 // ---------------------------------------------------------------------------
 private val NAV_BAR_HEIGHT = 64.dp          // L207 layout_height
-private val NAV_HOME_CLICK_SIZE = 28.dp        // 可点击容器（XML navBar homeBtn）
-private val NAV_HOME_CIRCLE_SIZE = 24.dp       // 红底/白圈直径
-private val NAV_HOME_ICON_SIZE = 16.dp         // ic_home_logo 渲染尺寸（圆内居中）
+private val NAV_HOME_CLICK_SIZE = 32.dp        // 可点击容器（高 32dp，与 16sp 文字视觉对齐）
+private val NAV_HOME_CIRCLE_SIZE = 28.dp       // 红底/白圈直径
+private val NAV_HOME_ICON_SIZE = 20.dp         // ic_home_logo 渲染尺寸（圆内居中）
 private val NAV_HOME_BORDER = 2.dp             // 焦点态白色外框
 private val NAV_ITEMS_START_GAP = 20.dp     // L259 navRecycler layout_marginStart
-private val TOP_BAR_TEXT_BOX = 20.dp        // 文字项固定内容区（13sp 的贴合高度）
+private val TOP_BAR_TEXT_BOX = 24.dp        // 文字项固定内容区（16sp 的贴合高度）
+private const val TOP_BAR_SP = 16f          // 第一排字号（比第二排 Tab 的 13sp 大一档，形成层级）
 private const val TOP_BAR_FOCUS_SCALE = 1.1f // 焦点态整体放大 1.1 倍（只走 graphicsLayer，不动布局）
 private const val TOP_BAR_ANIM_MS = 150
 private const val TOP_BAR_IDLE_ALPHA = 0.6f
-private val TOP_BAR_ITEM_SPACING = 40.dp    // navRecycler 项间距（adapter_nav 职责，沿用既有视觉）
+private val TOP_BAR_ITEM_SPACING = 40.dp    // navRecycler 项间距（放大字号后仍保持宽松，不挤在一起）
 
 // ---------------------------------------------------------------------------
 // 左侧 Hero 信息区 heroInfo（L61-127）
@@ -1132,5 +1135,5 @@ private val DIALOG_SHAPE = RoundedCornerShape(14.dp)
 // ---------------------------------------------------------------------------
 private val HeroAccentColor = Color(0xFFFF0000)
 
-// 第一排（TopBar）与第二排（Tab）共用的字号，保证两排视觉统一。
+// 第二排（Tab 胶囊）专用字号：第一排已独立到 [TOP_BAR_SP] = 16sp，形成视觉层级。
 private const val HERO_LABEL_SP = 13f
