@@ -22,7 +22,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
-import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.border
@@ -44,6 +44,7 @@ import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -68,7 +69,7 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.key.Key
@@ -77,6 +78,7 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -89,6 +91,7 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import coil3.compose.AsyncImage
+import com.fongmi.android.tv.R
 import com.fongmi.android.tv.api.SiteApi
 import com.fongmi.android.tv.ui.hero.HeroImageLoader
 import com.fongmi.android.tv.utils.Notify
@@ -472,23 +475,42 @@ private fun HeroTopBarItem(
             .padding(vertical = 4.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        // homeBtn 是 28dp 方块（XML L219-220）；文字项固定 30dp 内容区。
-        // 字号固定为 [HERO_LABEL_SP]（与 Tab 栏同号），放大只走 graphicsLayer，不参与布局，下划线不会跳动。
-        Box(
-            modifier = Modifier.height(if (isHome) NAV_HOME_SIZE else TOP_BAR_TEXT_BOX),
-            contentAlignment = Alignment.Center,
-        ) {
-            if (isHome) {
-                HouseGlyph(
-                    color = textColor,
-                    modifier = Modifier
-                        .size(NAV_HOME_GLYPH_SIZE)
-                        .graphicsLayer {
-                            scaleX = focusScale
-                            scaleY = focusScale
-                        },
+        if (isHome) {
+            // 首页按钮（原版 ic_home_logo）：32dp 圆形按钮，图标 24dp 且恒为纯白。
+            // - 未选中：透明底、无边框；
+            // - 焦点态：HeroAccentColor 红底 + 2dp 纯白外框（与原版选中态一致）；
+            // - 放大走 graphicsLayer，不参与布局，因此不会顶动整排。
+            Box(
+                modifier = Modifier
+                    .size(NAV_HOME_BUTTON_SIZE)
+                    .graphicsLayer {
+                        scaleX = focusScale
+                        scaleY = focusScale
+                    }
+                    .background(
+                        color = if (focused) HeroAccentColor else Color.Transparent,
+                        shape = CircleShape,
+                    )
+                    .then(
+                        if (focused) Modifier.border(NAV_HOME_BORDER, Color.White, CircleShape) else Modifier,
+                    ),
+                contentAlignment = Alignment.Center,
+            ) {
+                Image(
+                    painter = painterResource(id = R.drawable.ic_home_logo),
+                    contentDescription = "Home",
+                    // vector 自带 fillColor=@color/white，这里再统一 tint 一次，保证任何主题下都是纯白。
+                    colorFilter = ColorFilter.tint(Color.White),
+                    modifier = Modifier.size(NAV_HOME_ICON_SIZE),
                 )
-            } else {
+            }
+        } else {
+            // 文字项固定 20dp 内容区，字号固定 [HERO_LABEL_SP]（与 Tab 栏同号），
+            // 放大只走 graphicsLayer，不参与布局，下划线不会跳动。
+            Box(
+                modifier = Modifier.height(TOP_BAR_TEXT_BOX),
+                contentAlignment = Alignment.Center,
+            ) {
                 Text(
                     text = label,
                     modifier = Modifier.graphicsLayer {
@@ -501,16 +523,16 @@ private fun HeroTopBarItem(
                     maxLines = 1,
                 )
             }
+            Spacer(modifier = Modifier.height(6.dp))
+            // 焦点态指示器：2dp 高红色短横线（长度固定 26dp，仅淡入淡出，避免文字宽度变化导致抖动）。
+            Box(
+                modifier = Modifier
+                    .width(26.dp)
+                    .height(2.dp)
+                    .alpha(underlineAlpha)
+                    .background(HeroAccentColor, RoundedCornerShape(2.dp)),
+            )
         }
-        Spacer(modifier = Modifier.height(6.dp))
-        // 焦点态指示器：2dp 高红色短横线（长度固定 26dp，仅淡入淡出，避免文字宽度变化导致抖动）。
-        Box(
-            modifier = Modifier
-                .width(26.dp)
-                .height(2.dp)
-                .alpha(underlineAlpha)
-                .background(HeroAccentColor, RoundedCornerShape(2.dp)),
-        )
     }
 }
 
@@ -935,26 +957,6 @@ private fun HeroPlaceholderDialog(onDismiss: () -> Unit) {
     }
 }
 
-/** 顶栏最左的“小房子”图标。用 Path 手绘，避免为单个图标引入 material-icons-extended。 */
-@Composable
-private fun HouseGlyph(color: Color, modifier: Modifier = Modifier) {
-    Canvas(modifier = modifier) {
-        val w = size.width
-        val h = size.height
-        val house = Path().apply {
-            moveTo(w * 0.5f, 0f)
-            lineTo(w, h * 0.46f)
-            lineTo(w * 0.82f, h * 0.46f)
-            lineTo(w * 0.82f, h)
-            lineTo(w * 0.18f, h)
-            lineTo(w * 0.18f, h * 0.46f)
-            lineTo(0f, h * 0.46f)
-            close()
-        }
-        drawPath(house, color = color)
-    }
-}
-
 /** 在已挂载的 FocusRequester 列表里安全地请求焦点：未组合的 Lazy 项会抛异常，这里降级返回 false。 */
 private fun requestFocus(requesters: List<FocusRequester>, index: Int): Boolean {
     val requester = requesters.getOrNull(index) ?: return false
@@ -1019,8 +1021,9 @@ private val HERO_PADDING = 24.dp
 // 顶部导航 navBar（L199-262）
 // ---------------------------------------------------------------------------
 private val NAV_BAR_HEIGHT = 64.dp          // L207 layout_height
-private val NAV_HOME_SIZE = 28.dp           // L219-220 homeBtn
-private val NAV_HOME_GLYPH_SIZE = 20.dp     // 28dp 按钮内留 4dp 呼吸
+private val NAV_HOME_BUTTON_SIZE = 32.dp      // 圆形按钮直径（容纳 2dp 白框 + 24dp 图标）
+private val NAV_HOME_ICON_SIZE = 24.dp        // ic_home_logo 的渲染尺寸
+private val NAV_HOME_BORDER = 2.dp            // 焦点态白色外框
 private val NAV_ITEMS_START_GAP = 20.dp     // L259 navRecycler layout_marginStart
 private val TOP_BAR_TEXT_BOX = 20.dp        // 文字项固定内容区（13sp 的贴合高度）
 private const val TOP_BAR_FOCUS_SCALE = 1.1f // 焦点态整体放大 1.1 倍（只走 graphicsLayer，不动布局）
