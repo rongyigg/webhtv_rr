@@ -10,11 +10,18 @@ import android.os.SystemClock
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.compose.setContent
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.basicMarquee
@@ -28,7 +35,6 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -61,9 +67,11 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
@@ -71,10 +79,10 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
@@ -92,15 +100,23 @@ import kotlinx.coroutines.launch
 /**
  * HeroUI（Compose）全屏沉浸式首页。
  *
- * 分层（自下而上）：
- * 1. [HeroBackdrop]：全屏背景大图，随海报焦点用 [Crossfade] 平滑切换。
- * 2. [HeroScrim]：自上而下的黑色渐变遮罩 + 左侧压暗，保证文字可读。
- * 3. [Column]：顶栏 → 左侧剧名信息 → 胶囊分类 Tab → 单行海报墙（一屏 7 张半）。
+ * 本文件的每一个尺寸都直接取自 `ref_docs/activity_home_v2.xml` 的真实节点参数，
+ * 不再有“按屏幕反推”或“目测调参”的数值。行号注释指向该 XML。
  *
- * 参考来源：
- * - 整体分层与视觉：`ref_docs/home_ui.png`（背景人像大图 + 上方胶囊分类条 + 底部单排海报墙 + 左侧标题区）。
- * - 卡片缩放、2:3 比例、焦点描边：`ref_docs/VodRectPresenter.java`（见各处行号注释）。
- * - 类/布局索引：`ref_docs/UI.md` §3.2（`os3` = VodRectPresenter，布局 `adapter_vod_rect` + `overlay_focus`）。
+ * 分层（自下而上，与 XML 的子节点顺序一一对应）：
+ * 1. [HeroBackdrop]：全屏背景大图（XML `heroBg`），随海报焦点用 [Crossfade] 平滑切换。
+ * 2. [HeroMaskLeft]：横向黑色渐变（XML `maskLeft` / `bg_hero_mask_h`）。
+ * 3. [HeroMaskBottom]：纵向黑色渐变（XML `maskBottom` / `bg_hero_mask_v`）。
+ * 4. 内容 Column（XML `bottomContent` + `navBar`）：顶栏 → 弹性留白 → 左侧剧名信息 → 分类 Tab → 海报区。
+ *
+ * 关键参数（XML 行号）：
+ * - 全局左右边距 24dp：`navBar` L208-209、`heroInfo` L69-70、`typeRecycler` L138-139、`recycler` L157-158。
+ * - 顶栏高 64dp：L207。
+ * - 剧名 32sp 粗体 / 固定高 36dp / 阴影 #cc000000 2,2,12：L72-83。
+ * - 元数据 14sp / #ccffffff / marginTop 2dp / 高 20dp：L93-104。
+ * - 简介 12sp / #bbffffff / 高 40dp / maxLines 2 / lineSpacingExtra 3dp：L112-125。
+ * - 信息区 marginBottom 22dp：L68；Tab 栏 marginBottom 12dp：L137；海报区高 215dp：L147。
+ * - 卡片 120×180dp / 8dp 圆角 / 标题 marginTop 8dp + 13sp：`ref_docs/adapter_vod_rect.xml` L24-27、L45-57。
  *
  * 焦点契约（三区各自持有 FocusRequester，全部显式交接，不依赖 2D 自动搜索）：
  * TopBar ↓→ Tab，Tab ↑→ TopBar，Tab ↓→ 海报行（前 6 张按横向位置落位），
@@ -258,11 +274,14 @@ private fun HeroHomeScreen(onLaunchPlayback: (String) -> Unit) {
     }
 
     Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
-        // ---- 底层：全屏背景大图 + 渐变遮罩 ----
+        // ---- 底层：全屏背景大图 + 横向/纵向遮罩（XML 顺序：heroBg → maskLeft → maskBottom）----
         HeroBackdrop(url = heroPoster.backdropUrl)
-        HeroScrim()
+        HeroMaskLeft()
+        HeroMaskBottom()
 
-        // ---- 顶层：顶栏 / 剧名信息 / 分类 Tab / 海报行 ----
+        // ---- 顶层：与 XML 的 bottomContent + navBar 同构 ----
+        // 横向边距不在这里统一设置：XML 里 navBar / heroInfo / typeRecycler / recycler
+        // 各自持有 24dp 的 paddingStart|End，这里同样由各区自己加，保证与 XML 一一对应。
         Column(modifier = Modifier.fillMaxSize()) {
             HeroTopBar(
                 requesters = topBarRequesters,
@@ -270,12 +289,9 @@ private fun HeroHomeScreen(onLaunchPlayback: (String) -> Unit) {
                 onHomeConfirm = { showHomeDialog = true },
                 onMoveDown = { index -> focusTab(tabIndexForTopBar(index)) },
             )
-            HeroInfoArea(
-                poster = heroPoster,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(1f),
-            )
+            // XML 里 bottomContent 用 layout_alignParentBottom 贴底；Compose 用弹性留白表达同一语义。
+            Spacer(modifier = Modifier.weight(1f))
+            HeroInfoArea(poster = heroPoster)
             HeroTabBar(
                 state = tabState,
                 requesters = tabRequesters,
@@ -290,7 +306,7 @@ private fun HeroHomeScreen(onLaunchPlayback: (String) -> Unit) {
                 onMoveLeft = { index -> focusTab(index - 1) },
                 onMoveRight = { index -> focusTab(index + 1) },
             )
-            PosterRow(
+            PosterArea(
                 posters = posters,
                 state = posterState,
                 requesters = posterRequesters,
@@ -308,10 +324,10 @@ private fun HeroHomeScreen(onLaunchPlayback: (String) -> Unit) {
 }
 
 /**
- * 底层背景大图。
+ * 底层背景大图（XML `heroBg`）。
  *
  * 用 [Crossfade] 让“海报焦点变化 → 背景切换”是交叉淡入淡出，而不是硬切；
- * 420ms 是电视遥控器连续按键时的可感知下限，再快会显得闪烁。
+ * 300ms 与左侧文字的 320ms 呼应：背景略慢半拍，注意力先落在文字上。
  */
 @Composable
 private fun HeroBackdrop(url: String) {
@@ -330,26 +346,9 @@ private fun HeroBackdrop(url: String) {
     }
 }
 
-/**
- * 渐变遮罩。
- *
- * 竖向：顶部压暗（盖住状态栏区的背景）→ 中段透出背景 → 底部接近纯黑（托住海报网格）。
- * 横向：左侧再压一层，保证剧名/简介在浅色背景上仍然可读。对照 `ref_docs/home_ui.png` 的暗角。
- */
+/** 横向遮罩（XML `maskLeft`，drawable `bg_hero_mask_h`）：左侧压暗，保证剧名/简介在浅色背景上可读。 */
 @Composable
-private fun HeroScrim() {
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(
-                Brush.verticalGradient(
-                    0.0f to Color.Black.copy(alpha = 0.86f),
-                    0.26f to Color.Black.copy(alpha = 0.30f),
-                    0.58f to Color.Black.copy(alpha = 0.62f),
-                    1.0f to Color.Black.copy(alpha = 0.97f),
-                ),
-            ),
-    )
+private fun HeroMaskLeft() {
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -363,12 +362,30 @@ private fun HeroScrim() {
     )
 }
 
+/** 纵向遮罩（XML `maskBottom`，drawable `bg_hero_mask_v`）：顶部压暗顶栏、底部接近纯黑托住海报区。 */
+@Composable
+private fun HeroMaskBottom() {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(
+                Brush.verticalGradient(
+                    0.0f to Color.Black.copy(alpha = 0.86f),
+                    0.26f to Color.Black.copy(alpha = 0.30f),
+                    0.58f to Color.Black.copy(alpha = 0.62f),
+                    1.0f to Color.Black.copy(alpha = 0.97f),
+                ),
+            ),
+    )
+}
+
 /**
- * 顶部控制栏。
+ * 顶部导航栏（XML `navBar`，L199-262）：
+ * - 高 64dp（L207），左右 padding 各 24dp（L208-209），内容垂直居中（L200 `gravity=center_vertical`）。
+ * - `homeBtn` 28dp（L219-220），`navRecycler` 距它 20dp（L259 `layout_marginStart=20dp`）。
  *
- * 焦点态按产品规范实现：文字纯白 22sp + 下方红色短横线；未选中为纯白 60% 透明度。
- * 整体排布（房子在最左、各项等距、贴顶留白）对照 `ref_docs/home_ui.png`。
- * 现在顶栏下方是分类 Tab，所以这里按“下”不再直接进网格，而是先落到 Tab 区。
+ * 顶栏项文字样式沿用既有产品规范（未在 XML 中给出，属于 adapter_nav 的职责）：
+ * 焦点态纯白 + 下方红色短横线，未选中纯白 60% 透明度。
  */
 @Composable
 private fun HeroTopBar(
@@ -380,20 +397,34 @@ private fun HeroTopBar(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(start = HERO_SIDE_PADDING, end = HERO_SIDE_PADDING, top = TOP_BAR_TOP_PADDING),
-        horizontalArrangement = Arrangement.spacedBy(TOP_BAR_ITEM_SPACING),
+            .height(NAV_BAR_HEIGHT)
+            .padding(horizontal = HERO_PADDING),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        TOP_BAR_LABELS.forEachIndexed { index, label ->
-            HeroTopBarItem(
-                label = label,
-                isHome = index == 0,
-                requester = requesters[index],
-                onFocused = { onFocused(index) },
-                // 目前只有“小房子”有动作（占位 Dialog）；其余项留待后续接入对应页面。
-                onConfirm = { if (index == 0) onHomeConfirm() },
-                onMoveDown = { onMoveDown(index) },
-            )
+        // homeBtn：只有“小房子”有动作（占位 Dialog），其余项留待后续接入对应页面。
+        HeroTopBarItem(
+            label = TOP_BAR_LABELS[0],
+            isHome = true,
+            requester = requesters[0],
+            onFocused = { onFocused(0) },
+            onConfirm = onHomeConfirm,
+            onMoveDown = { onMoveDown(0) },
+        )
+        Row(
+            modifier = Modifier.padding(start = NAV_ITEMS_START_GAP),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(TOP_BAR_ITEM_SPACING),
+        ) {
+            for (index in 1 until TOP_BAR_LABELS.size) {
+                HeroTopBarItem(
+                    label = TOP_BAR_LABELS[index],
+                    isHome = false,
+                    requester = requesters[index],
+                    onFocused = { onFocused(index) },
+                    onConfirm = { },
+                    onMoveDown = { onMoveDown(index) },
+                )
+            }
         }
     }
 }
@@ -445,10 +476,14 @@ private fun HeroTopBarItem(
             .padding(horizontal = 2.dp, vertical = 4.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        // 固定 30dp 内容区，保证焦点态 20sp↔22sp 切换时下划线不会上下跳动。
-        Box(modifier = Modifier.height(30.dp), contentAlignment = Alignment.Center) {
+        // homeBtn 是 28dp 方块（XML L219-220）；文字项固定 30dp 内容区，
+        // 保证焦点态 20sp↔22sp 切换时下划线不会上下跳动。
+        Box(
+            modifier = Modifier.height(if (isHome) NAV_HOME_SIZE else TOP_BAR_TEXT_BOX),
+            contentAlignment = Alignment.Center,
+        ) {
             if (isHome) {
-                HouseGlyph(color = textColor, modifier = Modifier.size(22.dp))
+                HouseGlyph(color = textColor, modifier = Modifier.size(NAV_HOME_GLYPH_SIZE))
             } else {
                 Text(
                     text = label,
@@ -472,27 +507,45 @@ private fun HeroTopBarItem(
 }
 
 /**
- * 左侧剧名信息层。
+ * 左侧剧名信息层（XML `heroInfo`，L61-127）。
  *
- * 内容随海报焦点变化，用 [Crossfade] 与背景图同步过渡（320ms，比背景略快，文字先落位）。
- * 直接叠在背景之上、不加任何卡片底色，保持 `ref_docs/home_ui.png` 的沉浸感。
+ * 节点参数逐条对应：
+ * - 容器：`layout_marginBottom=22dp`（L68）+ `paddingStart/End=24dp`（L69-70）。
+ * - 剧名：32sp 粗体、固定高 36dp、`gravity=bottom`、阴影 #cc000000 dx2 dy2 radius12（L72-83）。
+ * - 元数据：14sp、#ccffffff、高 20dp、marginTop 2dp、阴影 #aa000000 1.5/1.5/8（L93-104）。
+ * - 简介：12sp、#bbffffff、高 40dp、maxLines 2、lineSpacingExtra 3dp、
+ *   外层横向 LinearLayout `weightSum=2` 而子项 `weight=1` → 宽度取一半（L105-125）。
+ *
+ * 内容随海报焦点变化，用 [AnimatedContent] 做“淡入 + 轻微上滑 / 淡出 + 轻微上移”，
+ * 320ms 比背景略快，文字先落位，避免整屏同时变化显得迟滞。
  */
 @Composable
-private fun HeroInfoArea(poster: HeroPoster, modifier: Modifier = Modifier) {
-    Box(
-        modifier = modifier.padding(
-            start = HERO_SIDE_PADDING,
-            end = HERO_SIDE_PADDING,
-            bottom = HERO_INFO_BOTTOM_PADDING,
-        ),
+private fun HeroInfoArea(poster: HeroPoster) {
+    AnimatedContent(
+        targetState = poster,
+        transitionSpec = {
+            // 进场：淡入 + 从下方 1/6 高度滑入；退场：淡出 + 向上 1/6 高度滑出。
+            val enter = fadeIn(tween(HERO_INFO_FADE_MS)) +
+                slideInVertically(tween(HERO_INFO_FADE_MS)) { height -> height / 6 }
+            val exit = fadeOut(tween(HERO_INFO_FADE_MS)) +
+                slideOutVertically(tween(HERO_INFO_FADE_MS)) { height -> -height / 6 }
+            enter togetherWith exit
+        },
         contentAlignment = Alignment.BottomStart,
-    ) {
-        Crossfade(
-            targetState = poster,
-            animationSpec = tween(durationMillis = HERO_INFO_FADE_MS),
-            label = "heroInfo",
-        ) { current ->
-            Column(modifier = Modifier.fillMaxWidth(HERO_INFO_WIDTH_FRACTION)) {
+        label = "heroInfo",
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = HERO_PADDING)
+            .padding(bottom = HERO_INFO_BOTTOM_GAP),
+    ) { current ->
+        Column(modifier = Modifier.fillMaxWidth()) {
+            // 剧名：固定 36dp，文字贴底。
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(HERO_TITLE_HEIGHT),
+                contentAlignment = Alignment.BottomStart,
+            ) {
                 Text(
                     text = current.title,
                     color = Color.White,
@@ -500,31 +553,47 @@ private fun HeroInfoArea(poster: HeroPoster, modifier: Modifier = Modifier) {
                     fontWeight = FontWeight.Bold,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
+                    style = TextStyle(shadow = HERO_TITLE_SHADOW),
                 )
-                Spacer(modifier = Modifier.height(8.dp))
+            }
+            Spacer(modifier = Modifier.height(HERO_META_TOP_GAP))
+            // 元数据：固定 20dp，文字贴底。
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(HERO_META_HEIGHT),
+                contentAlignment = Alignment.BottomStart,
+            ) {
                 Text(
                     text = current.meta,
-                    color = Color.White.copy(alpha = 0.76f),
+                    color = HERO_META_COLOR,
                     fontSize = HERO_META_SP.sp,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
-                )
-                Spacer(modifier = Modifier.height(6.dp))
-                Text(
-                    text = current.synopsis,
-                    color = Color.White.copy(alpha = 0.60f),
-                    fontSize = HERO_SYNOPSIS_SP.sp,
-                    lineHeight = HERO_SYNOPSIS_LINE_HEIGHT_SP.sp,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
+                    style = TextStyle(shadow = HERO_META_SHADOW),
                 )
             }
+            Spacer(modifier = Modifier.height(HERO_DESC_TOP_GAP))
+            // 简介：外层 weightSum=2 / 子项 weight=1 → 实际占父宽的一半。
+            Text(
+                text = current.synopsis,
+                modifier = Modifier
+                    .fillMaxWidth(HERO_DESC_WIDTH_FRACTION)
+                    .height(HERO_DESC_HEIGHT),
+                color = HERO_DESC_COLOR,
+                fontSize = HERO_DESC_SP.sp,
+                lineHeight = HERO_DESC_LINE_HEIGHT_SP.sp,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                style = TextStyle(shadow = HERO_DESC_SHADOW),
+            )
         }
     }
 }
 
 /**
- * 分类 Tab 栏（胶囊形状，横向滚动）。
+ * 分类 Tab 栏（XML `typeRecycler`，L128-141）：
+ * - 左右 padding 24dp（L138-139）、`paddingBottom=2dp`（L130）、`layout_marginBottom=12dp`（L137）。
  *
  * 选中项带 3dp 红色描边（`HERO_RED`），未选中为 1dp 半透明白描边 + 62% 白字；
  * 获得焦点的项背景会再压暗一层，确保在亮背景图上也能看出焦点位置。
@@ -544,18 +613,20 @@ private fun HeroTabBar(
 ) {
     LazyRow(
         state = state,
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            // XML L137：Tab 栏与海报区之间 12dp。
+            .padding(bottom = HERO_TAB_BOTTOM_GAP),
         contentPadding = PaddingValues(
-            start = HERO_SIDE_PADDING,
-            end = HERO_SIDE_PADDING,
-            top = 8.dp,
-            bottom = 8.dp,
+            start = HERO_PADDING,
+            end = HERO_PADDING,
+            bottom = HERO_TAB_BOTTOM_PADDING,
         ),
         horizontalArrangement = Arrangement.spacedBy(HERO_TAB_SPACING),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         HERO_TABS.forEachIndexed { index, label ->
-            // 用 item(key = ...) 而不是 itemsIndexed：后者与网格的 itemsIndexed 同名，
+            // 用 item(key = ...) 而不是 itemsIndexed：后者与海报行的 itemsIndexed 同名，
             // 两个扩展函数无法同时 import，这里直接用 LazyListScope 的成员函数。
             item(key = label) {
                 HeroTabChip(
@@ -660,20 +731,23 @@ private fun HeroTabChip(
 }
 
 /**
- * 海报行。
+ * 海报区（XML `posterArea`，L142-191）：整块固定高 215dp（L147），内部 recycler 同为 215dp（L156），
+ * 左右 padding 24dp（L157-158）。
  *
- * 一屏 7 张半：卡片宽度按“(可用宽度 − 起始留白) ÷ 7.5 − 间距”反推，960dp 设计宽（1080p 电视 @ xhdpi）下
- * 得到约 119dp ≈ `ref_docs/adapter_vod_rect.xml` 的 120dp（2:3 由 [POSTER_ASPECT_RATIO] 锁定为 180dp 高）；
- * 右侧不留边距，所以第 8 张会自然露出半张。
+ * 卡片尺寸来自 `ref_docs/adapter_vod_rect.xml`：120dp × 180dp（L24-25）+ 8dp 圆角（L27 `Vod.Grid.Large`）。
+ * 由于卡片宽度不再随屏幕缩放，“一屏 7 张半”只能由**间距**来保证：
  *
- * 图片由 Coil 加载，OkHttp 客户端走 [HeroImageLoader] 里的多路 DoH（`HeroHttpDns`）。
+ *     第 8 张卡露出半张 → 7 × (120 + gap) + 60 = 屏宽 − 24（起始 padding）
+ *     ⇒ gap = (屏宽 − 24 − 120 × 7.5) / 7
+ *
+ * 960dp 宽屏：gap = (960 − 24 − 900) / 7 = 5.14dp，第 8 张正好露出 60dp。
+ * 屏宽不足 924dp 时 gap 取 0（卡片不允许再压缩），此时只能靠滚动查看后续卡片。
  */
 @Composable
-private fun PosterRow(
+private fun PosterArea(
     posters: List<HeroPoster>,
     state: LazyListState,
     requesters: List<FocusRequester>,
-    modifier: Modifier = Modifier,
     onFocused: (Int) -> Unit,
     onClick: (String) -> Unit,
     onMoveUp: (Int) -> Unit,
@@ -681,23 +755,26 @@ private fun PosterRow(
     onMoveLeft: (Int) -> Unit,
     onMoveRight: (Int) -> Unit,
 ) {
-    BoxWithConstraints(modifier = modifier.fillMaxWidth()) {
-        val cardWidth = ((maxWidth - POSTER_ROW_START_PADDING) / POSTER_VISIBLE_COUNT - POSTER_GAP)
-            .coerceAtLeast(POSTER_REFERENCE_WIDTH * 0.75f)
+    BoxWithConstraints(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(POSTER_AREA_HEIGHT),
+    ) {
+        // 用实际测量宽度（而不是配置里的 screenWidthDp）反推间距，保证任何分辨率下都是 7 张半。
+        val cardGap = (
+            (maxWidth - HERO_PADDING - POSTER_CARD_WIDTH * POSTER_VISIBLE_CARDS) /
+                POSTER_FULL_COUNT
+            ).coerceAtLeast(0.dp)
+
         LazyRow(
             state = state,
-            modifier = Modifier.fillMaxWidth(),
-            contentPadding = PaddingValues(
-                start = POSTER_ROW_START_PADDING,
-                top = POSTER_ROW_TOP_PADDING,
-                bottom = POSTER_ROW_BOTTOM_PADDING,
-            ),
-            horizontalArrangement = Arrangement.spacedBy(POSTER_GAP),
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(start = HERO_PADDING, end = HERO_PADDING),
+            horizontalArrangement = Arrangement.spacedBy(cardGap),
         ) {
             itemsIndexed(items = posters, key = { _, poster -> poster.id }) { index, poster ->
                 PosterCard(
                     poster = poster,
-                    width = cardWidth,
                     requester = requesters[index],
                     onFocused = { onFocused(index) },
                     onClick = { onClick(poster.title) },
@@ -715,23 +792,19 @@ private fun PosterRow(
 /**
  * 单张海报卡片：图片区与文字区完全剥离。
  *
- * 尺寸与样式全部对齐参考文件：
- * - 图片：`ref_docs/adapter_vod_rect.xml` 第 24-25 行 `layout_width=120dp / layout_height=180dp`，
- *   即严格 2:3；这里用 [POSTER_ASPECT_RATIO] 锁死，宽度由 [PosterRow] 反推。
- * - 圆角：`shapeAppearanceOverlay=@style/Vod.Grid.Large`（XML 第 30 行），该样式在
- *   `app/src/main/res/values/styles.xml:12-14` 定义 `cornerSize=8dp` → [POSTER_SHAPE] = 8dp。
- * - 标题：XML 第 34-40 行 `textSize=13sp` + `layout_marginTop=8dp` + `ellipsize=marquee`，
+ * 尺寸与样式全部对齐参考文件（`ref_docs/adapter_vod_rect.xml`）：
+ * - 图片：120dp × 180dp（L24-25），严格 2:3；圆角 8dp（L27 指向 `Vod.Grid.Large`）。
+ * - 标题：13sp（L46）+ marginTop 8dp（L53）+ `#ccffffff`（L47）+ marquee（L48），
  *   这里用 13sp + 8dp 间距 + [basicMarquee]（仅焦点态跑马灯，未聚焦时省略号收尾）。
  * - 焦点缩放：`ref_docs/VodRectPresenter.java` 第 39-41 行 `1.08f`，本项目按产品要求取 1.05。
  * - 描边/阴影：VodRectPresenter 第 90-101 行的 overlay 视觉厚度约 2dp，Compose 用贴边 `border(2.dp)`
  *   加焦点态 `shadow(18.dp)` 表达同一层级。
  *
- * `graphicsLayer` 只挂在图片 Box 上：文字容器高度固定、字号不变，放大时既不变形也不会被挤压截断。
+ * `graphicsLayer` 只挂在图片 Box 上：文字容器字号不变，放大时既不变形也不会被挤压截断。
  */
 @Composable
 private fun PosterCard(
     poster: HeroPoster,
-    width: Dp,
     requester: FocusRequester,
     onFocused: () -> Unit,
     onClick: () -> Unit,
@@ -743,24 +816,33 @@ private fun PosterCard(
     var focused by remember { mutableStateOf(false) }
     val scale by animateFloatAsState(
         targetValue = if (focused) POSTER_FOCUS_SCALE else 1f,
-        animationSpec = tween(durationMillis = 160),
+        animationSpec = spring(
+            dampingRatio = POSTER_SPRING_DAMPING,
+            stiffness = POSTER_SPRING_STIFFNESS,
+        ),
         label = "posterScale",
     )
     val elevation by animateDpAsState(
         targetValue = if (focused) POSTER_FOCUS_ELEVATION else 0.dp,
-        animationSpec = tween(durationMillis = 160),
+        animationSpec = spring(
+            dampingRatio = POSTER_SPRING_DAMPING,
+            stiffness = POSTER_SPRING_STIFFNESS,
+        ),
         label = "posterElevation",
     )
     val borderWidth by animateDpAsState(
         targetValue = if (focused) POSTER_FOCUS_BORDER else 0.dp,
-        animationSpec = tween(durationMillis = 160),
+        animationSpec = spring(
+            dampingRatio = POSTER_SPRING_DAMPING,
+            stiffness = POSTER_SPRING_STIFFNESS,
+        ),
         label = "posterBorder",
     )
     val interaction = remember { MutableInteractionSource() }
 
     Column(
         modifier = Modifier
-            .width(width)
+            .width(POSTER_CARD_WIDTH)
             .focusRequester(requester)
             .onFocusChanged {
                 focused = it.isFocused
@@ -796,15 +878,15 @@ private fun PosterCard(
             .clickable(interactionSource = interaction, indication = null, onClick = onClick),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        // 图片区：只有这一层参与缩放、描边与阴影。
+        // 图片区：只有这一层参与缩放、描边与阴影。120×180dp 是 XML 的固定尺寸。
         Box(
             modifier = Modifier
-                .fillMaxWidth()
+                .width(POSTER_CARD_WIDTH)
+                .height(POSTER_CARD_HEIGHT)
                 .graphicsLayer {
                     scaleX = scale
                     scaleY = scale
                 }
-                .aspectRatio(POSTER_ASPECT_RATIO)
                 .shadow(elevation = elevation, shape = POSTER_SHAPE, clip = false)
                 .clip(POSTER_SHAPE)
                 .background(POSTER_PLACEHOLDER)
@@ -817,12 +899,11 @@ private fun PosterCard(
                 modifier = Modifier.fillMaxSize(),
             )
         }
-        // 文字区：固定高度 + 单行，图片放大时这里尺寸与字号都不变。
+        // 文字区：marginTop 8dp + 13sp 单行，图片放大时这里尺寸与字号都不变。
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(top = POSTER_TITLE_GAP)
-                .height(POSTER_TITLE_HEIGHT),
+                .padding(top = POSTER_TITLE_GAP),
             contentAlignment = Alignment.Center,
         ) {
             Text(
@@ -830,7 +911,7 @@ private fun PosterCard(
                 modifier = Modifier
                     .fillMaxWidth()
                     .then(if (focused) Modifier.basicMarquee(iterations = Int.MAX_VALUE) else Modifier),
-                color = if (focused) Color.White else Color.White.copy(alpha = 0.72f),
+                color = if (focused) Color.White else POSTER_TITLE_COLOR,
                 fontSize = POSTER_TITLE_SP.sp,
                 maxLines = 1,
                 softWrap = false,
@@ -947,12 +1028,87 @@ private val TOP_BAR_LABELS = listOf("首页", "直播", "搜索", "历史", "收
 // 分类 Tab 顺序对照 ref_docs/home_ui.png 的胶囊分类条。
 private val HERO_TABS = listOf("推荐", "电影", "电视剧", "动漫", "综艺", "纪录片")
 
-// 参考 ref_docs/adapter_vod_rect.xml 第 24-25 行：ShapeableImageView 120dp × 180dp（严格 2:3）。
-// 参考图一屏 7 张半：960dp 设计宽（1080p 电视 @ xhdpi）下 7.5 × (120 + 8) = 960dp，
-// 所以卡片宽度按“可用宽度 ÷ 7.5 − 间距”反推 —— 在 960dp 上正好还原 120dp，同时任何密度都能保持 7 张半。
-private val POSTER_REFERENCE_WIDTH = 120.dp
-private const val POSTER_VISIBLE_COUNT = 7.5f
-private val POSTER_GAP = 8.dp
+// ---------------------------------------------------------------------------
+// 全局边距：activity_home_v2.xml 里 navBar(L208-209) / heroInfo(L69-70) /
+// typeRecycler(L138-139) / recycler(L157-158) 的 paddingStart|End 全部是 24dp。
+// ---------------------------------------------------------------------------
+private val HERO_PADDING = 24.dp
+
+// ---------------------------------------------------------------------------
+// 顶部导航 navBar（L199-262）
+// ---------------------------------------------------------------------------
+private val NAV_BAR_HEIGHT = 64.dp          // L207 layout_height
+private val NAV_HOME_SIZE = 28.dp           // L219-220 homeBtn
+private val NAV_HOME_GLYPH_SIZE = 20.dp     // 28dp 按钮内留 4dp 呼吸
+private val NAV_ITEMS_START_GAP = 20.dp     // L259 navRecycler layout_marginStart
+private val TOP_BAR_TEXT_BOX = 30.dp        // 文字项固定内容区（防焦点态字号切换抖动）
+private const val TOP_BAR_FOCUS_SP = 22f
+private const val TOP_BAR_IDLE_SP = 20f
+private const val TOP_BAR_IDLE_ALPHA = 0.6f
+private val TOP_BAR_ITEM_SPACING = 40.dp    // navRecycler 项间距（adapter_nav 职责，沿用既有视觉）
+
+// ---------------------------------------------------------------------------
+// 左侧 Hero 信息区 heroInfo（L61-127）
+// ---------------------------------------------------------------------------
+private val HERO_INFO_BOTTOM_GAP = 22.dp    // L68 layout_marginBottom
+private val HERO_TITLE_HEIGHT = 36.dp       // L79 layout_height
+private const val HERO_TITLE_SP = 32f       // L72 textSize
+private val HERO_META_TOP_GAP = 2.dp        // L100 layout_marginTop
+private val HERO_META_HEIGHT = 20.dp        // L99 layout_height
+private const val HERO_META_SP = 14f        // L93 textSize
+private val HERO_DESC_TOP_GAP = 4.dp        // L109 layout_marginTop
+private val HERO_DESC_HEIGHT = 40.dp        // L118 layout_height
+private const val HERO_DESC_SP = 12f        // L112 textSize
+private const val HERO_DESC_WIDTH_FRACTION = 0.5f // L110 weightSum=2 + L124 weight=1
+private const val HERO_BACKDROP_FADE_MS = 300
+private const val HERO_INFO_FADE_MS = 320
+
+// 简介 lineSpacingExtra=3dp（L125）。Android 的 12sp 默认行高 ≈ 14sp，加 3dp → 17sp。
+private const val HERO_DESC_LINE_HEIGHT_SP = 17f
+
+// XML 阴影参数是 px 值，Compose 的 Shadow 同样按 px 解释，因此直接照抄。
+private val HERO_TITLE_SHADOW = Shadow(
+    color = Color(0xCC000000),
+    offset = Offset(2f, 2f),
+    blurRadius = 12f,
+)
+private val HERO_META_SHADOW = Shadow(
+    color = Color(0xAA000000),
+    offset = Offset(1.5f, 1.5f),
+    blurRadius = 8f,
+)
+private val HERO_DESC_SHADOW = Shadow(
+    color = Color(0xAA000000),
+    offset = Offset(1.2f, 1.2f),
+    blurRadius = 6f,
+)
+
+private val HERO_META_COLOR = Color(0xCCFFFFFF)  // L94
+private val HERO_DESC_COLOR = Color(0xBBFFFFFF)  // L113
+
+// ---------------------------------------------------------------------------
+// 分类 Tab 栏 typeRecycler（L128-141）
+// ---------------------------------------------------------------------------
+private val HERO_TAB_BOTTOM_GAP = 12.dp     // L137 layout_marginBottom
+private val HERO_TAB_BOTTOM_PADDING = 2.dp  // L130 paddingBottom
+private val HERO_TAB_SPACING = 14.dp
+private val HERO_TAB_H_PADDING = 22.dp
+private val HERO_TAB_V_PADDING = 9.dp
+private val HERO_TAB_FOCUS_BORDER = 3.dp
+
+// ---------------------------------------------------------------------------
+// 海报区 posterArea（L142-191）+ 卡片 adapter_vod_rect（L24-27、L45-57）
+// ---------------------------------------------------------------------------
+private val POSTER_AREA_HEIGHT = 215.dp     // L147 / L156
+private val POSTER_CARD_WIDTH = 120.dp      // adapter_vod_rect L24
+private val POSTER_CARD_HEIGHT = 180.dp     // adapter_vod_rect L25
+private val POSTER_TITLE_GAP = 8.dp         // adapter_vod_rect L53 layout_marginTop
+private const val POSTER_TITLE_SP = 13f     // adapter_vod_rect L46 textSize
+private val POSTER_TITLE_COLOR = Color(0xCCFFFFFF) // adapter_vod_rect L47
+
+// 一屏 7 张完整卡片 + 第 8 张露出半张（合计 7.5 张）；间距由实际测量宽度反推。
+private const val POSTER_FULL_COUNT = 7
+private const val POSTER_VISIBLE_CARDS = 7.5f
 
 // 焦点卡片停在第 5 个槽位（0-based 4）：索引 0..4 时行不动，索引 ≥ 5 起每按一次右键整行左移一张。
 private const val POSTER_FOCUS_SLOT = 4
@@ -963,59 +1119,18 @@ private const val POSTER_TAB_SPAN = 6
 // 参考 ref_docs/VodRectPresenter.java 第 39-41 行：原实现 hasFocus() ? 1.08f : 1.0f；本项目按要求取 1.05。
 private const val POSTER_FOCUS_SCALE = 1.05f
 
-// 参考 ref_docs/VodRectPresenter.java 第 75 行：height = width * 1.5f。
-private val POSTER_ASPECT_RATIO = 2f / 3f
-
-private const val TOP_BAR_FOCUS_SP = 22f
-private const val TOP_BAR_IDLE_SP = 20f
-private const val TOP_BAR_IDLE_ALPHA = 0.6f
-
-// 海报行（单行横向）：信息层吃掉顶栏 / 分类条 / 海报行之外的全部高度，
-// 960×540dp 下海报行约 120×180dp 卡片 + 8dp 间距 + 20dp 标题 + 上下留白 ≈ 234dp。
-private const val HERO_INFO_WIDTH_FRACTION = 0.42f
-private const val HERO_BACKDROP_FADE_MS = 420
-private const val HERO_INFO_FADE_MS = 320
-
-// Hero 文案层级（对照 ref_docs/home_ui.png：剧名极大、元数据中等、简介较小）。
-private const val HERO_TITLE_SP = 52f
-private const val HERO_META_SP = 18f
-private const val HERO_SYNOPSIS_SP = 15f
-private const val HERO_SYNOPSIS_LINE_HEIGHT_SP = 22f
-
-// 四周留白整体加大：参考图的左右安全边距接近屏宽的 1/15，1080p 下约 64dp。
-private val HERO_SIDE_PADDING = 64.dp
-private val HERO_INFO_BOTTOM_PADDING = 16.dp
-
-private val TOP_BAR_TOP_PADDING = 28.dp
-private val TOP_BAR_ITEM_SPACING = 40.dp
-
-private val HERO_TAB_SPACING = 14.dp
-private val HERO_TAB_H_PADDING = 22.dp
-private val HERO_TAB_V_PADDING = 9.dp
-
-// 海报行内边距：左侧 8dp 给首张卡片的放大描边留出余量（放大后左右各溢出约 3dp），
-// 右侧保持 0，第 8 张才会露出半张；卡片宽度按同一公式自动收窄（7 张半的关系保持不变）。
-private val POSTER_ROW_START_PADDING = 8.dp
-private val POSTER_ROW_TOP_PADDING = 10.dp
-private val POSTER_ROW_BOTTOM_PADDING = 16.dp
+// 焦点缩放的弹簧参数：dampingRatio 0.8（略有回弹但不过冲）+ stiffness 400（电视遥控器连按时跟手）。
+private const val POSTER_SPRING_DAMPING = 0.8f
+private const val POSTER_SPRING_STIFFNESS = 400f
 
 private val POSTER_FOCUS_ELEVATION = 18.dp
 
 // 参考 VodRectPresenter.java 第 90-101 行：overlay 线宽 density*1dp、四边各外扩 1dp，视觉厚度约 2dp。
 private val POSTER_FOCUS_BORDER = 2.dp
 
-// 海报标题：ref_docs/adapter_vod_rect.xml 第 34-40 行 —— 13sp + 8dp marginTop + marquee。
-// 固定高度容器保证放大或切换时整行高度不变。
-private val POSTER_TITLE_GAP = 8.dp
-private val POSTER_TITLE_HEIGHT = 20.dp
-private const val POSTER_TITLE_SP = 13f
-
-// 胶囊 Tab 选中态描边加粗到 3dp，与 1dp 的未选中描边拉开对比。
-private val HERO_TAB_FOCUS_BORDER = 3.dp
-
-private val HERO_RED = Color(0xFFE50914)
-
 // styles.xml:12-14 —— `Vod.Grid.Large` 的 cornerSize 精确值就是 8dp（父样式 `Vod.Grid` 同为 8dp 圆角）。
 private val POSTER_SHAPE = RoundedCornerShape(8.dp)
 private val POSTER_PLACEHOLDER = Color(0xFF161616)
 private val DIALOG_SHAPE = RoundedCornerShape(14.dp)
+
+private val HERO_RED = Color(0xFFE50914)
