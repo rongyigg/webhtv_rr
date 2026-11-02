@@ -67,6 +67,7 @@ import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -818,16 +819,21 @@ private fun HeroDetailSectionTitle(text: String, fontSize: TextUnit = SECTION_TI
  * - 打开落在历史集（`lastWatchedEpisode`）；新剧落第 1 集。
  * - 线路栏 ←/→ 在站点间移动，端点消费；↓ 进控制栏；↑ 消费。
  * - 控制栏 ←/→ 在「列数 / 排序 / 分组」之间滑动；↓ 进网格（尽量落回同一集）；↑ 回线路栏。
- * - 网格组内 ←/→/↑/↓ 正常移动；**只有**焦点在本组最后一集时按 →/↓ 才切下一组，
- *   **只有**焦点在本组第 1 集时按 ← 才切上一组，网格中间位置一律不切组。
- * - 切排序 / 切列数后按集号重新定位，焦点不漂移；返回键关闭弹窗。
+ * - 网格组内 ←/→/↑/↓ 正常移动；**任意一行**的最右一列按 → 切下一组（普通行落同行第 1 列，
+ *   最后一行落新组最后一集），**任意一行**的最左一列按 ← 切上一组（落上一组同行最右一列）。
+ * - 列数 / 排序写进 SharedPreferences，下次打开弹窗沿用上次选择；返回键关闭弹窗。
  */
 @Composable
 private fun HeroPlayDialog(detail: HeroDetail, onDismiss: () -> Unit) {
+    // 列数 / 排序本地持久化：换剧、关弹窗、杀进程后再进来仍是上次的选择。
+    val context = LocalContext.current
+    val prefs = remember(context) {
+        context.getSharedPreferences(DIALOG_PREFS_NAME, Context.MODE_PRIVATE)
+    }
     // 排序只有「正序 / 倒序」两态：默认正序，点一次整体翻转。
-    var descending by remember { mutableStateOf(false) }
+    var descending by remember { mutableStateOf(prefs.getBoolean(DIALOG_PREF_DESCENDING, false)) }
     // 列数只有「多列(4) / 少列(2)」两态：默认多列。
-    var fewColumns by remember { mutableStateOf(false) }
+    var fewColumns by remember { mutableStateOf(prefs.getBoolean(DIALOG_PREF_FEW_COLUMNS, false)) }
 
     val ordered = remember(descending, detail.episodes) {
         val ascending = detail.episodes.sortedBy { it.number }
@@ -895,17 +901,41 @@ private fun HeroPlayDialog(detail: HeroDetail, onDismiss: () -> Unit) {
         cellSerial++
     }
 
-    /** 跨组：`toLast` = true 落该组最后一集（左切），false 落第一集（右/下切）。 */
-    fun switchPage(target: Int, toLast: Boolean) {
-        if (target !in 0 until pageCount) return
-        val items = ordered.drop(target * pageSize).take(pageSize)
-        if (items.isEmpty()) return
-        val index = if (toLast) items.lastIndex else 0
+    /** 换组落焦：写入新组状态并把目标格排进请求队列。 */
+    fun landOnPage(target: Int, items: List<HeroEpisode>, index: Int) {
         page = target
         anchorCell = index
         anchorNumber = items[index].number
         pendingCell = index
         cellSerial++
+    }
+
+    /**
+     * 右切下一组：普通行落「新组同一行的第 1 列」；
+     * 最后一行落「新组最后一集」（继续往下看，不再从行首重新扫）。
+     * 已是最后一组时什么都不做，事件由调用方消费，绝不越界。
+     */
+    fun pageForward(row: Int, fromLastRow: Boolean) {
+        val target = page + 1
+        if (target !in 0 until pageCount) return
+        val items = ordered.drop(target * pageSize).take(pageSize)
+        if (items.isEmpty()) return
+        val index = if (fromLastRow) items.lastIndex else (row * columns).coerceAtMost(items.lastIndex)
+        landOnPage(target, items, index)
+    }
+
+    /** 左切上一组：落「上一组同一行的最右一列」；该行没有格子时落上一组最后一集。 */
+    fun pageBackward(row: Int) {
+        val target = page - 1
+        if (target !in 0 until pageCount) return
+        val items = ordered.drop(target * pageSize).take(pageSize)
+        if (items.isEmpty()) return
+        val index = if (row > items.lastIndex / columns) {
+            items.lastIndex
+        } else {
+            (row * columns + columns - 1).coerceAtMost(items.lastIndex)
+        }
+        landOnPage(target, items, index)
     }
 
     /** 从控制栏进入网格：优先落回当前集，找不到就落第 1 格。 */
@@ -930,6 +960,7 @@ private fun HeroPlayDialog(detail: HeroDetail, onDismiss: () -> Unit) {
         val next = !descending
         val reordered = detail.episodes.sortedBy { it.number }.let { if (next) it.asReversed() else it }
         descending = next
+        prefs.edit().putBoolean(DIALOG_PREF_DESCENDING, next).apply()
         val index = reordered.indexOfFirst { it.number == number }
         if (index >= 0) {
             page = index / pageSize
@@ -943,6 +974,7 @@ private fun HeroPlayDialog(detail: HeroDetail, onDismiss: () -> Unit) {
         val lastEpisode = (ordered.size - 1).coerceAtLeast(0)
         val episodeIndex = (page * pageSize + anchorCell).coerceIn(0, lastEpisode)
         fewColumns = !fewColumns
+        prefs.edit().putBoolean(DIALOG_PREF_FEW_COLUMNS, fewColumns).apply()
         val newSize = EPISODE_GRID_ROWS * (if (fewColumns) EPISODE_COLUMNS_FEW else EPISODE_COLUMNS_MANY)
         val newPageCount = ((ordered.size + newSize - 1) / newSize).coerceAtLeast(1)
         page = (episodeIndex / newSize).coerceIn(0, newPageCount - 1)
@@ -951,42 +983,42 @@ private fun HeroPlayDialog(detail: HeroDetail, onDismiss: () -> Unit) {
         pendingCell = -1
     }
 
-    /** 网格方向键：组内移动 + 绝对边界切组（组内中间位置一律不切组）。 */
+    /**
+     * 网格方向键：组内上下左右移动 + 「整列」边缘翻页。
+     *
+     * 翻页判定只看列：任意一行的**最左一列**按 ← = 上一组，**最右一列**按 → = 下一组，
+     * 所以不必先把焦点挪到右下角才能翻页；两端的落点见 [pageForward] / [pageBackward]。
+     * 上下键永远不翻页，末行 ↓ 只消费。
+     */
     fun handleGridKey(key: Key): Boolean {
         if (pageItems.isEmpty()) return false
         val lastIndex = pageItems.lastIndex
         val base = anchorCell.coerceIn(0, lastIndex)
         val column = base % columns
+        val row = base / columns
+        val lastRow = lastIndex / columns
         return when (key) {
-            // 只有第 1 集（左上角）再按左才切上一组；其余行首只消费，不乱跳组。
             Key.DirectionLeft -> {
-                when {
-                    base == 0 -> switchPage(page - 1, toLast = true)
-                    column > 0 -> focusCell(base - 1)
-                }
+                if (column == 0) pageBackward(row) else focusCell(base - 1)
                 true
             }
 
-            // 只有本组最后一集（右下角）再按右才切下一组；其余行尾只消费，绝不越界。
             Key.DirectionRight -> {
                 when {
-                    base == lastIndex -> switchPage(page + 1, toLast = false)
-                    column < columns - 1 -> focusCell(base + 1)
+                    column == columns - 1 -> pageForward(row, fromLastRow = row == lastRow)
+                    base == lastIndex -> pageForward(row, fromLastRow = true)
+                    else -> focusCell(base + 1)
                 }
                 true
             }
 
             Key.DirectionUp -> {
-                if (base >= columns) focusCell(base - columns) else focusControl(focusedControl)
+                if (row > 0) focusCell(base - columns) else focusControl(focusedControl)
                 true
             }
 
-            // 最后一集按 ↓ 同样切下一组；其余底行格子没有下方目标，消费即可。
             Key.DirectionDown -> {
-                when {
-                    base == lastIndex -> switchPage(page + 1, toLast = false)
-                    base + columns <= lastIndex -> focusCell(base + columns)
-                }
+                if (base + columns <= lastIndex) focusCell(base + columns)
                 true
             }
 
@@ -1608,6 +1640,11 @@ private val DIALOG_SCRIM = Color(0x99000000)
 private val DIALOG_SHELL_BACKGROUND = Color(0xE6000000)
 private val DIALOG_SHELL_SHAPE = RoundedCornerShape(16.dp)
 private val DIALOG_SHELL_PADDING = 18.dp
+
+// 选集弹窗本地偏好（SharedPreferences）：跨剧、退弹窗、杀进程都保持上次的列数与排序
+private const val DIALOG_PREFS_NAME = "hero_detail_ui"
+private const val DIALOG_PREF_FEW_COLUMNS = "episode_few_columns"
+private const val DIALOG_PREF_DESCENDING = "episode_descending"
 
 // 顶部「选集徽章 + 剧名」整行已按需求删除，弹窗第一行直接是「播放线路」
 
