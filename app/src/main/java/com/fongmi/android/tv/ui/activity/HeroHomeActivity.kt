@@ -144,7 +144,7 @@ class HeroHomeActivity : ComponentActivity() {
         HeroImageLoader.install()
         setContent {
             MaterialTheme(colorScheme = darkColorScheme()) {
-                HeroHomeScreen(onLaunchPlayback = { vodName -> launchPlayback(this, vodName) })
+                HeroHomeScreen(onOpenDetail = { title -> HeroDetailActivity.start(this, title) })
             }
         }
     }
@@ -204,7 +204,7 @@ class HeroHomeActivity : ComponentActivity() {
 }
 
 @Composable
-private fun HeroHomeScreen(onLaunchPlayback: (String) -> Unit) {
+private fun HeroHomeScreen(onOpenDetail: (String) -> Unit) {
     val posterState = rememberLazyListState()
     val tabState = rememberLazyListState()
     val scope = rememberCoroutineScope()
@@ -316,7 +316,8 @@ private fun HeroHomeScreen(onLaunchPlayback: (String) -> Unit) {
                 state = posterState,
                 requesters = posterRequesters,
                 onFocused = { index -> focusedPosterIndex = index },
-                onClick = onLaunchPlayback,
+                // 卡片确定键：不再直接起播，改为拉起详情页（剧本名一并传过去）。
+                onClick = onOpenDetail,
                 // 海报行 ↑ 回 Tab 栏：落到记忆中的 Tab。
                 onMoveUp = { focusTab() },
                 onMoveDown = { },

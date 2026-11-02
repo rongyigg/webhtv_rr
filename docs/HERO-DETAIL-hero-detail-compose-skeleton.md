@@ -103,10 +103,12 @@
 
 | 文件 | 类型 |
 |---|---|
-| `app/src/main/java/com/fongmi/android/tv/ui/activity/HeroDetailActivity.kt` | 新增（骨架 + 全部常量） |
+| `app/src/main/java/com/fongmi/android/tv/ui/activity/HeroDetailActivity.kt` | 新增（骨架 + 全部常量）+ 入口 `start(context, title)` 与剧名透传 |
+| `app/src/main/java/com/fongmi/android/tv/ui/activity/HeroHomeActivity.kt` | 海报卡确定键由「直接起播」改为「拉起详情页」 |
 | `app/src/main/AndroidManifest.xml` | 注册 `HeroDetailActivity`（`exported=true`，供 adb 拉起；不加 launcher intent-filter） |
 
-**未改动**：`HeroHomeActivity.kt`、`VideoActivity`、`PlayerManager` 及任何播放链路。
+**未改动**：`VideoActivity`、`PlayerManager` 及任何播放链路。
+`HeroHomeActivity.launchPlayback(...)` 播放桥接**刻意保留未删**：下一阶段详情页的「播放」按钮要复用它。
 
 ## 8. 验证
 
@@ -130,6 +132,6 @@ adb shell am start -n com.silent.android.webhtv/com.fongmi.android.tv.ui.activit
 ## 10. 下一步（未开始）
 
 1. 用真实 `Vod` / `Flag` / `Episode` 替换 `DEMO_DETAIL`（只替换数据源，布局不动）。
-2. 首页海报卡点击接入 `HeroDetailActivity.start(...)`（当前刻意未改首页行为）。
-3. 播放按钮接回既有 `VideoActivity.startDirect(...)` 桥接（与首页同一入口，不改 PlayerManager）。
+2. ~~首页海报卡点击接入 `HeroDetailActivity.start(...)`~~ —— 已完成（剧名经 `EXTRA_TITLE` 透传）。
+3. 播放按钮接回既有 `VideoActivity.startDirect(...)` 桥接（复用 `HeroHomeActivity.launchPlayback` 同款入口，不改 PlayerManager）。
 4. 收藏状态接入 `Keep`，换源接入既有搜索/聚合源入口。

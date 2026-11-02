@@ -121,22 +121,29 @@ class HeroDetailActivity : ComponentActivity() {
             systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
         }
         HeroImageLoader.install()
+        // 首页只传剧名过来，其余字段继续走假数据；剧名为空时回落到默认假数据。
+        val title = intent.getStringExtra(EXTRA_TITLE).orEmpty().ifBlank { DEMO_DETAIL.title }
         setContent {
             MaterialTheme(colorScheme = darkColorScheme()) {
-                HeroDetailScreen(detail = DEMO_DETAIL)
+                HeroDetailScreen(detail = DEMO_DETAIL.copy(title = title))
             }
         }
     }
 
     companion object {
 
+        private const val EXTRA_TITLE = "extra_title"
+
         /**
-         * 统一入口：后续从首页海报卡接入时只调这一个方法。
-         * 本阶段不改首页行为，页面可用 adb 直接拉起验证：
+         * 统一入口：首页海报卡点击后调用。
+         * 当前只有剧名是真实值（来自首页卡片），其余字段仍是 [DEMO_DETAIL] 假数据；
+         * 页面也可用 adb 直接拉起验证：
          * `adb shell am start -n com.silent.android.webhtv/com.fongmi.android.tv.ui.activity.HeroDetailActivity`
          */
-        fun start(context: Context) {
-            context.startActivity(Intent(context, HeroDetailActivity::class.java))
+        fun start(context: Context, title: String) {
+            context.startActivity(
+                Intent(context, HeroDetailActivity::class.java).putExtra(EXTRA_TITLE, title),
+            )
         }
     }
 }
