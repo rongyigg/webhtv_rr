@@ -81,9 +81,11 @@
 - `res/drawable/`：`shape_dialog_source`、`shape_tmdb_badge`、`selector_home_logo_source`、
   `shape_home_logo_source_focused`、`shape_home_logo_normal_white`、
   `shape_source_site_item_focused`、`shape_source_chip_round_activated|normal`、
-  `selector_source_site_item_background|text`、`selector_check_circle`、
+  `selector_source_site_item_background`、`selector_check_circle`、
   `shape_check_circle_on|off|on_focused|off_focused`、`shape_line_tapered`、
   `selector_source_result`、`shape_source_result_focused`
+- `res/color/`：`selector_source_site_item_text`（文字颜色选择器必须放在 `res/color/`，
+  布局里以 `@color/...` 引用；背景选择器 `selector_source_site_item_background` 仍留在 `res/drawable/`）
 - `res/layout/`：`dialog_source`、`dialog_source_sidebar`、
   `adapter_source_site`、`adapter_source_result`、`adapter_source_sidebar_item`
 - `res/anim/`：`source_sidebar_in`、`source_sidebar_out`
@@ -116,6 +118,10 @@
 - `:app:compileMobileArmeabi_v7aDebugKotlin` → BUILD SUCCESSFUL（同日，验证 main 源集未引入 Leanback 依赖）
 - 后续 `shape_home_logo_normal_white` 仅改 `solid` 颜色值（`#FFFFFF` → `#1AFFFFFF`），
   纯资源改动、无新增引用，不回退上述两次编译结论。
+- CI 报 `resource color/selector_source_site_item_text not found` 后修正：该文件由
+  `res/drawable/` 移到 `res/color/`（文字颜色选择器只能以 `@color/` 引用）。
+  `:app:assembleMobileArmeabi_v7aDebug` → BUILD SUCCESSFUL（2026-11-02 22:22，产出
+  `app-mobile-armeabi_v7a-debug.apk`）。
 
 ## 8. 已知限制 / 风险
 
