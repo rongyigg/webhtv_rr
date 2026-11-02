@@ -77,7 +77,6 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -238,9 +237,10 @@ private fun HeroHomeScreen(onLaunchPlayback: (String) -> Unit) {
     // → 海报行：从别的排切入时用默认参数 index = 0，永远落在最左侧的第一张。
     fun focusPoster(index: Int = 0) {
         val target = index.coerceIn(0, posters.lastIndex)
-        // 滚动锚点：只有当焦点走到第 5 张（index = 4）及更右侧时，才把 index 4 推到视觉最左侧；
-        // index 0..3 一律回到行首（anchor = 0），列表不滚动，左侧也不会露出上一张的边。
-        val anchor = if (target >= POSTER_SCROLL_ANCHOR) POSTER_SCROLL_ANCHOR else 0
+        // 靠左吸附：焦点在 index 0..3 时锚点恒为 0，列表不动，右侧露出第 8 张的边；
+        // 焦点到 index 4 及以后，锚点 = 焦点索引 → 被选中的卡正好停在 24dp 基准线上，
+        // 上一张被挤到 24dp 左侧、在屏幕最左缘出血露出一截。
+        val anchor = if (target >= POSTER_SCROLL_ANCHOR) target else 0
         if (requestFocus(posterRequesters, target)) {
             if (posterState.firstVisibleItemIndex == anchor && posterState.firstVisibleItemScrollOffset == 0) return
             scope.launch { posterState.animateScrollToItem(anchor) }
@@ -468,7 +468,8 @@ private fun HeroTopBarItem(
                 }
             }
             .clickable(interactionSource = interaction, indication = null, onClick = onConfirm)
-            .padding(horizontal = 2.dp, vertical = 4.dp),
+            // 不加左右 padding：顶栏第一项的左边线必须与 Tab / 海报的 24dp 基准线完全重合。
+            .padding(vertical = 4.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         // homeBtn 是 28dp 方块（XML L219-220）；文字项固定 30dp 内容区。
@@ -502,11 +503,11 @@ private fun HeroTopBarItem(
             }
         }
         Spacer(modifier = Modifier.height(6.dp))
-        // 焦点态：红色短横线（长度固定 26dp，仅淡入淡出，避免文字宽度变化导致抖动）。
+        // 焦点态指示器：2dp 高红色短横线（长度固定 26dp，仅淡入淡出，避免文字宽度变化导致抖动）。
         Box(
             modifier = Modifier
                 .width(26.dp)
-                .height(3.dp)
+                .height(2.dp)
                 .alpha(underlineAlpha)
                 .background(HeroAccentColor, RoundedCornerShape(2.dp)),
         )
@@ -710,10 +711,12 @@ private fun HeroTabChip(
                 }
             }
             .clickable(interactionSource = interaction, indication = null, onClick = onConfirm)
+            // 高度锁死 26dp + 13dp 圆角 = 完美半圆胶囊；左右 12dp、上下 0dp。
+            .height(HERO_TAB_HEIGHT)
             .clip(HERO_TAB_SHAPE)
             .background(chipBackground)
-            // 左右宽、上下窄：胶囊看起来更“扁”，与参考图一致。
             .padding(horizontal = HERO_TAB_H_PADDING, vertical = HERO_TAB_V_PADDING),
+        contentAlignment = Alignment.Center,
     ) {
         Text(
             text = label,
@@ -728,16 +731,14 @@ private fun HeroTabChip(
 /**
  * 海报区（XML `posterArea`，L142-191）：整块固定高 215dp（L147），内部 recycler 同为 215dp（L156）。
  *
- * 一屏 = 7 张完整卡片 + 第 8 张只露出自身宽度的 1/7（合计 7.1428 张）。换算过程：
- *
- *   1) 总可用宽度 = 屏宽 − 左 24dp − 右 24dp
- *   2) 间距总宽   = 12dp × 7（6 个卡与卡之间的间距 + 1 个通往第 8 张的空隙）= 84dp
- *   3) 卡片宽度   = (总可用宽度 − 84dp) / 7.1428
- *      验证：7 × 宽 + 7 × 12dp + 宽/7 = 总可用宽度 ✔
- *   4) 卡片高度   = 卡片宽度 × 1.5（严格 2:3）
- *
- * 960dp 宽屏：可用宽度 = 912dp → 卡片宽度 = (912 − 84) / 7.1428 = 115.92dp，高 = 173.88dp。
- * 卡片宽度会按实际屏宽重算并 `println` 到控制台，方便对照真机。
+ * 卡片尺寸严格照抄 `ref_docs/adapter_vod_rect.xml`：120dp × 180dp、8dp 圆角、间距 12dp。
+ * 列表**靠左吸附**，不做任何居中/对称换算：
+ * - `contentPadding = (start 24dp, end 0dp)`，LazyRow 自身铺满整行且不加外层 padding，
+ *   于是它的裁剪边界就是屏幕边缘 —— 等价于 Android 的 `clipToPadding=false`：
+ *   静止时第一张卡正好压在 24dp 基准线上；滚动后卡片可以一路出血到 x = 0。
+ * - 焦点在 index 0..3 时锚点恒为 0，列表不动，右侧自然露出第 8 张卡的边。
+ * - 焦点到 index 4 及以后，锚点 = 焦点索引，被选中的卡正好停在 24dp 基准线上，
+ *   上一张则被挤到 24dp 左侧、在屏幕最左缘露出一截（出血贴边）。
  */
 @Composable
 private fun PosterArea(
@@ -751,31 +752,18 @@ private fun PosterArea(
     onMoveLeft: (Int) -> Unit,
     onMoveRight: (Int) -> Unit,
 ) {
-    // 1) 总可用宽度：屏宽 − 左 24dp − 右 24dp
-    val availableWidth = LocalConfiguration.current.screenWidthDp - HERO_PADDING.value * 2
-    // 2) 间距总宽 = 12dp × 7；3) 卡片宽度 = (可用宽度 − 间距总宽) / 7.1428
-    val cardWidth = (availableWidth - POSTER_GAP.value * POSTER_GAP_COUNT) / POSTER_VISIBLE_CARDS
-    println("计算出的卡片宽度: $cardWidth")
-
     LazyRow(
         state = state,
-        // 左裁剪修复（等价于 Android 的 clipToPadding=false）：
-        // 外层只留 4dp，另外 20dp 作为 contentPadding 放在**行内**，于是
-        //   第一张卡的视觉位置仍 = 4 + 20 = 24dp（与 XML 的 paddingStart 一致），
-        //   但 LazyRow 的裁剪边界在 4dp，焦点卡放大后的红边/阴影有 20dp 余量可以画出去，不会被切。
-        // 右侧仍是 24dp，所以“可用宽度 = 屏宽 − 48dp”的 7 + 1/7 公式不受影响。
-        // 父容器（Box / Column）本身不裁剪子项，这里无需额外 clipToBounds=false。
+        // 铺满整行、无外层 padding：LazyRow 的裁剪边界 = 屏幕边缘（Compose 等价于 clipToPadding=false）。
         modifier = Modifier
             .fillMaxWidth()
-            .height(POSTER_AREA_HEIGHT)
-            .padding(start = HERO_PADDING - POSTER_FOCUS_SAFE_GAP, end = HERO_PADDING),
-        contentPadding = PaddingValues(start = POSTER_FOCUS_SAFE_GAP),
+            .height(POSTER_AREA_HEIGHT),
+        contentPadding = PaddingValues(start = HERO_PADDING, end = 0.dp),
         horizontalArrangement = Arrangement.spacedBy(POSTER_GAP),
     ) {
         itemsIndexed(items = posters, key = { _, poster -> poster.id }) { index, poster ->
             PosterCard(
                 poster = poster,
-                cardWidth = cardWidth,
                 requester = requesters[index],
                 onFocused = { onFocused(index) },
                 onClick = { onClick(poster.title) },
@@ -793,11 +781,10 @@ private fun PosterArea(
  * 单张海报卡片：图片区与文字区完全剥离。
  *
  * 尺寸与样式全部对齐参考文件（`ref_docs/adapter_vod_rect.xml`）：
- * - 图片：宽度由 [PosterArea] 按“7 张 + 第 8 张 1/7”算出，高度 = 宽度 × 1.5，严格 2:3
- *   （XML 基准 120dp × 180dp 是 960dp 屏下的原值，圆角 8dp 见 L27 `Vod.Grid.Large`）。
+ * - 图片：120dp × 180dp（L24-25），固定尺寸，严格 2:3；圆角 8dp（L27 `Vod.Grid.Large`）。
  * - 标题：13sp（L46）+ marginTop 8dp（L53）+ `#ccffffff`（L47）+ marquee（L48），
  *   这里用 13sp + 8dp 间距 + [basicMarquee]（仅焦点态跑马灯，未聚焦时省略号收尾）。
- * - 焦点缩放：`ref_docs/VodRectPresenter.java` 第 39-41 行 `1.08f`，本项目按产品要求取 1.05。
+ * - 焦点缩放：`ref_docs/VodRectPresenter.java` 第 39-41 行 `1.08f`，本项目按产品要求取 1.1。
  * - 描边/阴影：VodRectPresenter 第 90-101 行的 overlay 视觉厚度约 2dp，Compose 用贴边 `border(2.dp)`
  *   加焦点态 `shadow(18.dp)` 表达同一层级。
  *
@@ -806,7 +793,6 @@ private fun PosterArea(
 @Composable
 private fun PosterCard(
     poster: HeroPoster,
-    cardWidth: Float,
     requester: FocusRequester,
     onFocused: () -> Unit,
     onClick: () -> Unit,
@@ -844,7 +830,7 @@ private fun PosterCard(
 
     Column(
         modifier = Modifier
-            .width(cardWidth.dp)
+            .width(POSTER_CARD_WIDTH)
             .focusRequester(requester)
             .onFocusChanged {
                 focused = it.isFocused
@@ -880,11 +866,11 @@ private fun PosterCard(
             .clickable(interactionSource = interaction, indication = null, onClick = onClick),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        // 图片区：只有这一层参与缩放、描边与阴影。高度 = 宽度 × 1.5，锁定 2:3。
+        // 图片区：只有这一层参与缩放、描边与阴影。120dp × 180dp 是 adapter_vod_rect 的固定值。
         Box(
             modifier = Modifier
-                .width(cardWidth.dp)
-                .height((cardWidth * POSTER_CARD_ASPECT).dp)
+                .width(POSTER_CARD_WIDTH)
+                .height(POSTER_CARD_HEIGHT)
                 .graphicsLayer {
                     scaleX = scale
                     scaleY = scale
@@ -1036,7 +1022,7 @@ private val NAV_BAR_HEIGHT = 64.dp          // L207 layout_height
 private val NAV_HOME_SIZE = 28.dp           // L219-220 homeBtn
 private val NAV_HOME_GLYPH_SIZE = 20.dp     // 28dp 按钮内留 4dp 呼吸
 private val NAV_ITEMS_START_GAP = 20.dp     // L259 navRecycler layout_marginStart
-private val TOP_BAR_TEXT_BOX = 30.dp        // 文字项固定内容区
+private val TOP_BAR_TEXT_BOX = 20.dp        // 文字项固定内容区（13sp 的贴合高度）
 private const val TOP_BAR_FOCUS_SCALE = 1.1f // 焦点态整体放大 1.1 倍（只走 graphicsLayer，不动布局）
 private const val TOP_BAR_ANIM_MS = 150
 private const val TOP_BAR_IDLE_ALPHA = 0.6f
@@ -1086,10 +1072,11 @@ private val HERO_DESC_COLOR = Color(0xBBFFFFFF)  // L113
 // ---------------------------------------------------------------------------
 private val HERO_TAB_BOTTOM_GAP = 12.dp     // L137 layout_marginBottom
 private val HERO_TAB_BOTTOM_PADDING = 2.dp  // L130 paddingBottom
-private val HERO_TAB_SPACING = 14.dp
-private val HERO_TAB_H_PADDING = 28.dp      // 左右宽一点
-private val HERO_TAB_V_PADDING = 6.dp       // 上下窄一点
-private val HERO_TAB_SHAPE = RoundedCornerShape(24.dp) // 胶囊（高度不足时自动收成半圆）
+private val HERO_TAB_SPACING = 16.dp        // Tab 之间间距
+private val HERO_TAB_HEIGHT = 26.dp         // 胶囊高度，严格 26dp
+private val HERO_TAB_H_PADDING = 12.dp      // 左右 12dp
+private val HERO_TAB_V_PADDING = 0.dp       // 上下 0dp（高度由 HERO_TAB_HEIGHT 锁死）
+private val HERO_TAB_SHAPE = RoundedCornerShape(13.dp) // 13dp = 高度的一半，完美半圆胶囊
 private val HERO_TAB_IDLE_BACKGROUND = Color(0x33FFFFFF) // 未选中：深灰半透明，无描边
 
 // ---------------------------------------------------------------------------
@@ -1100,23 +1087,16 @@ private val POSTER_TITLE_GAP = 8.dp         // adapter_vod_rect L53 layout_margi
 private const val POSTER_TITLE_SP = 13f     // adapter_vod_rect L46 textSize
 private val POSTER_TITLE_COLOR = Color(0xCCFFFFFF) // adapter_vod_rect L47
 
-// 一屏 = 7 张完整卡片 + 第 8 张露出自身宽度的 1/7（合计 7.1428 张）。
-// 卡宽 = (屏宽 − 24dp×2 − 12dp×7) / 7.1428；间距固定 12dp，共 7 段（含通往第 8 张的那一段）。
+// 卡片尺寸严格照抄 adapter_vod_rect.xml（L24-25），不再按屏幕反推。
+private val POSTER_CARD_WIDTH = 120.dp
+private val POSTER_CARD_HEIGHT = 180.dp
 private val POSTER_GAP = 12.dp
-private const val POSTER_GAP_COUNT = 7
-private const val POSTER_VISIBLE_CARDS = 7.1428f
 
-// 高度 = 宽度 × 1.5（严格 2:3，对应 adapter_vod_rect 的 120×180dp）。
-private const val POSTER_CARD_ASPECT = 1.5f
-
-// 焦点进入第 5 张（index = 4）起，把 index 4 推到视觉最左侧；index 0..3 一律停在行首。
+// 焦点进入第 5 张（index = 4）起，被选中的卡靠左吸附到 24dp 基准线；index 0..3 一律停在行首。
 private const val POSTER_SCROLL_ANCHOR = 4
 
-// 左侧焦点安全区：20dp 的额外 contentPadding，专门用来容纳放大后的红边与阴影（见 [PosterArea]）。
-private val POSTER_FOCUS_SAFE_GAP = 20.dp
-
-// 参考 ref_docs/VodRectPresenter.java 第 39-41 行：原实现 hasFocus() ? 1.08f : 1.0f；本项目按要求取 1.05。
-private const val POSTER_FOCUS_SCALE = 1.05f
+// 参考 ref_docs/VodRectPresenter.java 第 39-41 行：原实现 hasFocus() ? 1.08f : 1.0f；本项目按定稿取 1.1。
+private const val POSTER_FOCUS_SCALE = 1.1f
 
 // 焦点缩放的弹簧参数：dampingRatio 0.8（略有回弹但不过冲）+ stiffness 400（电视遥控器连按时跟手）。
 private const val POSTER_SPRING_DAMPING = 0.8f
@@ -1138,4 +1118,4 @@ private val DIALOG_SHAPE = RoundedCornerShape(14.dp)
 private val HeroAccentColor = Color(0xFFFF0000)
 
 // 第一排（TopBar）与第二排（Tab）共用的字号，保证两排视觉统一。
-private const val HERO_LABEL_SP = 15f
+private const val HERO_LABEL_SP = 13f
