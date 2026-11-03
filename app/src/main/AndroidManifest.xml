@@ -112,6 +112,15 @@
             android:screenOrientation="sensorLandscape"
             android:theme="@style/Theme.App" />
 
+        <!-- HeroUI 搜索页（Compose 体系）：结构取自 ref_docs/activity_search.xml，数据层未接先用 Mock。 -->
+        <activity
+            android:name=".ui.activity.HeroSearchActivity"
+            android:configChanges="screenSize|smallestScreenSize|screenLayout|orientation"
+            android:exported="false"
+            android:label="Hero Search"
+            android:screenOrientation="sensorLandscape"
+            android:theme="@style/Theme.App" />
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.provider"

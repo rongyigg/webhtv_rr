@@ -316,6 +316,8 @@ private fun HeroHomeScreen(onOpenDetail: (String) -> Unit) {
                 // 顶栏「历史」→ HeroUI 历史页（View 体系，复用 HeroPosterCard）。
                 // 这里在 HeroHomeScreen 作用域内，`context` 就是 L210 的 LocalContext.current。
                 onOpenHistory = { HeroHistoryActivity.start(context) },
+                // 顶栏「搜索」→ HeroSearchActivity（Compose 体系，纯 UI 结构 + 假数据）。
+                onOpenSearch = { HeroSearchActivity.start(context) },
                 // 顶栏 ↓ 进入 Tab 栏：落到记忆中的 Tab，而不是与顶栏项横向对齐的那一个。
                 onMoveDown = { focusTab() },
             )
@@ -430,6 +432,8 @@ private fun HeroTopBar(
     // 作用域里没有 `context` 变量（上层的 LocalContext.current 在 HeroHomeScreen 里），
     // 所以由调用方把「已捕获 context 的 lambda」传进来。
     onOpenHistory: () -> Unit,
+    // 顶栏「搜索」→ HeroSearchActivity。同上，由调用方传入已捕获 context 的 lambda。
+    onOpenSearch: () -> Unit,
     onMoveDown: () -> Unit,
 ) {
     Row(
@@ -457,10 +461,11 @@ private fun HeroTopBar(
                     label = TOP_BAR_LABELS[index],
                     isHome = false,
                     requester = requesters[index],
-                    // 目前只有「历史」接好了页面，其余项仍是占位（确定键无动作）。
+                    // 目前只有「历史」「搜索」接好了页面，其余项仍是占位（确定键无动作）。
                     onConfirm = {
-                        if (TOP_BAR_LABELS[index] == TOP_BAR_HISTORY_LABEL) {
-                            onOpenHistory()
+                        when (TOP_BAR_LABELS[index]) {
+                            TOP_BAR_HISTORY_LABEL -> onOpenHistory()
+                            TOP_BAR_SEARCH_LABEL -> onOpenSearch()
                         }
                     },
                     onMoveDown = onMoveDown,
@@ -1030,9 +1035,12 @@ private val HERO_POSTERS: List<HeroPoster> = listOf(
 // 顶栏顺序：小房子 | 直播 | 搜索 | 历史 | 收藏 | 推送 | 设置（对照 ref_docs/home_ui.png）。
 private val TOP_BAR_LABELS = listOf("首页", "直播", "搜索", "历史", "收藏", "推送", "设置")
 
-// 顶栏里当前唯一已接好页面的项：历史 → HeroHistoryActivity（View 体系 + HeroPosterCard）。
-// 直播 / 搜索 / 收藏 / 推送 / 设置 等对应页面就绪后再按同一写法接。
+// 顶栏里已接好页面的项：历史 → HeroHistoryActivity（View 体系 + HeroPosterCard）、
+// 搜索 → HeroSearchActivity（Compose 体系）。
+// 直播 / 收藏 / 推送 / 设置 等对应页面就绪后再按同一写法接。
 private const val TOP_BAR_HISTORY_LABEL = "历史"
+
+private const val TOP_BAR_SEARCH_LABEL = "搜索"
 
 // 分类 Tab 顺序对照 ref_docs/home_ui.png 的胶囊分类条。
 private val HERO_TABS = listOf("推荐", "电影", "电视剧", "动漫", "综艺", "纪录片")
