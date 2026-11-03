@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  换源结果卡的海报临时占位：红 → 金黄的对角线性渐变。
+
+  目前是 Mock 数据，没有真实海报 URL，原版 @color/black_20 的纯色占位在黑底弹窗里
+  完全看不出卡片边界，所以换成这个明显的渐变（品牌红 #E50914 → 暖金 #FFB020）。
+  真实海报接入后由 ShapeableImageView 的 src 覆盖，这里只剩兜底作用。
+  TODO(数据层对接)：有 poster 地址时加载真实图，并把 @id/placeholder 的首字隐藏。
+-->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+
+    <gradient
+        android:angle="45"
+        android:endColor="#FFB020"
+        android:startColor="#E50914"
+        android:type="linear" />
+
+</shape>

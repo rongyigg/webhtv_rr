@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  换源结果卡根节点的 android:foreground，对应 ref_docs/adapter_search.xml 的 @drawable/selector_vod：
+  - focused → shape_source_card_focused（1.5dp 纯白描边，卡片边界一眼可见）
+  - 其他    → 完全透明
+
+  用 foreground 而不是 background：背景要留给海报 / 剧名底板，描边必须画在所有子控件之上，
+  否则会被海报盖住。
+-->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <item
+        android:state_focused="true"
+        android:drawable="@drawable/shape_source_card_focused" />
+    <item android:drawable="@android:color/transparent" />
+</selector>

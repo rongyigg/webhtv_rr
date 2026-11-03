@@ -1,48 +1,110 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  照搬 ref_docs/adapter_vod_rect.xml（换源结果卡，f23 用 vs3 → VodRectPresenter）。
-  仅删除 tmdbTag：它依赖本工程不存在的 @drawable/bg_tmdb_tag 与 @string/home_tmdb_tag，
-  且原版默认 gone，不参与布局。占位底色沿用原版 @color/black_20（不是纯黑块）。
+  换源弹窗（ChangeSourceDialog）结果卡片 —— 严格照抄 ref_docs/adapter_search.xml。
+
+  逆向结构（本项目内已做的替换逐条注明）：
+  ┌ RelativeLayout  根节点 focusable，foreground = @drawable/selector_vod
+  │   ├ ShapeableImageView  @id/image   @color/black_20 + @style/Vod.Grid（仅上方两角 8dp）
+  │   ├ TextView           @id/site    13sp / @drawable/shape_vod_site / maxWidth 96dp
+  │   ├ TextView           @id/remark  14sp / @drawable/shape_vod_remark / singleLine
+  │   └ TextView           @id/name    16sp / @drawable/shape_vod_name / padding 6dp / gravity center
+  └
+
+  必要替换（资源在 main 源集不存在，按本工程约定加 source_ 前缀重建等价资源）：
+  1. selector_vod            → @drawable/selector_source_card_foreground（focused = 1.5dp 白描边）
+  2. shape_vod_name          → @drawable/shape_source_vod_name（black_20 + 下方两角 8dp）
+  3. 图片无真实海报           → src 用 @drawable/shape_source_poster_placeholder（红→金渐变），
+                                并在正中叠一个首字，证明图片区域存在；接真实海报时隐藏首字即可。
+  4. 原版 site 是 visibility="gone"：这里改为常显，用来展示 Mock 数据里的「来源 + 日期」。
+
+  尺寸：卡片宽 120dp（与原版 adapter_vod_rect 的 120dp 一致，结果栏是横向 RecyclerView），
+  海报区 120×180（2:3），剧名底板高度由 16sp + 6dp padding 自适应。
 -->
 <RelativeLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
-    android:background="@null"
-    android:paddingBottom="0dp"
+    android:foreground="@drawable/selector_source_card_foreground"
     android:focusable="true"
     android:focusableInTouchMode="true"
     android:clipChildren="false"
     android:clipToPadding="false"
-    android:layout_width="wrap_content"
+    android:layout_width="120dp"
     android:layout_height="wrap_content"
     android:stateListAnimator="@null"
     android:outlineProvider="none"
     android:defaultFocusHighlightEnabled="false">
+
+    <!-- 海报区：与剧名底板拼成一张圆角卡片（上圆下圆） -->
     <FrameLayout
         android:id="@+id/imageWrapper"
         android:duplicateParentState="true"
-        android:clipChildren="false"
+        android:clipChildren="true"
         android:clipToPadding="false"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content">
+        android:layout_width="120dp"
+        android:layout_height="180dp">
+
         <com.google.android.material.imageview.ShapeableImageView
             android:id="@+id/image"
             android:background="@color/black_20"
-            android:layout_width="120dp"
-            android:layout_height="180dp"
+            android:src="@drawable/shape_source_poster_placeholder"
             android:scaleType="centerCrop"
-            app:shapeAppearanceOverlay="@style/Vod.Grid.Large"/>
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            app:shapeAppearanceOverlay="@style/Vod.Grid" />
+
+        <!-- 无海报时的首字占位：正中央，剧名首字 -->
+        <TextView
+            android:id="@+id/placeholder"
+            android:textSize="36sp"
+            android:textStyle="bold"
+            android:textColor="#F2FFFFFF"
+            android:gravity="center"
+            android:layout_gravity="center"
+            android:includeFontPadding="false"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content" />
+
+        <!-- 来源 + 日期（原版 @id/site：13sp / shape_vod_site / maxWidth 96dp / 单行；这里放开两行） -->
+        <TextView
+            android:id="@+id/site"
+            android:textSize="13sp"
+            android:textColor="@color/white"
+            android:ellipsize="end"
+            android:background="@drawable/shape_vod_site"
+            android:gravity="center"
+            android:maxWidth="96dp"
+            android:maxLines="2"
+            android:layout_gravity="start|top"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content" />
+
+        <!-- 备注（原版 @id/remark：14sp / shape_vod_remark / 单行省略，压在剧名底板之上） -->
+        <TextView
+            android:id="@+id/remark"
+            android:textSize="14sp"
+            android:textColor="@color/white"
+            android:ellipsize="end"
+            android:background="@drawable/shape_vod_remark"
+            android:singleLine="true"
+            android:maxWidth="112dp"
+            android:layout_gravity="start|bottom"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content" />
     </FrameLayout>
+
+    <!-- 剧名（原版 @id/name：16sp / padding 6dp / gravity center / 单行省略） -->
     <com.google.android.material.textview.MaterialTextView
-        android:textSize="13sp"
-        android:textColor="#ccffffff"
-        android:ellipsize="marquee"
-        android:gravity="center"
         android:id="@+id/name"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="8dp"
+        android:textSize="16sp"
+        android:textColor="@color/white"
+        android:ellipsize="end"
+        android:gravity="center"
+        android:background="@drawable/shape_source_vod_name"
+        android:padding="6dp"
         android:singleLine="true"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
         android:layout_below="@+id/imageWrapper"
         android:layout_alignStart="@+id/imageWrapper"
-        android:layout_alignEnd="@+id/imageWrapper"/>
+        android:layout_alignEnd="@+id/imageWrapper" />
+
 </RelativeLayout>

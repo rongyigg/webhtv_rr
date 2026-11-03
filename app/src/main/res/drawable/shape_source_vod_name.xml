@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  换源结果卡「剧名」底板，逐字照搬 ref_docs/adapter_search.xml 引用的 @drawable/shape_vod_name：
+  黑色 20%（@color/black_20）+ 只有左下 / 右下 8dp 圆角。
+
+  为什么新建而不是直接用 shape_vod_name：后者只存在于 leanback / mobile 两个源集，
+  main 源集（换源弹窗所在）引用不到，所以按本工程约定加 source_ 前缀在 main 里重建一份等价资源。
+  它与图片的 @style/Vod.Grid（只有上方两角 8dp）合起来才是一张圆角卡片。
+-->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+
+    <corners
+        android:bottomLeftRadius="8dp"
+        android:bottomRightRadius="8dp" />
+
+    <solid android:color="@color/black_20" />
+
+</shape>

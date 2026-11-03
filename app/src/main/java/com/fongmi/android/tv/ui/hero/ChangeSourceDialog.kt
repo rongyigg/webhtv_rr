@@ -237,12 +237,20 @@ internal class ChangeSourceDialog private constructor(
 
         override fun onBindViewHolder(holder: Holder, position: Int) {
             val result = visibleResults[position]
-            holder.name.text = "${result.site} · ${result.date}"
-            // TODO(数据层对接)：接入真实数据后在这里把海报加载到 holder.image。
-            // 占位沿用原版 @color/black_20（adapter_vod_rect 的 image background），不是纯黑块。
+            // 字段与逆向 adapter_search.xml 一一对应：
+            // name → @id/name（16sp 剧名底板）、remark → @id/remark（14sp 备注）、
+            // site → @id/site（13sp 左上角小标，显示「来源 + 日期」）。
+            holder.name.text = result.name
+            holder.remark.text = result.remark
+            holder.site.text = "${result.site}\n${result.date}"
+            // Mock 阶段没有海报：渐变占位 + 剧名首字，证明图片区域的位置与尺寸。
+            holder.placeholder.text = result.name.take(1)
+            holder.placeholder.visibility = View.VISIBLE
+            // TODO(数据层对接)：result.poster 非空时加载真实海报，并把 placeholder 置 GONE。
             holder.itemView.scaleX = 1f
             holder.itemView.scaleY = 1f
             holder.itemView.setOnFocusChangeListener { view, hasFocus ->
+                // ref_docs/f23.java：mm3.f(recycler, 1.08f)，焦点卡片放大 1.08 倍。
                 val scale = if (hasFocus) FOCUS_SCALE else 1f
                 view.animate().scaleX(scale).scaleY(scale).setDuration(FOCUS_ANIM_MS).start()
             }
@@ -254,6 +262,9 @@ internal class ChangeSourceDialog private constructor(
 
         inner class Holder(view: View) : RecyclerView.ViewHolder(view) {
             val name: TextView = view.findViewById(R.id.name)
+            val site: TextView = view.findViewById(R.id.site)
+            val remark: TextView = view.findViewById(R.id.remark)
+            val placeholder: TextView = view.findViewById(R.id.placeholder)
             val image: View = view.findViewById(R.id.image)
         }
     }
