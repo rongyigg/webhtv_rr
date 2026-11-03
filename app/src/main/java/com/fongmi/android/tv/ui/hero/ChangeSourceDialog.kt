@@ -98,12 +98,22 @@ internal class ChangeSourceDialog private constructor(
         siteRecycler.requestFocus()
     }
 
-    /** 照搬 f23 的窗口尺寸：宽 0.82×屏幕宽，高 min(360dp, 0.65×屏幕高 dp)。 */
+    /**
+     * 窗口尺寸。
+     *
+     * 宽照搬 f23：`c0(0.82f)` → 屏幕宽 × 0.82。
+     * 高先取 f23 的 `min(360dp, 屏高 × 0.65)`，再按内容高度兜底：
+     * f23 的公式在 480dp 高的屏上只有 312dp，扣掉头部 / 站点栏 / 结果标题后，
+     * 结果区不足 218dp（214dp 卡片 + 4dp 顶部内边距），会把卡片底部的剧名裁掉。
+     * 所以最终高 = max(f23 公式, 内容所需)，并且至少给屏幕上下各留 [WINDOW_MARGIN_DP]。
+     */
     private fun setupWindow() {
         val metrics = context.resources.displayMetrics
         val width = (metrics.widthPixels * WIDTH_FRACTION).toInt()
         val screenHeightDp = metrics.heightPixels / metrics.density
-        val heightDp = min(MAX_HEIGHT_DP, (screenHeightDp * HEIGHT_FRACTION).roundToInt())
+        val baseDp = min(MAX_HEIGHT_DP, (screenHeightDp * HEIGHT_FRACTION).roundToInt())
+        val neededDp = DIALOG_CHROME_DP + RESULT_ROW_HEIGHT_DP
+        val heightDp = min((screenHeightDp - WINDOW_MARGIN_DP).roundToInt(), maxOf(baseDp, neededDp))
         window?.apply {
             setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
             setLayout(width, (heightDp * metrics.density).toInt())
@@ -245,8 +255,9 @@ internal class ChangeSourceDialog private constructor(
             // site   → @id/site   13sp 站点标签（ks2 L77 `setText(vod.getSiteName())`）
             holder.name.text = result.name
             holder.remark.text = result.remark
-            // 按需求显示「日期 | 来源」；标签 maxWidth 110dp（< 海报 120dp），单行省略。
-            holder.site.text = "${result.date} | ${result.site}"
+            // 按需求显示「日期 | 来源」；日期截短成 MM-dd（如 `10-28 | 豆瓣`），
+            // 配合 maxWidth 110dp + 单行省略，标签永远在 120dp 海报的左上角内。
+            holder.site.text = "${shortDate(result.date)} | ${result.site}"
             // Mock 阶段没有海报：渐变占位 + 剧名首字，证明图片区域的位置与尺寸。
             holder.placeholder.text = result.name.take(1)
             holder.placeholder.visibility = View.VISIBLE
@@ -267,6 +278,12 @@ internal class ChangeSourceDialog private constructor(
             val placeholder: TextView = view.findViewById(R.id.placeholder)
             val image: View = view.findViewById(R.id.image)
         }
+
+        /** `2026-10-28` → `10-28`；不是三段日期（如已经是 `10-28`）就原样返回。 */
+        private fun shortDate(date: String): String {
+            val parts = date.split('-')
+            return if (parts.size == 3) "${parts[1]}-${parts[2]}" else date
+        }
     }
 
     companion object {
@@ -283,6 +300,21 @@ internal class ChangeSourceDialog private constructor(
 
         /** f23：`recycler.setHorizontalSpacing(dp(16))`。 */
         private const val RESULT_SPACING_DP = 16
+
+        /** 结果卡整高，写死在 `adapter_source_result.xml`：海报 180dp + 剧名栏 34dp。 */
+        private const val RESULT_CARD_HEIGHT_DP = 214
+
+        /** `@id/recycler` 的 paddingTop（4dp）。 */
+        private const val RESULT_ROW_PADDING_DP = 4
+
+        /** 结果区最小高度 = 卡片 + 顶部内边距，与 `dialog_source.xml` 的 `minHeight="218dp"` 一致。 */
+        private const val RESULT_ROW_HEIGHT_DP = RESULT_CARD_HEIGHT_DP + RESULT_ROW_PADDING_DP
+
+        /** 弹窗其余固定高度：root paddingTop 18 + 头部 40 + 站点栏 40 + 结果标题行 20 + 8。 */
+        private const val DIALOG_CHROME_DP = 126
+
+        /** 窗口上下至少留出的屏幕边距，避免顶到屏幕边缘。 */
+        private const val WINDOW_MARGIN_DP = 16
 
         private const val DIM_AMOUNT = 0.6f
 

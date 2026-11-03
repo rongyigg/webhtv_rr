@@ -20,7 +20,7 @@
 | --- | --- | --- |
 | `layout/dialog_source.xml` | `ref_docs/dialog_source.xml` | 根 padding 18dp / paddingBottom 0、`shape_dialog_source`、头 32dp、siteLayout 32dp、homeBtn 26dp + 16dp 图标、结果区 3dp 红条 + 13sp 标题 + 16dp 内边距，全部逐字保留 |
 | `layout/adapter_source_site.xml` | `ref_docs/adapter_v2_site.xml` | 14sp + 白字；**根节点即标签本体**（合并原版内外两层，否则 adapter 的 isSelected 落在不画背景的外层）；背景用 `selector_source_site_chip_background`（focused → 红底胶囊） |
-| `layout/adapter_source_result.xml` | `ref_docs/adapter_search.xml` + `ks2.java` + `adapter_vod_rect.xml` | 120dp 宽、海报 120×180（= 宽 × 1.5，`VodRectPresenter` L75）、剧名栏 `minHeight 34dp`（`ks2` L108 `dp(34)`）、`@id/site` 13sp + `shape_vod_site`（`bg_site`：#F44336 α0.7 / mobile `colorErrorContainer` α0.8，左上+右上+右下 8dp，内边距 4dp；`maxWidth` 96dp → **110dp** 以容纳「日期 \| 来源」，仍 < 海报 120dp）、`@id/remark` 14sp + `shape_vod_remark`（`bg_remark`：#177535 α0.7 / mobile `colorSecondaryContainer` α0.8，右 4dp，内边距 4dp）、`@id/name` 16sp + `black_20` + 下两角 8dp + `padding 6dp`、焦点白框 1.5dp 只包海报（`imageWrapper` foreground + `duplicateParentState`） |
+| `layout/adapter_source_result.xml` | `ref_docs/adapter_search.xml` + `ks2.java` + `adapter_vod_rect.xml` | 120dp 宽、海报 120×180（= 宽 × 1.5，`VodRectPresenter` L75）、剧名栏写死 `34dp`、整卡写死 `214dp`（`ks2` L108 `dp(34)` + 海报 180）、`@id/site` 13sp + `shape_vod_site`（`bg_site`：#F44336 α0.7 / mobile `colorErrorContainer` α0.8，左上+右上+右下 8dp，内边距 4dp；`maxWidth` 96dp → **110dp** 以容纳「日期 \| 来源」，仍 < 海报 120dp；日期显示为 `MM-dd`，超长走 `ellipsize=end`）、`@id/remark` 14sp + `shape_vod_remark`（`bg_remark`：#177535 α0.7 / mobile `colorSecondaryContainer` α0.8，右 4dp，内边距 4dp）、`@id/name` 16sp + `black_20` + 下两角 8dp + `padding 6dp`、焦点白框 1.5dp 只包海报（`imageWrapper` foreground + `duplicateParentState`） |
 | `layout/dialog_source_sidebar.xml` | `ref_docs/dialog_search_site.xml` | 全选/全不选 39dp（`@id/bulkBar`，单选模式代码隐藏）、12sp 文字 + 16dp 勾选圈、站点列表 |
 | `layout/adapter_source_sidebar_item.xml` | `ref_docs/adapter_site.xml` | 40dp 行高、18sp 文字、24dp 勾选圈；**根节点即行本体**（同上，否则行选中态不生效） |
 | `drawable/shape_source_site_item_focused.xml` | `ref_docs/shape_site_item_focused.xml` | inset 8/4dp + 白底 + 28dp 圆角（焦点胶囊） |
@@ -30,7 +30,7 @@
 | `drawable/selector_check_circle.xml` + `shape_check_circle_*` | `ref_docs/selector_check_circle.xml`（四态顺序原样） | 四态改为**正圆**（`android:shape="oval"`）：勾选 = 红底实心、未勾选 = 空心描边；焦点态单独加深/加白描边，保证在白底行上也可见 |
 | `drawable/shape_home_logo_normal_white.xml` | `ref_docs/shape_home_logo_normal_white.xml` | **oval + `@color/white_10`**（上一版误做成 13dp 圆角矩形 + 纯白/半透明白） |
 | `drawable/shape_home_logo_source_focused.xml` | `ref_docs/selector_home_logo_source.xml` 的 focused 分支（其 shape 未随包提供） | 红色椭圆 `#e50914`，与 `shape_home_logo_normal_white` 同为 oval |
-| 窗口尺寸 / 间距 / 缩放 | `ref_docs/f23.java` | 宽 `0.82×`屏宽、高 `min(360dp, 0.65×`屏高`)`、站点间距 12dp、结果间距 16dp；f23 里的结果卡焦点缩放 `1.08` **未采用**：整卡 214dp × 1.08 = 231dp 会超出 `min(360dp)` 弹窗里约 225dp 的结果区，反而把剧名切掉，焦点改用海报上的 1.5dp 白框 |
+| 窗口尺寸 / 间距 / 缩放 | `ref_docs/f23.java` | 宽 `0.82×`屏宽；高 = `max(min(360dp, 0.65×屏高), 126 + 218)`（126 = 弹窗固定内容，218 = 卡片 214 + recycler 顶部 4dp），并至少给屏幕留 16dp —— f23 原公式在 480dp 高的屏上只有 312dp，会裁掉卡片底部剧名；站点间距 12dp、结果间距 16dp；f23 里的结果卡焦点缩放 `1.08` **未采用**：整卡 214dp × 1.08 = 231dp 会超出结果区，反而把剧名切掉，焦点改用海报上的 1.5dp 白框 |
 
 ## 3. 必需的替换（每处都在对应文件头部注释里写明）
 

@@ -136,6 +136,13 @@
             android:marqueeRepeatLimit="marquee_forever"
             android:layout_marginStart="12dp"/>
     </LinearLayout>
+    <!--
+      结果区：mLayout weight 吃掉头部 / 站点栏 / 标题行剩下的全部高度。
+      卡片整高 214dp + recycler 的 paddingTop 4dp = 218dp，由
+      ChangeSourceDialog.setupWindow() 抬高弹窗窗口高度来保证；
+      这里不能再写 minHeight / 固定高度 —— 0dp + weight 下 minHeight 会被
+      LinearLayout 的 EXACTLY 测量直接忽略，写了也只是假保险。
+    -->
     <FrameLayout
         android:clipChildren="false"
         android:clipToPadding="false"

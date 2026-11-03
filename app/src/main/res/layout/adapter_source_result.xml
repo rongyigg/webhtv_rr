@@ -11,13 +11,15 @@
   │   └ TextView          @id/name     16sp / @drawable/shape_vod_name / padding 6dp / gravity center
   └
 
-  尺寸真值（不是估算）：
-  - 卡片宽 120dp、海报高 180dp：
+  尺寸真值（不是估算，且三个值全部写死，不吃 wrap_content / weight）：
+  - 卡片宽 **120dp**、海报高 **180dp**：
       ref_docs/adapter_vod_rect.xml L24-25 写死 `120dp × 180dp`（同一个换源弹窗家族的卡片默认尺寸）；
       ref_docs/VodRectPresenter.java L73-78 证明高度 = 宽度 × 1.5（2:3），且宽度上限 150dp。
-  - 剧名底栏正好 34dp：
+  - 剧名底栏写死 **34dp**：
       ref_docs/ks2.java L106-111 —— `根 width = width`、`根 height = dp(34) + 图片高`、
       `图片 height = 图片高`。所以「图片 + 34dp」就是整卡高度，剧名栏不参与任何比例计算。
+  - 整卡写死 **214dp = 180 + 34**（根节点 `layout_height="214dp"`），
+    外层 RecyclerView / 弹窗不允许拉伸或压扁它。
   - 卡间距 16dp：ref_docs/f23.java L757 `setHorizontalSpacing(dp(16))`。
 
   颜色 / 圆角真值（直接复用工程里已有的真实 Drawable，不新建、不改色）：
@@ -49,7 +51,8 @@
   - 文案改为「日期 | 来源」（原版 ks2.java L77 只写 `vod.getSiteName()`），
     因此 `maxWidth` 由真值 96dp 放宽到 **110dp**：仍小于海报宽 120dp，
     标签永远在左上角、不越过海报右边界；13sp / shape_vod_site / 单行省略不变。
-    实测「2026-10-28 | 豆瓣」13sp 约 97dp，加 shape 自带 4dp×2 内边距 ≈ 105dp < 110dp，完整显示。
+    日期只显示 MM-dd（`ChangeSourceDialog.shortDate`）：`10-28 | 豆瓣` 13sp 约 66dp、
+    加 shape 自带 4dp×2 内边距 ≈ 74dp < 110dp，完整显示；超长站名走 ellipsize=end。
 -->
 <RelativeLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
@@ -58,7 +61,7 @@
     android:clipChildren="false"
     android:clipToPadding="false"
     android:layout_width="120dp"
-    android:layout_height="wrap_content"
+    android:layout_height="214dp"
     android:stateListAnimator="@null"
     android:outlineProvider="none"
     android:defaultFocusHighlightEnabled="false">
@@ -123,7 +126,7 @@
     </FrameLayout>
 
     <!-- 剧名栏：16sp + shape_source_vod_name + padding 6dp + gravity center + 单行省略。
-         minHeight 34dp 就是 ks2.java 里写死的 `dp(34)`；高度仍是 wrap_content，不写死整卡。 -->
+         高度写死 34dp = ks2.java L108 的 `dp(34)`：海报 180 + 剧名栏 34 = 整卡 214dp。 -->
     <com.google.android.material.textview.MaterialTextView
         android:id="@+id/name"
         android:textSize="16sp"
@@ -132,10 +135,9 @@
         android:gravity="center"
         android:background="@drawable/shape_source_vod_name"
         android:padding="6dp"
-        android:minHeight="34dp"
         android:singleLine="true"
         android:layout_width="match_parent"
-        android:layout_height="wrap_content"
+        android:layout_height="34dp"
         android:layout_below="@+id/imageWrapper"
         android:layout_alignStart="@+id/imageWrapper"
         android:layout_alignEnd="@+id/imageWrapper" />
