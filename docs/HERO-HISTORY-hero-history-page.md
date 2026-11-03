@@ -120,6 +120,19 @@
 
 未做（用户明确禁止）：编译、打包、安装、commit、push。
 
+### 7.1 CI 修复记录（2026-11-03）
+
+CI 第一轮报 `HeroHomeActivity.kt:456 Function invocation 'context(...)' expected.`：
+`HeroTopBar`（普通 Composable）作用域里**没有** `context` 变量 —— `LocalContext.current` 只在
+`HeroHomeScreen` 里（L210）取过一次。按「Context 不跨 Composable 乱用」的规则改为显式传参：
+
+- `HeroTopBar` 新增参数 `onOpenHistory: () -> Unit`；
+- 调用点（`HeroHomeScreen` 内）传 `onOpenHistory = { HeroHistoryActivity.start(context) }`；
+- 历史项 `onConfirm` 只调用 `onOpenHistory()`，不再直接写 `context`。
+
+修复后复查：全文件 `context` 只出现在 `Context` import、`launchPlayback` / `findActivity` 的形参、
+以及 `HeroHomeScreen` 内的 L298 / L305 / L318，其他 Composable 一处都没有裸 `context`。
+
 ## 8. 回滚
 
 1. 删除 §4 的 7 个新增文件；

@@ -313,6 +313,9 @@ private fun HeroHomeScreen(onOpenDetail: (String) -> Unit) {
                         },
                     )
                 },
+                // 顶栏「历史」→ HeroUI 历史页（View 体系，复用 HeroPosterCard）。
+                // 这里在 HeroHomeScreen 作用域内，`context` 就是 L210 的 LocalContext.current。
+                onOpenHistory = { HeroHistoryActivity.start(context) },
                 // 顶栏 ↓ 进入 Tab 栏：落到记忆中的 Tab，而不是与顶栏项横向对齐的那一个。
                 onMoveDown = { focusTab() },
             )
@@ -423,6 +426,10 @@ private fun HeroMaskBottom() {
 private fun HeroTopBar(
     requesters: List<FocusRequester>,
     onHomeConfirm: () -> Unit,
+    // 顶栏「历史」→ HeroUI 历史页。Context 不在这里取：本函数是普通 Composable，
+    // 作用域里没有 `context` 变量（上层的 LocalContext.current 在 HeroHomeScreen 里），
+    // 所以由调用方把「已捕获 context 的 lambda」传进来。
+    onOpenHistory: () -> Unit,
     onMoveDown: () -> Unit,
 ) {
     Row(
@@ -453,7 +460,7 @@ private fun HeroTopBar(
                     // 目前只有「历史」接好了页面，其余项仍是占位（确定键无动作）。
                     onConfirm = {
                         if (TOP_BAR_LABELS[index] == TOP_BAR_HISTORY_LABEL) {
-                            HeroHistoryActivity.start(context)
+                            onOpenHistory()
                         }
                     },
                     onMoveDown = onMoveDown,
