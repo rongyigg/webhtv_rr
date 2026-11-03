@@ -242,7 +242,8 @@ internal class ChangeSourceDialog private constructor(
             // site → @id/site（13sp 左上角小标，显示「来源 + 日期」）。
             holder.name.text = result.name
             holder.remark.text = result.remark
-            holder.site.text = "${result.site}\n${result.date}"
+            // 左上角小标：逆向 @id/site 只放站点，这里按需求显示「日期 | 来源」，13sp。
+            holder.site.text = "${result.date} | ${result.site}"
             // Mock 阶段没有海报：渐变占位 + 剧名首字，证明图片区域的位置与尺寸。
             holder.placeholder.text = result.name.take(1)
             holder.placeholder.visibility = View.VISIBLE

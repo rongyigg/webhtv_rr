@@ -2,23 +2,28 @@
 <!--
   换源弹窗（ChangeSourceDialog）结果卡片 —— 严格照抄 ref_docs/adapter_search.xml。
 
-  逆向结构（本项目内已做的替换逐条注明）：
-  ┌ RelativeLayout  根节点 focusable，foreground = @drawable/selector_vod
-  │   ├ ShapeableImageView  @id/image   @color/black_20 + @style/Vod.Grid（仅上方两角 8dp）
-  │   ├ TextView           @id/site    13sp / @drawable/shape_vod_site / maxWidth 96dp
-  │   ├ TextView           @id/remark  14sp / @drawable/shape_vod_remark / singleLine
-  │   └ TextView           @id/name    16sp / @drawable/shape_vod_name / padding 6dp / gravity center
+  逆向结构：
+  ┌ RelativeLayout                根节点 focusable，foreground=@drawable/selector_vod
+  │   ├ ShapeableImageView @id/image   海报，@color/black_20 + @style/Vod.Grid（仅上方两角 8dp）
+  │   ├ TextView          @id/site    13sp、@drawable/shape_vod_site、maxWidth 96dp、单行
+  │   ├ TextView          @id/remark  14sp、@drawable/shape_vod_remark，位于 @id/name 正上方、与海报底边对齐
+  │   └ TextView          @id/name    16sp、@drawable/shape_vod_name、padding 6dp、gravity center、单行
   └
 
-  必要替换（资源在 main 源集不存在，按本工程约定加 source_ 前缀重建等价资源）：
-  1. selector_vod            → @drawable/selector_source_card_foreground（focused = 1.5dp 白描边）
-  2. shape_vod_name          → @drawable/shape_source_vod_name（black_20 + 下方两角 8dp）
-  3. 图片无真实海报           → src 用 @drawable/shape_source_poster_placeholder（红→金渐变），
-                                并在正中叠一个首字，证明图片区域存在；接真实海报时隐藏首字即可。
-  4. 原版 site 是 visibility="gone"：这里改为常显，用来展示 Mock 数据里的「来源 + 日期」。
+  本工程内已做的替换（逐条注明）：
+  1. selector_vod      → @drawable/selector_source_card_foreground（focused = 1.5dp 纯白描边）
+     shape_vod_name    → @drawable/shape_source_vod_name（black_20 + 下方两角 8dp）
+     两者在 main 源集不存在，按 source_ 前缀重建等价资源，数值逐字照抄。
+  2. 海报无真实地址 → src 用 @drawable/shape_source_poster_placeholder（红→金 45° 渐变），
+     正中叠 @id/placeholder 显示剧名首字；接真实海报时把它置 GONE 即可。
+  3. @id/site 原版 visibility="gone"，这里常显并承载「日期 | 来源」；maxWidth 由 96dp 放宽到
+     120dp（卡片全宽），否则 13sp 的「2026-10-28 | 豆瓣」会被截断。
 
-  尺寸：卡片宽 120dp（与原版 adapter_vod_rect 的 120dp 一致，结果栏是横向 RecyclerView），
-  海报区 120×180（2:3），剧名底板高度由 16sp + 6dp padding 自适应。
+  尺寸说明（逆向里 image 是 match_parent × 0dp，高度由外层决定，本身没有写死比例）：
+  卡片宽 120dp，海报 120×160（3:4）。**不能更高**：弹窗高度 = min(360dp, 屏高×0.65)，
+  下方结果区实际可用约 220dp，海报 180dp 时卡片总高约 214dp，焦点放大 1.08 倍后
+  230dp+ 会超出结果区，白色焦点框就会把底部剧名切掉 —— 这正是上一版的实际问题。
+  160dp 时卡片总高约 193dp，×1.08 ≈ 208dp，留出余量，剧名永远完整。
 -->
 <RelativeLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
@@ -33,14 +38,14 @@
     android:outlineProvider="none"
     android:defaultFocusHighlightEnabled="false">
 
-    <!-- 海报区：与剧名底板拼成一张圆角卡片（上圆下圆） -->
+    <!-- 上半部分：海报容器（固定 120×160） -->
     <FrameLayout
         android:id="@+id/imageWrapper"
         android:duplicateParentState="true"
         android:clipChildren="true"
         android:clipToPadding="false"
         android:layout_width="120dp"
-        android:layout_height="180dp">
+        android:layout_height="160dp">
 
         <com.google.android.material.imageview.ShapeableImageView
             android:id="@+id/image"
@@ -51,7 +56,7 @@
             android:layout_height="match_parent"
             app:shapeAppearanceOverlay="@style/Vod.Grid" />
 
-        <!-- 无海报时的首字占位：正中央，剧名首字 -->
+        <!-- 无海报时的首字占位：海报正中央 -->
         <TextView
             android:id="@+id/placeholder"
             android:textSize="36sp"
@@ -63,7 +68,7 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content" />
 
-        <!-- 来源 + 日期（原版 @id/site：13sp / shape_vod_site / maxWidth 96dp / 单行；这里放开两行） -->
+        <!-- 左上角：「日期 | 来源」，13sp（逆向 @id/site 的原字号） -->
         <TextView
             android:id="@+id/site"
             android:textSize="13sp"
@@ -71,13 +76,14 @@
             android:ellipsize="end"
             android:background="@drawable/shape_vod_site"
             android:gravity="center"
-            android:maxWidth="96dp"
-            android:maxLines="2"
+            android:maxWidth="120dp"
+            android:singleLine="true"
             android:layout_gravity="start|top"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content" />
 
-        <!-- 备注（原版 @id/remark：14sp / shape_vod_remark / 单行省略，压在剧名底板之上） -->
+        <!-- 海报内偏下：「更新至XX集」，14sp（逆向 @id/remark 的原字号），
+             位置等价于原版 layout_above="@+id/name" + 与海报底边对齐 -->
         <TextView
             android:id="@+id/remark"
             android:textSize="14sp"
@@ -91,7 +97,7 @@
             android:layout_height="wrap_content" />
     </FrameLayout>
 
-    <!-- 剧名（原版 @id/name：16sp / padding 6dp / gravity center / 单行省略） -->
+    <!-- 下半部分：剧名，16sp + shape_source_vod_name + padding 6dp + 单行省略 -->
     <com.google.android.material.textview.MaterialTextView
         android:id="@+id/name"
         android:textSize="16sp"

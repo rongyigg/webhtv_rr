@@ -161,6 +161,14 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:text="@string/play_change_empty"/>
+        <!--
+          结果卡横向列表。原版（ref_docs/dialog_source.xml）左右内边距是 8dp / 2dp：
+          它用 HorizontalGridView，焦点放大由控件自己处理、不会画出边界。这里换成普通
+          RecyclerView + itemView 1.08 放大，卡片会向两侧各多出约 2.4dp，2dp 的右内边距
+          会把最后一张卡的白框切掉，所以左右统一放到 24dp（等价于 Compose LazyRow 的
+          contentPadding = 24.dp），配合 clipToPadding / clipChildren = false，
+          滚动到首尾时卡片与白框都完整可见。
+        -->
         <androidx.recyclerview.widget.RecyclerView
             android:id="@+id/recycler"
             android:paddingTop="4dp"
@@ -168,9 +176,10 @@
             android:visibility="gone"
             android:nextFocusUp="@+id/siteRecycler"
             android:clipToPadding="false"
+            android:clipChildren="false"
             android:layout_width="match_parent"
             android:layout_height="match_parent"
-            android:paddingStart="8dp"
-            android:paddingEnd="2dp"/>
+            android:paddingStart="24dp"
+            android:paddingEnd="24dp"/>
     </FrameLayout>
 </LinearLayout>

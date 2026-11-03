@@ -20,7 +20,7 @@
 | --- | --- | --- |
 | `layout/dialog_source.xml` | `ref_docs/dialog_source.xml` | 根 padding 18dp / paddingBottom 0、`shape_dialog_source`、头 32dp、siteLayout 32dp、homeBtn 26dp + 16dp 图标、结果区 3dp 红条 + 13sp 标题 + 16dp 内边距，全部逐字保留 |
 | `layout/adapter_source_site.xml` | `ref_docs/adapter_v2_site.xml` | 14sp + 白字；**根节点即标签本体**（合并原版内外两层，否则 adapter 的 isSelected 落在不画背景的外层）；背景用 `selector_source_site_chip_background`（focused → 红底胶囊） |
-| `layout/adapter_source_result.xml` | `ref_docs/adapter_search.xml` | 120dp 宽卡片：海报 120×180 + `@style/Vod.Grid`、`@id/name` 16sp + `shape_source_vod_name` + `padding 6dp`、`@id/remark` 14sp + `shape_vod_remark`、`@id/site` 13sp + `shape_vod_site`、`@id/placeholder` 渐变占位首字、焦点 `selector_source_card_foreground`（1.5dp 白描边）+ 1.08 放大 |
+| `layout/adapter_source_result.xml` | `ref_docs/adapter_search.xml` | 120dp 宽卡片：海报 120×160 + `@style/Vod.Grid`、`@id/name` 16sp + `shape_source_vod_name` + `padding 6dp`、`@id/remark` 14sp + `shape_vod_remark`（贴海报底边）、`@id/site` 13sp + `shape_vod_site`（「日期 \| 来源」）、`@id/placeholder` 渐变占位首字、焦点 `selector_source_card_foreground`（1.5dp 白描边）+ 1.08 放大 |
 | `layout/dialog_source_sidebar.xml` | `ref_docs/dialog_search_site.xml` | 全选/全不选 39dp（`@id/bulkBar`，单选模式代码隐藏）、12sp 文字 + 16dp 勾选圈、站点列表 |
 | `layout/adapter_source_sidebar_item.xml` | `ref_docs/adapter_site.xml` | 40dp 行高、18sp 文字、24dp 勾选圈；**根节点即行本体**（同上，否则行选中态不生效） |
 | `drawable/shape_source_site_item_focused.xml` | `ref_docs/shape_site_item_focused.xml` | inset 8/4dp + 白底 + 28dp 圆角（焦点胶囊） |
