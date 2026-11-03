@@ -74,7 +74,7 @@
 | `b0(history)`（元数据） | `o11` L93-146 | `HistoryMetaText.build()` |
 | `q0(i)`（背景/预热） | `o11` L513-555 | `HeroBackdrop`（Coil）+ `HeroImagePrefetch` |
 | `k0(i)`（±2 窗口） | `o11` L356-368 | `prefetch(index)`（±2） |
-| `pp` case 14（点击） | `pp` L355-390 | `openResume()` / `openDetail()` 三步分支 |
+| `pp` case 14（点击） | `pp` L355-390 | `openResume()` → `VideoActivity.startFromHistory`（**无**前置校验，见 §11） |
 | `pp` case 14（编辑态删除） | `pp` L361-372 | `confirmDelete(index)`：编辑态下按确定键 → `deleteAt(index)`（假数据模式直接内存移除） |
 | `g20` case 2（btnResume） | `g20` L104-119 | `openDetail(activity, renderState.selectedItem)` |
 | `m11` case 1（删除后选中回退） | `m11` L39 | `index.coerceAtMost(remaining.size - 1)` |
@@ -91,10 +91,10 @@
 
 | 原版调用 | 本工程入口 | 依据 |
 | --- | --- | --- |
-| `ds3.o()`（当前配置 id） | `VodConfig.getCid()` | `VodConfig.java` L73 |
-| `ds3.v(config, callback)` | `VodConfig.selectConfig(Config, Callback)` | `VodConfig.java` L97-100；`Callback` = `com.fongmi.android.tv.impl.Callback` |
-| `Config.find(cid)` | `Config.find(int)` | `Config.java` L105 |
-| `CollectActivity.c2(context, vodName)` | `SearchActivity.directFromHistory(activity, history)` | `CollectActivity` 只在 leanback 源集；`SearchActivity.directFromHistory` 两 flavor 都有（mobile L59 / leanback L102），且与 `HistoryResumeCoordinator.open` L48-50 兜底分支同一入口 |
+| ~~`ds3.o()`（当前配置 id）~~ | **已移除**（原 `VodConfig.getCid()` 前置比较） | 见 §11：历史记录已入库，跳转不需要再比对当前配置 |
+| ~~`ds3.v(config, callback)`~~ | **已移除**（原 `VodConfig.selectConfig(Config, Callback)` 切源） | 见 §11：切源由目标页内部按站点策略处理 |
+| ~~`Config.find(cid)`~~ | **已移除** | 见 §11：这正是「点击被降级到搜索页」的根因 |
+| ~~`CollectActivity.c2(context, vodName)`~~ | **已移除**（原 `SearchActivity.directFromHistory` 兜底） | 见 §11：不再有降级分支 |
 | `VideoActivity.q3(...)`（续播） | `VideoActivity.startFromHistory(activity, history)` | mobile L703-710 / leanback L730-737，两 flavor 同签名 |
 | `DetailActivity.q2(...)`（详情） | `TmdbDetailActivity.startFromHistory(activity, history)` | `TmdbDetailActivity.java` L544-547，main 源集，两 flavor 通用 |
 | `history.delete()` | `History.delete()` | `History.java` L1177-1179（bean 自身方法，不碰 catvod） |
@@ -246,8 +246,78 @@
 | 所有 dp / sp / 颜色 / 时长均有 `ref_docs` 出处或标注待确认 | ✅ |
 | 卡片未内联重写、只 `import` 全局 `HeroPosterCard` | ✅ |
 | 未调用/修改被禁文件（PlayerManager、PlaybackActivity、catvod、`ds3`、`Config`、`History`） | ✅ |
-| 点击分支未跳过「Config 判空 → 切源」前两步 | ✅（`HistoryViewModel.open`） |
+| 点击分支**不再**做 `Config.find` 判空 / `VodConfig` 切源（本轮修复，见 §11） | ✅（`grep` `Config.find(` / `selectConfig` / `SearchActivity` = 0 命中） |
 | 无 `AlertDialog` / `TextButton` / 任何弹窗删除确认 | ✅（`grep` 结果 0） |
 | 无 `combinedClickable` / `setOnLongClickListener` 处理遥控器长按 | ✅（长按在 `setOnKeyListener` 里手写 DOWN/UP + 500ms `Job`） |
 | 「查看详情」显式传 `renderState.selectedItem` 并打 `Log.e("HistoryDebug", …)` | ✅（`openDetail(activity)` 的默认参数取 ViewModel 选中项，假数据模式下为空 → 会静默 return） |
 | **编译** | ❌ 按任务要求未执行，存在未验证点：Compose 焦点在 `AndroidView` 子 View 上的接管、`LazyRow` 对 1.08 缩放的裁剪行为、Coil `SingletonImageLoader` 预热调用、`KEYCODE_BACK` 是否先到 `OnKeyListener` |
+
+---
+
+## 11. 点击跳转修复：卡片=全屏续播，按钮=详情页
+
+### 11.1 故障与根因
+
+历史页单击卡片、「查看详情」都跳到**搜索页**。
+
+根因：`HistoryViewModel.open()` 照抄了原版 `pp` case 14 / `g20` case 2 的**前置配置校验**——
+
+```kotlin
+val config = Config.find(history.cid)
+if (config == null) { SearchActivity.directFromHistory(activity, history); return }   // ← 降级到搜索页
+if (history.cid != VodConfig.getCid()) { VodConfig.selectConfig(config, …); return }  // ← 无谓切源
+endpoint(activity, history, resume)
+```
+
+历史记录里的 `cid` 是**写入时的配置 id**，当前配置与之不匹配（或该配置已不在列表里）时，
+`Config.find` 返回 null 就直接进搜索页。历史页的语义是「续播/看详情」，不需要这层拦截。
+
+### 11.2 首页真实入口（改动依据）
+
+| 行为 | 首页实际入口 | 位置 |
+| --- | --- | --- |
+| 卡片 → 详情页 | `TmdbDetailActivity.start(activity, siteKey, vodId, title, pic, remarks)`；themed 站点走 `WebThemeDetailActivity.start(...)` | `web/WebHomeThemeBridge.java` L282-284（另一条路由 L297） |
+| 详情页 → 播放 | `VideoActivity.start(...)` / `VideoActivity.startDirect(..., resume)` | `web/WebHomeThemeBridge.java` L175-177 |
+
+历史页对应的「既有入口」与首页同源，且已经内置站点策略分流：
+
+| 行为 | 历史页入口 | 内部行为 |
+| --- | --- | --- |
+| 续播 | `VideoActivity.startFromHistory(activity, item)` | mobile L703-710 / leanback L730-737：`shouldOpenLegacyTmdbDetail(siteKey, vodId)` 为真 → 转 `TmdbDetailActivity.startFromHistory`，否则 `startDirect(..., item)` 携带整条历史 |
+| 详情 | `TmdbDetailActivity.startFromHistory(activity, item)` | L544-547：按 `Setting.getDetailOpenMode()` 进对应详情形态，并带 `EXTRA_RESUME_FROM_HISTORY` |
+
+### 11.3 改动（`HistoryViewModel.kt`）
+
+删除 `private fun open()` 与 `private fun endpoint()`，两个公开方法直连既有入口：
+
+```kotlin
+fun openResume(activity: Activity, history: History? = state.selectedItem) {
+    val item = history ?: return
+    VideoActivity.startFromHistory(activity, item)
+}
+
+fun openDetail(activity: Activity, history: History? = state.selectedItem) {
+    val item = history ?: return
+    TmdbDetailActivity.startFromHistory(activity, item)
+}
+```
+
+同步删除因此不再使用的 import：`bean.Config`、`impl.Callback`、`ui.activity.SearchActivity`
+（`VodConfig` 仍被 `MockHistory` 使用，保留）。
+
+### 11.4 调用侧（`HistoryScreen.kt`，未改动）
+
+| 触发 | 绑定 |
+| --- | --- |
+| 卡片单击 / 确定键 | `onCardClick = { item -> context.findActivity()?.let { viewModel.openResume(it, item) } }` |
+| 「查看详情」按钮 | `viewModel.openDetail(activity, currentItem)`（显式传 `renderState.selectedItem`） |
+
+### 11.5 静态验证
+
+| 检查 | 结果 |
+| --- | --- |
+| `Config.find(` / `selectConfig` / `SearchActivity` / `impl.Callback` 在 `HistoryViewModel.kt` 中命中数 | 0（`Config.find` 仅剩注释里的一句话说明） |
+| `private fun open(` / `endpoint(` 残留 | 0 |
+| `HistoryScreen.kt` 绑定 | 未改动，卡片→`openResume`、按钮→`openDetail` |
+| 改动文件 | 仅 `HistoryViewModel.kt` + 本文档 |
+| 编译 / 运行验证 | ❌ 按任务要求未执行（无设备、禁止编译） |

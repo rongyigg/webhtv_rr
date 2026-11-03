@@ -7,11 +7,8 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModel
 import com.fongmi.android.tv.App
 import com.fongmi.android.tv.api.config.VodConfig
-import com.fongmi.android.tv.bean.Config
 import com.fongmi.android.tv.bean.History
 import com.fongmi.android.tv.db.AppDatabase
-import com.fongmi.android.tv.impl.Callback
-import com.fongmi.android.tv.ui.activity.SearchActivity
 import com.fongmi.android.tv.ui.activity.TmdbDetailActivity
 import com.fongmi.android.tv.ui.activity.VideoActivity
 import coil3.SingletonImageLoader
@@ -31,8 +28,9 @@ import java.util.regex.Pattern
  * - [deleteAt]  ← `pp` case 14 L361-372（`history.delete()` + 本地移除 + 重排选中）
  * - [openResume] / [openDetail] ← `pp` case 14 L374-385 + `g20` case 2 L104-119
  *
- * **不碰数据层**：只调用 `History.getForDisplay()` / `history.delete()` /
- * `HistoryResumeCoordinator` 之外的既有公开入口（见 [open] 的三步分支）。
+ * **不碰数据层**：只调用 `History.getForDisplay()` / `history.delete()` 这类既有公开入口，
+ * 跳转同样直接走工程既有入口（[VideoActivity.startFromHistory] / [TmdbDetailActivity.startFromHistory]），
+ * 不做任何配置/cid 前置校验。
  * 所有线程切换走 `Task.execute`（读库）+ `App.post`（回主线程），与工程既有写法一致。
  */
 class HistoryViewModel : ViewModel() {
@@ -140,57 +138,29 @@ class HistoryViewModel : ViewModel() {
     }
 
     /**
-     * 卡片确定键（原版 `pp` case 14 终点 = `o11.h0` → `DetailActivity.q2` 之外的「续播」分支）。
+     * 卡片单击 / 确定键 → **全屏续播**（原版 `pp` case 14 终点 = `o11.h0` 的「续播」分支）。
+     *
+     * 直接走工程既有的历史续播入口 [VideoActivity.startFromHistory]：它内部已经按站点策略分流到
+     * `TmdbDetailActivity.startFromHistory` 或 `startDirect(..., history)`，并把整条 `History`
+     * 带进播放页续播。历史页**不做** `Config.find` / `cid` 前置校验（那是原版首页/收藏页的切源逻辑，
+     * 在这里只会把已入库的历史降级到搜索页）。
      *
      * [history] 默认取当前选中项；触摸点击时由调用方传入被点的那一条，避免「点了但没先聚焦」的错位。
      */
-    fun openResume(activity: Activity, history: History? = state.selectedItem) =
-        open(activity, history, resume = true)
-
-    /** 「查看详情」按钮（原版 `g20` case 2 终点 = `o11.h0` → `DetailActivity.q2`）。 */
-    fun openDetail(activity: Activity, history: History? = state.selectedItem) =
-        open(activity, history, resume = false)
-
-    /**
-     * 点击三步分支（严格按 `pp` case 14 L374-385 / `g20` case 2 L104-119 的顺序，不允许跳过前两步）：
-     *
-     * 1. `Config.find(cid) == null` → 去搜索页（本工程无 `CollectActivity`，见文档「入口映射表」）；
-     * 2. `cid != VodConfig.getCid()` → `VodConfig.selectConfig(config, cb)`，加载完成后再进终点；
-     * 3. 终点：卡片 = 续播，按钮 = 详情。
-     */
-    private fun open(activity: Activity, history: History?, resume: Boolean) {
-        if (history == null) return
-        val config = Config.find(history.cid)
-        if (config == null) {
-            // 原版 `CollectActivity.c2(context, vodName)`：本工程 main 源集没有 CollectActivity
-            // （仅 leanback 有），等价入口是 `SearchActivity.directFromHistory`，
-            // 与 `HistoryResumeCoordinator.open` L48-50 的兜底分支同一入口。
-            SearchActivity.directFromHistory(activity, history)
-            return
-        }
-        if (history.cid != VodConfig.getCid()) {
-            // 原版 `ds3.v(config, new a3(o11Var, resume, history))`：切源成功后再进终点。
-            VodConfig.selectConfig(
-                config,
-                object : Callback() {
-                    override fun success() {
-                        endpoint(activity, history, resume)
-                    }
-                },
-            )
-            return
-        }
-        endpoint(activity, history, resume)
+    fun openResume(activity: Activity, history: History? = state.selectedItem) {
+        val item = history ?: return
+        VideoActivity.startFromHistory(activity, item)
     }
 
-    private fun endpoint(activity: Activity, history: History, resume: Boolean) {
-        if (resume) {
-            // 原版 `VideoActivity.q3(...)` 续播；本工程既有公开入口。
-            VideoActivity.startFromHistory(activity, history)
-        } else {
-            // 原版 `DetailActivity.q2(context, siteKey, vodId, vodName, vodPic, vodRemarks, "")`。
-            TmdbDetailActivity.startFromHistory(activity, history)
-        }
+    /**
+     * 「查看详情」按钮 → **详情页**（原版 `g20` case 2 终点 = `o11.h0` → `DetailActivity.q2`）。
+     *
+     * 与首页卡片同一入口 [TmdbDetailActivity.startFromHistory]：内部按 `Setting.getDetailOpenMode()`
+     * 选择详情页形态，并携带 `EXTRA_RESUME_FROM_HISTORY` 保留续播语义。
+     */
+    fun openDetail(activity: Activity, history: History? = state.selectedItem) {
+        val item = history ?: return
+        TmdbDetailActivity.startFromHistory(activity, item)
     }
 
     /**
