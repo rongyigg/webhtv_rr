@@ -32,7 +32,7 @@ import kotlin.math.roundToInt
  * （侧边栏的行用的是另一套：白底黑字，见 [SourceSidebar]。）
  *
  * 结果卡**只允许**用全局唯一组件 [HeroPosterCard]（120dp × 214dp、四角 8dp 全圆、
- * 1.5dp 红色焦点框只包 120×180 海报、34dp 剧名栏），弹窗内部不再手写任何卡片尺寸。
+ * 2dp 纯红 #FF0000 焦点框只包 120×180 海报、34dp 剧名栏），弹窗内部不再手写任何卡片尺寸。
  * 卡片内容映射照抄 `ref_docs/adapter_search.xml` / `ks2.java`：
  * `topStartTag` = `MM-dd | 来源`（13sp）、`bottomStartTag` = 备注（14sp）、`title` = 剧名（16sp）。
  *
@@ -243,7 +243,7 @@ internal class ChangeSourceDialog private constructor(
      * 结果卡适配器。
      *
      * 卡片本体是全局唯一组件 [HeroPosterCard]：尺寸 120×214、四角 8dp 全圆、
-     * 红色 1.5dp 焦点框只包 120×180 海报——**全部写死在组件内部**，
+     * 2dp 纯红 #FF0000 焦点框只包 120×180 海报——**全部写死在组件内部**，
      * 这里只塞四个内容字段，不允许再 inflate 布局或改宽高。
      */
     private inner class ResultAdapter : RecyclerView.Adapter<ResultAdapter.Holder>() {

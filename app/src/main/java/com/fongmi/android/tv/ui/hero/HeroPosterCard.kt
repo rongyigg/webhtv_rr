@@ -27,13 +27,15 @@ import kotlin.math.roundToInt
  *
  * 尺寸与本文件内的常量**全部写死**，外部既不能改宽度、也不能改高度、更不能改圆角：
  *  - 整卡 [CARD_WIDTH_DP] × [CARD_HEIGHT_DP] = 120dp × 214dp（[POSTER_HEIGHT_DP] 180 + [TITLE_HEIGHT_DP] 34）；
- *  - 四角 [CORNER_DP] = 8dp 全部圆角。实现顺序与 Compose 完全对齐：
- *    `Modifier.size(...).graphicsLayer { shape = RoundedCornerShape(8.dp); clip = true }.background(...)`
- *    —— **clip 必须在最外层**，View 侧就是 [draw] 里先 `clipPath(8dp 圆角矩形)` 再 `super.draw()`，
- *    背景、海报、标签、剧名全部落在裁剪内（见 [draw] / [rebuildClipPath]）；
- *    `clipToOutline` 只作为 GPU 路径的冗余保险，不作为唯一手段；
- *  - 焦点描边 [FOCUS_STROKE_DP] = 1.5dp 红色（`@color/red` = #E50914），圆角同为 8dp，
- *    **只画在 120×180 的海报区**，绝不包住下方剧名，见 [drawFocusRing]。
+ *  - 四角 [CORNER_DP] = 8dp 全部圆角，**只在最外层根容器裁剪一次**：
+ *    首页 `HeroHomeActivity.kt` L1129 `POSTER_SHAPE = RoundedCornerShape(8.dp)`，
+ *    L925-945 的顺序是 `… .clip(POSTER_SHAPE).background(...)`（clip 在 background 之前）。
+ *    View 没有 `Modifier.clip`，等价实现是整卡 [draw] 里先 `clipPath(8dp 圆角矩形)` 再 `super.draw()`，
+ *    海报与剧名底板共用同一层裁剪、无缝衔接；内部**不再**套第二层裁剪（否则会露出底色缺口）。
+ *    `clipToOutline` 只作为 GPU 路径的冗余保险，不作为唯一手段（其 outline 可能被缓存成空）；
+ *  - 焦点描边 [FOCUS_STROKE_DP] = 2dp、颜色 [FOCUS_COLOR] = #FFFF0000
+ *    （**与首页 `POSTER_FOCUS_BORDER = 2.dp` + `HeroAccentColor = Color(0xFFFF0000)` 完全一致**），
+ *    圆角同为 8dp，**只画在 120×180 的海报区**，绝不包住下方剧名，见 [drawFocusRing]。
  *
  * 对外接口只有四个内容字段：[title]、[imageUrl]、[topStartTag]、[bottomStartTag]。
  * 尺寸 / 圆角 / 描边没有任何 setter，构造后不可改。
@@ -103,7 +105,7 @@ class HeroPosterCard @JvmOverloads constructor(
     private val focusPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
         strokeWidth = focusStrokePx
-        color = ContextCompat.getColor(context, R.color.red)
+        color = FOCUS_COLOR
     }
     private val focusRect = RectF()
 
@@ -144,6 +146,12 @@ class HeroPosterCard @JvmOverloads constructor(
         visibility = View.GONE
     }
 
+    /**
+     * 海报容器：只负责承载海报与两个标签，**不做任何裁剪**。
+     *
+     * 裁剪统一放在最外层 [draw]（整卡 120×214 的 8dp 圆角），海报与剧名底板共享同一层裁剪、
+     * 无缝衔接；这里再套一层圆角会在图片下缘露出容器底色的缺口（已按决策去掉）。
+     */
     private val posterFrame: FrameLayout = FrameLayout(context)
 
     private val titleView: TextView = TextView(context).apply {
@@ -264,7 +272,7 @@ class HeroPosterCard @JvmOverloads constructor(
         clipPath.addRoundRect(0f, 0f, w.toFloat(), h.toFloat(), cornerPx, cornerPx, Path.Direction.CW)
     }
 
-    /** 焦点红框：8dp 圆角、1.5dp 红描边，只包 120×180 海报区，绝不包剧名。 */
+    /** 焦点红框：8dp 圆角、2dp 纯红（#FFFF0000，同首页），只包 120×180 海报区，绝不包剧名。 */
     private fun drawFocusRing(canvas: Canvas) {
         if (!isFocused) return
         val inset = focusStrokePx / 2f
@@ -309,8 +317,14 @@ class HeroPosterCard @JvmOverloads constructor(
         /** 四角圆角，写死：8dp（图片与底板一起被裁，四角全圆）。 */
         const val CORNER_DP = 8
 
-        /** 焦点描边宽度：1.5dp 红色，圆角同为 [CORNER_DP]。 */
-        const val FOCUS_STROKE_DP = 1.5f
+        /** 焦点描边宽度：**2dp**，与首页 `POSTER_FOCUS_BORDER = 2.dp` 一致；圆角同为 [CORNER_DP]。 */
+        const val FOCUS_STROKE_DP = 2f
+
+        /**
+         * 焦点描边颜色：**#FFFF0000**，抄首页 `HeroAccentColor = Color(0xFFFF0000)`
+         * （`HeroHomeActivity.kt` L1135），不再使用 `@color/red`（#E50914）。
+         */
+        private val FOCUS_COLOR = 0xFFFF0000.toInt()
 
         /** 左上角标签最大宽度：110dp（< 海报 120dp，保证不越界）。 */
         const val TOP_TAG_MAX_WIDTH_DP = 110

@@ -20,7 +20,7 @@
 | --- | --- | --- |
 | `layout/dialog_source.xml` | `ref_docs/dialog_source.xml` | 根 padding 18dp / paddingBottom 0、`shape_dialog_source`、头 32dp、siteLayout 32dp、homeBtn 26dp + 16dp 图标、结果区 3dp 红条 + 13sp 标题 + 16dp 内边距，全部逐字保留 |
 | `layout/adapter_source_site.xml` | `ref_docs/adapter_v2_site.xml` | 14sp + 白字；**根节点即标签本体**（合并原版内外两层，否则 adapter 的 isSelected 落在不画背景的外层）；背景用 `selector_source_site_chip_background`（focused → 红底胶囊） |
-| `ui/hero/HeroPosterCard.kt`（**全局唯一卡片组件**） | `ref_docs/adapter_search.xml` + `ks2.java` + `adapter_vod_rect.xml` + 用户截图 | 尺寸在组件内部**写死**，外部无 setter：整卡 `120dp × 214dp`、海报 `120×180`（= 宽 × 1.5，`VodRectPresenter` L75）、剧名栏 `34dp`（`ks2` L108 `dp(34)`）。**四角全部 8dp 圆角**（`clipToOutline` + `ViewOutlineProvider.setRoundRect(8dp)`，等价 Compose 的 `Modifier.clip(RoundedCornerShape(8.dp))`；以用户截图为准，视觉规范高于局部 Style 代码）。焦点 = **红色 1.5dp 描边 + 8dp 圆角，只包 120×180 海报区，绝不包剧名**（`dispatchDraw` 画在 `0..width / 0..180dp`）。对外只有四个内容字段：`title`（16sp + `padding 6dp` + 单行省略）、`imageUrl`、`topStartTag`（13sp + `shape_vod_site` = `bg_site` #F44336 α0.7 / mobile `colorErrorContainer` α0.8，左上+右上+右下 8dp，内边距 4dp；`maxWidth` 96dp → **110dp** 以容纳「日期 \| 来源」，仍 < 海报 120dp；日期显示为 `MM-dd`，超长走 `ellipsize=end`）、`bottomStartTag`（14sp + `shape_vod_remark` = `bg_remark` #177535 α0.7 / mobile `colorSecondaryContainer` α0.8，右 4dp，内边距 4dp）；剧名底板复用 `@color/black_20`（#33000000） |
+| `ui/hero/HeroPosterCard.kt`（**全局唯一卡片组件**） | `ref_docs/adapter_search.xml` + `ks2.java` + `adapter_vod_rect.xml` + 首页 `PosterCard` + 用户截图 | 尺寸在组件内部**写死**，外部无 setter：整卡 `120dp × 214dp`、海报 `120×180`（= 宽 × 1.5，`VodRectPresenter` L75）、剧名栏 `34dp`（`ks2` L108 `dp(34)`）。**四角全部 8dp 圆角，只在最外层根容器裁剪一次**：整卡 `draw()` 里先 `canvas.clipPath(8dp 圆角矩形)` 再 `super.draw()`（等价首页 `POSTER_SHAPE = RoundedCornerShape(8.dp)` 的 `Modifier.clip`，clip 在 background 之前），海报与剧名底板共用同一层裁剪、无缝衔接；内部不再套第二层裁剪。焦点 = **2dp 纯红 #FFFF0000 + 8dp 圆角，只包 120×180 海报区，绝不包剧名**（同首页 `POSTER_FOCUS_BORDER = 2.dp` + `HeroAccentColor`，`drawFocusRing` 画在 `0..width / 0..180dp`）。对外只有四个内容字段：`title`（16sp + `padding 6dp` + 单行省略）、`imageUrl`、`topStartTag`（13sp + `shape_vod_site` = `bg_site` #F44336 α0.7 / mobile `colorErrorContainer` α0.8，左上+右上+右下 8dp，内边距 4dp；`maxWidth` 96dp → **110dp** 以容纳「日期 \| 来源」，仍 < 海报 120dp；日期显示为 `MM-dd`，超长走 `ellipsize=end`）、`bottomStartTag`（14sp + `shape_vod_remark` = `bg_remark` #177535 α0.7 / mobile `colorSecondaryContainer` α0.8，右 4dp，内边距 4dp）；剧名底板复用 `@color/black_20`（#33000000） |
 | `layout/dialog_source_sidebar.xml` | `ref_docs/dialog_search_site.xml` | 全选/全不选 39dp（`@id/bulkBar`，单选模式代码隐藏）、12sp 文字 + 16dp 勾选圈、站点列表 |
 | `layout/adapter_source_sidebar_item.xml` | `ref_docs/adapter_site.xml` | 40dp 行高、18sp 文字、24dp 勾选圈；**根节点即行本体**（同上，否则行选中态不生效） |
 | `drawable/shape_source_site_item_focused.xml` | `ref_docs/shape_site_item_focused.xml` | inset 8/4dp + 白底 + 28dp 圆角（焦点胶囊） |
@@ -30,7 +30,7 @@
 | `drawable/selector_check_circle.xml` + `shape_check_circle_*` | `ref_docs/selector_check_circle.xml`（四态顺序原样） | 四态改为**正圆**（`android:shape="oval"`）：勾选 = 红底实心、未勾选 = 空心描边；焦点态单独加深/加白描边，保证在白底行上也可见 |
 | `drawable/shape_home_logo_normal_white.xml` | `ref_docs/shape_home_logo_normal_white.xml` | **oval + `@color/white_10`**（上一版误做成 13dp 圆角矩形 + 纯白/半透明白） |
 | `drawable/shape_home_logo_source_focused.xml` | `ref_docs/selector_home_logo_source.xml` 的 focused 分支（其 shape 未随包提供） | 红色椭圆 `#e50914`，与 `shape_home_logo_normal_white` 同为 oval |
-| 窗口尺寸 / 间距 / 缩放 | `ref_docs/f23.java` | 宽 `0.82×`屏宽；高 = `max(min(360dp, 0.65×屏高), 126 + 218)`（126 = 弹窗固定内容，218 = 卡片 214 + recycler 顶部 4dp），并至少给屏幕留 16dp —— f23 原公式在 480dp 高的屏上只有 312dp，会裁掉卡片底部剧名；站点间距 12dp、结果间距 16dp；f23 里的结果卡焦点缩放 `1.08` **未采用**：整卡 214dp × 1.08 = 231dp 会超出结果区，反而把剧名切掉，焦点改用海报上的 1.5dp 白框 |
+| 窗口尺寸 / 间距 / 缩放 | `ref_docs/f23.java` | 宽 `0.82×`屏宽；高 = `max(min(360dp, 0.65×屏高), 126 + 218)`（126 = 弹窗固定内容，218 = 卡片 214 + recycler 顶部 4dp），并至少给屏幕留 16dp —— f23 原公式在 480dp 高的屏上只有 312dp，会裁掉卡片底部剧名；站点间距 12dp、结果间距 16dp；f23 里的结果卡焦点缩放 `1.08` **未采用**：整卡 214dp × 1.08 = 231dp 会超出结果区，反而把剧名切掉，焦点改用海报上的 2dp 纯红框（#FFFF0000，同首页 `POSTER_FOCUS_BORDER` + `HeroAccentColor`） |
 
 ## 3. 必需的替换（每处都在对应文件头部注释里写明）
 
@@ -105,17 +105,21 @@
   `CARD_HEIGHT_DP = 214`；`onMeasure` 用 `EXACTLY` 强制 120×214 覆盖任何外部 `MeasureSpec`，
   因此不会被 `RecyclerView` / `weight` / `wrap_content` 拉伸或压扁。
   `ChangeSourceDialog` 的窗口高度常量直接引用 `HeroPosterCard.CARD_HEIGHT_DP`，不在弹窗里重复 214。
-- **圆角唯一**：`CORNER_DP = 8`。实现顺序与 Compose 严格一致 ——
-  `Modifier.size(...).graphicsLayer { shape = RoundedCornerShape(8.dp); clip = true }.background(...)`，
-  即 **clip 必须在最外层，背景在 clip 之内**。View 侧等价写法是重写 `draw(Canvas)`：
-  先 `canvas.clipPath(8dp 圆角矩形)`，再 `super.draw(canvas)`（画背景 → 海报 → 标签 → 剧名），
-  最后 `restore` 并在裁剪外画焦点红框。
-  上一版只靠 `clipToOutline + ViewOutlineProvider`，outline 在首帧被以 0×0 查询时会被缓存成空 outline，
-  表现为「完全没有圆角」；现在该路径只作 GPU 冗余保险，并在 `onSizeChanged` 里 `invalidateOutline()`
-  强制重算，背景与所有子 View 由 `clipPath` 强制裁到 8dp 圆角内，四角必圆。
+- **圆角唯一（只在最外层裁一次）**：`CORNER_DP = 8`，与首页 `HeroHomeActivity.kt`
+  `POSTER_SHAPE = RoundedCornerShape(8.dp)`（L1129，四角同一半径）一致。
+  首页顺序是 `Modifier.width(120.dp).height(180.dp).graphicsLayer{...}.shadow(...)
+  .clip(POSTER_SHAPE).background(...)`（L925-945）——**clip 在 background 之前**。
+  View 没有 `Modifier.clip`，等价实现是整卡 `HeroPosterCard.draw()`：先 `clipPath(8dp 圆角矩形)`
+  再 `super.draw()`（画背景 → 海报 → 两个标签 → 剧名），**整个 120×214 卡片只裁这一层**，
+  海报与剧名底板无缝衔接；内部不再套第二层裁剪（上一轮在海报容器上加的 `PosterClipLayout` 已按决策删除，
+  否则海报下缘会露出 `#161616` 缺口）。
+  用 `Path` 而不是 `clipToOutline`：后者依赖 RenderNode 缓存的 outline，首帧若以 0×0 查询会缓存成
+  空 outline，表现就是「完全没有圆角」——上一版直角正是这个原因；`clipToOutline` 现在只作 GPU 冗余保险，
+  并在 `onSizeChanged` 里 `invalidateOutline()` 强制重算。
   底层 `@style/Vod.Grid`（只圆上方两角）**不再参与**。
-- **焦点唯一**：`dispatchDraw` 画 1.5dp 红色（`@color/red` #E50914）8dp 圆角描边，
-  矩形上下界是 `0..120dp / 0..180dp`，只包海报、绝不包剧名；不做整体缩放。
+- **焦点唯一（参数与首页完全一致）**：`FOCUS_STROKE_DP = 2f`、`FOCUS_COLOR = 0xFFFF0000`，
+  对应首页 `POSTER_FOCUS_BORDER = 2.dp`（L1126）+ `HeroAccentColor = Color(0xFFFF0000)`（L1135）；
+  不再使用 `@color/red`（#E50914）。8dp 圆角描边，矩形上下界 `0..120dp / 0..180dp`，只包海报、绝不包剧名。
 - **内容唯一**：只有 `title` / `imageUrl` / `topStartTag` / `bottomStartTag` 四个字段，
   尺寸、圆角、描边没有任何 setter。
 - **minSdk 24 兼容**：`View.setDefaultFocusHighlightEnabled` 是 API 26 方法，组件里已按
