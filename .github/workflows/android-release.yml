@@ -196,8 +196,13 @@ jobs:
         run: |
           chmod +x ./gradlew
           rm -rf Release/apk
+          
+          # 第一步：单独执行 clean
+          ./gradlew clean --no-daemon
+          
+          # 第二步：重新起一个 Gradle 生命周期执行 assemble
+          # 这样配置阶段会重新生成 chaquo 的 proguard 文件，随后的 assemble 才能读到
           ./gradlew \
-            clean \
             :app:assembleMobileArmeabi_v7aRelease \
             :app:assembleLeanbackArmeabi_v7aRelease \
             --no-daemon \
