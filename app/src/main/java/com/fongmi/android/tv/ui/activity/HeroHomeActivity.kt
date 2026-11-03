@@ -477,8 +477,8 @@ private fun HeroTopBarItem(
     )
     val interaction = remember { MutableInteractionSource() }
 
-    // 尺寸按 16sp 文字重新配比，逐层居中：
-    // 可点击容器 32dp → 圆底/白圈 28dp → 房子图标 20dp。
+    // 小房子严格照抄 ref_docs/activity_home_v2.xml 的 homeBtn：
+    // homeBtn 28dp → homeBtnClip 24dp → 图标 16dp（marginBottom 1dp），全部在 [HeroHomeLogoButton] 内固定。
     val itemModifier = Modifier
         .focusRequester(requester)
         .onFocusChanged { focused = it.isFocused }
@@ -494,13 +494,11 @@ private fun HeroTopBarItem(
         .clickable(interactionSource = interaction, indication = null, onClick = onConfirm)
 
     if (isHome) {
-        // 复用全局「小房子」组件：首页 32dp 容器 / 28dp 圆 / 20dp 图标。
+        // 复用全局「小房子」组件：尺寸固定为 ref_docs/activity_home_v2.xml 的
+        // homeBtn 28dp / homeBtnClip 24dp / 图标 16dp（marginBottom 1dp），不再由调用方传参。
         // ↓ 显式交给分类 Tab，保证边界处不会丢焦点。
         HeroHomeLogoButton(
             requester = requester,
-            containerSize = NAV_HOME_CLICK_SIZE,
-            circleSize = NAV_HOME_CIRCLE_SIZE,
-            iconSize = NAV_HOME_ICON_SIZE,
             onConfirm = onConfirm,
             onDirection = { key ->
                 if (key == Key.DirectionDown) {
@@ -639,9 +637,9 @@ private fun HeroInfoArea(poster: HeroPoster) {
  * 分类 Tab 栏（XML `typeRecycler`，L128-141）：
  * - 左右 padding 24dp（L138-139）、`paddingBottom=2dp`（L130）、`layout_marginBottom=12dp`（L137）。
  *
- * 胶囊样式严格对照 `ref_docs/tab_ui.png`（无描边，纯色填充）：
- * - 选中：HeroAccentColor 纯红底 + 纯白字。
- * - 未选中：Color(0x33FFFFFF) 深灰半透明底 + 纯白字。
+ * 胶囊样式严格对照 `ref_docs/adapter_type.xml` 的 `selector_item_round`：
+ * - 选中 / 焦点：HeroAccentColor 纯红底 + 纯白字。
+ * - 未选中且未聚焦：**全透明**（Color.Transparent），不能出现任何灰块。
  * - 形状为胶囊（[HERO_TAB_SHAPE]，24dp 圆角，高度不足时自动收成半圆）。
  * 左右键不交给系统焦点搜索，而是显式 [focusTab]，这样横向滚动与选中态永远同步。
  */
@@ -705,7 +703,7 @@ private fun HeroTabChip(
 ) {
     var focused by remember { mutableStateOf(false) }
     val active = selected || focused
-    // 选中纯红、未选中深灰半透明；两者都是无描边的实心底，文字一律纯白。
+    // 选中 / 焦点纯红；未选中且未聚焦全透明（不能有灰块），文字一律纯白。
     val chipBackground by animateColorAsState(
         targetValue = if (active) HeroAccentColor else HERO_TAB_IDLE_BACKGROUND,
         animationSpec = tween(durationMillis = 150),
@@ -1010,10 +1008,7 @@ private val HERO_PADDING = 24.dp
 // ---------------------------------------------------------------------------
 // 顶部导航 navBar（L199-262）
 // ---------------------------------------------------------------------------
-private val NAV_BAR_HEIGHT = 64.dp          // L207 layout_height
-private val NAV_HOME_CLICK_SIZE = 32.dp        // 可点击容器（高 32dp，与 16sp 文字视觉对齐）
-private val NAV_HOME_CIRCLE_SIZE = 28.dp       // 红底/白圈直径
-private val NAV_HOME_ICON_SIZE = 20.dp         // ic_home_logo 渲染尺寸（圆内居中）
+private val NAV_BAR_HEIGHT = 64.dp          // L207 layout_height（homeBtn 在此高度内 center_vertical）
 private val NAV_ITEMS_START_GAP = 20.dp     // L259 navRecycler layout_marginStart
 private val TOP_BAR_TEXT_BOX = 24.dp        // 文字项固定内容区（16sp 的贴合高度）
 private const val TOP_BAR_SP = 16f          // 第一排字号（比第二排 Tab 的 13sp 大一档，形成层级）
@@ -1071,7 +1066,7 @@ private val HERO_TAB_HEIGHT = 26.dp         // 胶囊高度，严格 26dp
 private val HERO_TAB_H_PADDING = 12.dp      // 左右 12dp
 private val HERO_TAB_V_PADDING = 0.dp       // 上下 0dp（高度由 HERO_TAB_HEIGHT 锁死）
 private val HERO_TAB_SHAPE = RoundedCornerShape(13.dp) // 13dp = 高度的一半，完美半圆胶囊
-private val HERO_TAB_IDLE_BACKGROUND = Color(0x33FFFFFF) // 未选中：深灰半透明，无描边
+private val HERO_TAB_IDLE_BACKGROUND = Color.Transparent // 未选中 / 未聚焦：全透明，不能出现灰块
 
 // ---------------------------------------------------------------------------
 // 海报区 posterArea（L142-191）+ 卡片 adapter_vod_rect（L24-27、L45-57）

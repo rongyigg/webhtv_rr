@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  homeBtnClip 的背景，取自 ref_docs/activity_home_v2.xml：
+      android:id="@+id/homeBtnClip"
+      android:background="@drawable/shape_oval_clip"
+      android:layout_width="24dp"
+      android:layout_height="24dp"
+      android:clipToOutline="true"
+
+  原版就是一个正圆 + 全透明填充，只用来给 clipToOutline 提供圆形轮廓，
+  把 16dp 的 ic_home_logo 裁进 24dp 的圆里。不要加 solid 颜色。
+-->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="oval">
+    <solid android:color="@android:color/transparent" />
+</shape>

@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  分类 Tab 专用（leanback 源集 adapter_type.xml）。
+
+  与共享的 selector_item_round 唯一区别：未选中 / 未聚焦用**全透明**，
+  不再出现 @color/black_20 的深灰块。
+
+  为什么不直接改 selector_item_round：它同时被 adapter_filter / adapter_search_record /
+  adapter_search_word 使用，把默认态改成透明会把搜索页的灰底胶囊一起改掉（超出首页范围）。
+  这里用独立文件，只影响分类 Tab。
+-->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:drawable="@drawable/shape_item_round_focused" android:state_focused="true" />
+    <item android:drawable="@drawable/shape_item_round_activated" android:state_selected="true" />
+    <item android:drawable="@android:color/transparent" />
+</selector>

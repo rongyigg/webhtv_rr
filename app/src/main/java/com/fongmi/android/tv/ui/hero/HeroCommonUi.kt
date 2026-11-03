@@ -1,10 +1,7 @@
 package com.fongmi.android.tv.ui.hero
 
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
@@ -31,7 +28,6 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
@@ -39,7 +35,6 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -103,45 +98,38 @@ internal fun HeroSectionTitle(text: String, fontSize: TextUnit = SECTION_TITLE_S
 }
 
 // ---------------------------------------------------------------------------
-// 全局公共「小房子」按钮：首页顶栏与换源弹窗「站点栏」直接共用同一份实现。
+// 全局公共「小房子」按钮：严格照抄 ref_docs/activity_home_v2.xml 的 homeBtn 层级。
 //
-// 状态（与首页定稿完全一致）：
-// - 常态：透明底、无描边、纯白 ic_home_logo；
-// - 焦点：HeroAccentColor 红底 + 2dp 纯白外圈 + 1.1 倍放大；
-// - 放大只走 graphicsLayer，不参与布局，不会顶动整排。
+// <FrameLayout homeBtn        28dp  background=@drawable/selector_home_logo
+//   <FrameLayout homeBtnClip  24dp  background=@drawable/shape_oval_clip clipToOutline
+//     <ImageView homeBtnHome  16dp  src=@drawable/ic_home_logo layout_marginBottom=1dp
 //
-// 尺寸：首页 32dp 容器 / 28dp 圆 / 20dp 图标；换源弹窗 26dp 容器 / 26dp 圆 / 16dp 图标。
+// 状态与 ref_docs/selector_home_logo 一致：常态 @color/white_10 椭圆，焦点 #E50914 椭圆；
+// 原版没有放大、没有白描边，这里也不加。
 // 方向键交给调用方按上下文处理（首页 ↓ 进 Tab，弹窗 ↓ 进结果卡片）。
 // ---------------------------------------------------------------------------
-private val HOME_LOGO_DEFAULT_CONTAINER = 32.dp
-private val HOME_LOGO_DEFAULT_CIRCLE = 28.dp
-private val HOME_LOGO_DEFAULT_ICON = 20.dp
-private val HOME_LOGO_BORDER = 2.dp
-private const val HOME_LOGO_FOCUS_SCALE = 1.1f
-private const val HOME_LOGO_ANIM_MS = 150
+private val HOME_LOGO_FRAME = 28.dp                 // homeBtn layout_width / layout_height
+private val HOME_LOGO_CLIP = 24.dp                  // homeBtnClip layout_width / layout_height
+private val HOME_LOGO_ICON = 16.dp                  // homeBtnHome layout_width / layout_height
+private val HOME_LOGO_ICON_BOTTOM_MARGIN = 1.dp     // homeBtnHome layout_marginBottom
+private val HOME_LOGO_NORMAL = Color(0x1AFFFFFF)    // selector_home_logo 常态 = @color/white_10
+private val HOME_LOGO_FOCUSED = Color(0xFFE50914)   // selector_home_logo 焦点 = #E50914
 
 @Composable
 internal fun HeroHomeLogoButton(
     requester: FocusRequester,
     onConfirm: () -> Unit,
     modifier: Modifier = Modifier,
-    containerSize: Dp = HOME_LOGO_DEFAULT_CONTAINER,
-    circleSize: Dp = HOME_LOGO_DEFAULT_CIRCLE,
-    iconSize: Dp = HOME_LOGO_DEFAULT_ICON,
     onFocused: () -> Unit = {},
     onDirection: (Key) -> Boolean = { false },
 ) {
     val interaction = remember { MutableInteractionSource() }
     val isFocused by interaction.collectIsFocusedAsState()
-    val focusScale by animateFloatAsState(
-        targetValue = if (isFocused) HOME_LOGO_FOCUS_SCALE else 1f,
-        animationSpec = tween(durationMillis = HOME_LOGO_ANIM_MS),
-        label = "homeLogoScale",
-    )
 
     Box(
         modifier = modifier
-            .size(containerSize)
+            .size(HOME_LOGO_FRAME)
+            .background(if (isFocused) HOME_LOGO_FOCUSED else HOME_LOGO_NORMAL, CircleShape)
             .focusRequester(requester)
             .onFocusChanged { if (it.isFocused) onFocused() }
             .onPreviewKeyEvent { event ->
@@ -150,20 +138,13 @@ internal fun HeroHomeLogoButton(
             .clickable(interactionSource = interaction, indication = null, onClick = onConfirm),
         contentAlignment = Alignment.Center,
     ) {
+        // homeBtnClip：24dp 圆 + clipToOutline，把 16dp 图标裁进这个圆；
+        // marginBottom=1dp 在 Compose 里等价于给这块内容加 1dp 下内边距，图标因此上移 0.5dp。
         Box(
             modifier = Modifier
-                .size(circleSize)
-                .graphicsLayer {
-                    scaleX = focusScale
-                    scaleY = focusScale
-                }
-                .background(
-                    color = if (isFocused) HeroAccentColor else Color.Transparent,
-                    shape = CircleShape,
-                )
-                .then(
-                    if (isFocused) Modifier.border(HOME_LOGO_BORDER, Color.White, CircleShape) else Modifier,
-                ),
+                .size(HOME_LOGO_CLIP)
+                .clip(CircleShape)
+                .padding(bottom = HOME_LOGO_ICON_BOTTOM_MARGIN),
             contentAlignment = Alignment.Center,
         ) {
             Image(
@@ -171,7 +152,7 @@ internal fun HeroHomeLogoButton(
                 contentDescription = "Home",
                 // vector 自带 fillColor=@color/white，这里再统一 tint 一次，保证任何主题下都是纯白。
                 colorFilter = ColorFilter.tint(Color.White),
-                modifier = Modifier.size(iconSize),
+                modifier = Modifier.size(HOME_LOGO_ICON),
             )
         }
     }

@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  首页 homeBtn 的状态背景，取自 ref_docs/activity_home_v2.xml：
+      android:id="@+id/homeBtn"
+      android:background="@drawable/selector_home_logo"
+
+  与已有的 selector_home_logo_source 指向同两个 shape（换源弹窗的站点小房子继续用后者），
+  这样两个入口的小房子配色永远一致：
+    - focused → shape_home_logo_source_focused（@color/red #E50914 椭圆）
+    - 默认    → shape_home_logo_normal_white（@color/white_10 #1AFFFFFF 椭圆）
+  原版没有放大、没有白描边，这里也不加。
+-->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <item
+        android:state_focused="true"
+        android:drawable="@drawable/shape_home_logo_source_focused" />
+    <item android:drawable="@drawable/shape_home_logo_normal_white" />
+</selector>
