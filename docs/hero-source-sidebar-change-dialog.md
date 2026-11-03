@@ -20,7 +20,7 @@
 | --- | --- | --- |
 | `layout/dialog_source.xml` | `ref_docs/dialog_source.xml` | 根 padding 18dp / paddingBottom 0、`shape_dialog_source`、头 32dp、siteLayout 32dp、homeBtn 26dp + 16dp 图标、结果区 3dp 红条 + 13sp 标题 + 16dp 内边距，全部逐字保留 |
 | `layout/adapter_source_site.xml` | `ref_docs/adapter_v2_site.xml` | 14sp + 白字；**根节点即标签本体**（合并原版内外两层，否则 adapter 的 isSelected 落在不画背景的外层）；背景用 `selector_source_site_chip_background`（focused → 红底胶囊） |
-| `ui/hero/HeroPosterCard.kt`（**全局唯一卡片组件**） | `ref_docs/adapter_search.xml` + `ks2.java` + `adapter_vod_rect.xml` + 首页 `PosterCard` + 用户截图 | 尺寸在组件内部**写死**，外部无 setter：整卡 `120dp × 214dp`、海报 `120×180`（= 宽 × 1.5，`VodRectPresenter` L75）、剧名栏 `34dp`（`ks2` L108 `dp(34)`）。**四角全部 8dp 圆角，用原生 Drawable / Material 实现、不用画布裁剪**：整卡背景是 `GradientDrawable`（`cornerRadius = 8dp` + `black_20`），海报是 `ShapeableImageView`（左上/右上 8dp、左下/右下 0f，与剧名底板平接），旧的 `PosterClipLayout` / `clipPath` / `clipToOutline` / `outlineProvider` 全部删除。焦点 = **2dp 纯红 #FFFF0000 + 8dp 圆角，只包 120×180 海报区，绝不包剧名**（同首页 `POSTER_FOCUS_BORDER = 2.dp` + `HeroAccentColor`，`drawFocusRing` 画在 `0..width / 0..180dp`）。对外只有四个内容字段：`title`（16sp + `padding 6dp` + 单行省略）、`imageUrl`、`topStartTag`（13sp + `shape_vod_site` = `bg_site` #F44336 α0.7 / mobile `colorErrorContainer` α0.8，左上+右上+右下 8dp，内边距 4dp；`maxWidth` 96dp → **110dp** 以容纳「日期 \| 来源」，仍 < 海报 120dp；日期显示为 `MM-dd`，超长走 `ellipsize=end`）、`bottomStartTag`（14sp + `shape_vod_remark` = `bg_remark` #177535 α0.7 / mobile `colorSecondaryContainer` α0.8，右 4dp，内边距 4dp）；剧名底板复用 `@color/black_20`（#33000000） |
+| `ui/hero/HeroPosterCard.kt`（**全局唯一卡片组件**） | `ref_docs/adapter_search.xml` + `ks2.java` + `adapter_vod_rect.xml` + 首页 `PosterCard` + 用户截图 | 尺寸在组件内部**写死**，外部无 setter：整卡 `120dp × 214dp`、海报 `120×180`（= 宽 × 1.5，`VodRectPresenter` L75）、剧名栏 `34dp`（`ks2` L108 `dp(34)`）。**四角全部 8dp 圆角，用原生 Drawable / Material 实现、不用画布裁剪**：整卡背景是 `GradientDrawable`（`cornerRadius = 8dp` + `black_20`），海报是 `ShapeableImageView` 直接套原版 style `@style/Vod.Grid.Large`（`cornerSize = 8dp` → **四角全 8dp**，图片显式 120×180），旧的 `PosterClipLayout` / `clipPath` / `clipToOutline` / `outlineProvider` 全部删除。焦点 = **2dp 纯红 #FFFF0000 + 8dp 圆角，只包 120×180 海报区，绝不包剧名**（同首页 `POSTER_FOCUS_BORDER = 2.dp` + `HeroAccentColor`，`drawFocusRing` 画在 `0..width / 0..180dp`）。对外只有四个内容字段：`title`（16sp + `padding 6dp` + 单行省略）、`imageUrl`、`topStartTag`（13sp + `shape_vod_site` = `bg_site` #F44336 α0.7 / mobile `colorErrorContainer` α0.8，左上+右上+右下 8dp，内边距 4dp；`maxWidth` 96dp → **110dp** 以容纳「日期 \| 来源」，仍 < 海报 120dp；日期显示为 `MM-dd`，超长走 `ellipsize=end`）、`bottomStartTag`（14sp + `shape_vod_remark` = `bg_remark` #177535 α0.7 / mobile `colorSecondaryContainer` α0.8，右 4dp，内边距 4dp）；剧名底板复用 `@color/black_20`（#33000000） |
 | `layout/dialog_source_sidebar.xml` | `ref_docs/dialog_search_site.xml` | 全选/全不选 39dp（`@id/bulkBar`，单选模式代码隐藏）、12sp 文字 + 16dp 勾选圈、站点列表 |
 | `layout/adapter_source_sidebar_item.xml` | `ref_docs/adapter_site.xml` | 40dp 行高、18sp 文字、24dp 勾选圈；**根节点即行本体**（同上，否则行选中态不生效） |
 | `drawable/shape_source_site_item_focused.xml` | `ref_docs/shape_site_item_focused.xml` | inset 8/4dp + 白底 + 28dp 圆角（焦点胶囊） |
@@ -111,12 +111,19 @@
   因此**彻底废弃画布裁剪**，改由 View 自身绘制圆角：
   1. 整卡背景 = `GradientDrawable` + `cornerRadius = dp(8)` + `black_20`，`init` 里 `background = cardBackground`，
      四个角一次圆完，纯原生 Drawable，任何盒子都生效；
-  2. 海报 = Material `ShapeableImageView` + `ShapeAppearanceModel`：左上 / 右上 `dp(8)`，左下 / 右下 `0f`
-     （海报底边与 34dp 剧名底板平接，不露 `#161616` 缺口），图片**自身不再套任何背景 / 裁剪**；
+  2. 海报 = Material `ShapeableImageView`，**直接套原版 style `@style/Vod.Grid.Large`**
+     （`res/values/styles.xml` L12-14：`cornerSize = 8dp`，父样式 `Vod.Grid` / `Vod` 提供
+     `cornerFamily = rounded` → **四角全 8dp**），等价于 `adapter_history_poster.xml` L27 的
+     `app:shapeAppearanceOverlay="@style/Vod.Grid.Large"`；代码用
+     `ShapeAppearanceModel.builder(context, R.style.Vod_Grid_Large, 0)`，不手写 8dp，避免与样式表漂移；
+     图片 LayoutParams 显式 `120dp × 180dp`（照抄原版 `adapter_history_poster.xml` L21-24），
+     图片**自身不套任何背景 / 裁剪**；
   3. 海报区容器 `posterFrame` 退回普通 `FrameLayout`（只承载图片、占位首字与两个标签），
      `PosterClipLayout` 私有类已删除，`draw()` 里只剩 `super.draw(canvas)` + `drawFocusRing(canvas)`，
-     全文件**不再出现** `clipPath` / `Path` / `Outline` / `ViewOutlineProvider` / `clipToOutline`。
-  底层 `@style/Vod.Grid`（只圆上方两角）**不再参与**。
+     全文件**不再出现** `clipPath` / `Path` / `Outline` / `ViewOutlineProvider` / `clipToOutline`；
+  4. 覆盖在图片上的标签不得遮挡圆角：左上 `topTag` 贴边（`shape_vod_site` 自身左上 8dp 圆角与海报重合），
+     左下 `bottomTag` 的直角背景 `shape_vod_remark` 加 `bottomMargin = 8dp`，不压住海报左下圆角。
+  底层 `@style/Vod.Grid`（只圆上方两角，用于原版搜索卡）**不再参与**本组件。
 - **焦点唯一（参数与首页完全一致）**：`FOCUS_STROKE_DP = 2f`、`FOCUS_COLOR = 0xFFFF0000`，
   对应首页 `POSTER_FOCUS_BORDER = 2.dp`（L1126）+ `HeroAccentColor = Color(0xFFFF0000)`（L1135）；
   不再使用 `@color/red`（#E50914）。8dp 圆角描边，矩形上下界 `0..120dp / 0..180dp`，只包海报、绝不包剧名。

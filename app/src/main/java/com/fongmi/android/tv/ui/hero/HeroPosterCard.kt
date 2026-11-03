@@ -29,8 +29,10 @@ import kotlin.math.roundToInt
  *  - 整卡 [CARD_WIDTH_DP] × [CARD_HEIGHT_DP] = 120dp × 214dp（[POSTER_HEIGHT_DP] 180 + [TITLE_HEIGHT_DP] 34）；
  *  - 四角 [CORNER_DP] = 8dp 全部圆角，**全部用原生 Drawable / Material 组件实现，不用 canvas.clipPath**：
  *    1. 整卡背景 = `GradientDrawable` + `cornerRadius = 8dp`（四角一次性圆，见 [init]）；
- *    2. 海报 = Material `ShapeableImageView`，`ShapeAppearanceModel` 左上 / 右上 8dp，
- *       左下 / 右下 0f（海报底边与剧名底板平接，不留缺口，见 [image]）。
+ *    2. 海报 = Material `ShapeableImageView`，**直接套原版 style `@style/Vod.Grid.Large`**
+ *       （`res/values/styles.xml` L12-14：`cornerSize = 8dp`，父样式 `Vod.Grid` / `Vod` 提供
+ *       `cornerFamily = rounded` → 四角 8dp），等价于 `adapter_history_poster.xml` L27 的
+ *       `app:shapeAppearanceOverlay="@style/Vod.Grid.Large"`，见 [image]。
  *    电视端硬件加速会忽略部分画布裁剪（`canvas.clipPath` / `clipToOutline`），
  *    所以这里改走 Drawable 与 Material 的渲染路径，任何 TV 盒子都生效；
  *  - 焦点描边 [FOCUS_STROKE_DP] = 2dp、颜色 [FOCUS_COLOR] = #FFFF0000
@@ -83,6 +85,7 @@ class HeroPosterCard @JvmOverloads constructor(
 
     private val cardWidthPx: Int = dp(CARD_WIDTH_DP)
     private val cardHeightPx: Int = dp(CARD_HEIGHT_DP)
+    private val posterWidthPx: Int = dp(CARD_WIDTH_DP)
     private val posterHeightPx: Int = dp(POSTER_HEIGHT_DP)
     private val cornerPx: Float = dp(CORNER_DP).toFloat()
     // dp() 返回 Int（画布坐标取整），而描边宽度需要 Float，必须显式转换，
@@ -109,19 +112,30 @@ class HeroPosterCard @JvmOverloads constructor(
 
     /**
      * 海报：Material `ShapeableImageView`，**圆角由图片自己绘制**（不靠父容器裁剪）。
-     * - 左上 / 右上 = 8dp：与卡片顶部两个圆角重合；
-     * - 左下 / 右下 = 0f：海报底边与 34dp 剧名底板平接，不露底色缺口。
-     * 自身不设 background，透明区域露出卡片 `black_20`。
+     *
+     * 1:1 照抄原版 `ref_docs/adapter_history_poster.xml` L21-27：
+     * ```
+     * <com.google.android.material.imageview.ShapeableImageView
+     *     android:layout_width="120dp" android:layout_height="180dp"
+     *     android:scaleType="centerCrop"
+     *     app:shapeAppearanceOverlay="@style/Vod.Grid.Large" />   <!-- 四角 8dp -->
+     * ```
+     * 代码里没有 `app:` 命名空间，等价写法是把**同一个 style 资源**交给
+     * [ShapeAppearanceModel.builder]（不手写 8dp，避免和样式表漂移）：
+     * `R.style.Vod_Grid_Large` → `cornerSize = 8dp` + `cornerFamily = rounded` → 四角全圆。
+     *
+     * 尺寸由父容器 [posterFrame]（120×180）与 [init] 里显式的 LayoutParams 固定；
+     * 自身不设 background，圆角外的像素露出卡片 `black_20`（与剧名底板同色）。
      */
     private val image: ShapeableImageView = ShapeableImageView(context).apply {
         scaleType = ImageView.ScaleType.CENTER_CROP
         setImageResource(R.drawable.shape_source_poster_placeholder)
-        shapeAppearanceModel = ShapeAppearanceModel.builder()
-            .setTopLeftCornerSize(cornerPx)
-            .setTopRightCornerSize(cornerPx)
-            .setBottomLeftCornerSize(0f)
-            .setBottomRightCornerSize(0f)
-            .build()
+        // = 原版 app:shapeAppearanceOverlay="@style/Vod.Grid.Large"（四角 8dp，不是只圆上两角）。
+        shapeAppearanceModel = ShapeAppearanceModel.builder(
+            context,
+            R.style.Vod_Grid_Large,
+            0,
+        ).build()
     }
 
     private val placeholder: TextView = TextView(context).apply {
@@ -196,19 +210,25 @@ class HeroPosterCard @JvmOverloads constructor(
             posterFrame,
             LayoutParams(LayoutParams.MATCH_PARENT, posterHeightPx).apply { gravity = Gravity.TOP },
         )
-        posterFrame.addView(image, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
+        // 图片宽高就是 120×180（照抄原版 adapter_history_poster.xml L21-24 的显式宽高），
+        // 不写 MATCH_PARENT：ShapeableImageView 的圆角按自身尺寸裁剪，尺寸必须和原版一致。
+        posterFrame.addView(image, LayoutParams(posterWidthPx, posterHeightPx))
         posterFrame.addView(placeholder, LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT).apply { gravity = Gravity.CENTER })
         // 左上角标签：13sp，maxWidth 110dp < 海报 120dp（在属性初始化里设置），永远不越过海报右边界。
+        // 贴左上不偏移：`shape_vod_site` 自身左上 8dp 圆角与海报左上圆角重合，不会出现直角挡圆角。
         posterFrame.addView(
             topTag,
             LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT).apply {
                 gravity = Gravity.START or Gravity.TOP
             },
         )
+        // 左下角标签：`shape_vod_remark` 是**直角**背景（原版就有），必须离底边 8dp，
+        // 否则会把海报左下的 8dp 圆角整个盖成直角，视觉上又变回「一直是直角」。
         posterFrame.addView(
             bottomTag,
             LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT).apply {
                 gravity = Gravity.START or Gravity.BOTTOM
+                bottomMargin = dp(CORNER_DP)
             },
         )
 
