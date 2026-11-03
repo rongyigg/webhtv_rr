@@ -5,6 +5,7 @@ import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Outline
 import android.graphics.Paint
+import android.graphics.Path
 import android.graphics.Rect
 import android.graphics.RectF
 import android.os.Build
@@ -26,10 +27,13 @@ import kotlin.math.roundToInt
  *
  * 尺寸与本文件内的常量**全部写死**，外部既不能改宽度、也不能改高度、更不能改圆角：
  *  - 整卡 [CARD_WIDTH_DP] × [CARD_HEIGHT_DP] = 120dp × 214dp（[POSTER_HEIGHT_DP] 180 + [TITLE_HEIGHT_DP] 34）；
- *  - 四角 [CORNER_DP] = 8dp 全部圆角（对应 Compose 的 `Modifier.clip(RoundedCornerShape(8.dp))`，
- *    View 等价实现是 `clipToOutline + ViewOutlineProvider` 的 roundRect，见 [init]）；
+ *  - 四角 [CORNER_DP] = 8dp 全部圆角。实现顺序与 Compose 完全对齐：
+ *    `Modifier.size(...).graphicsLayer { shape = RoundedCornerShape(8.dp); clip = true }.background(...)`
+ *    —— **clip 必须在最外层**，View 侧就是 [draw] 里先 `clipPath(8dp 圆角矩形)` 再 `super.draw()`，
+ *    背景、海报、标签、剧名全部落在裁剪内（见 [draw] / [rebuildClipPath]）；
+ *    `clipToOutline` 只作为 GPU 路径的冗余保险，不作为唯一手段；
  *  - 焦点描边 [FOCUS_STROKE_DP] = 1.5dp 红色（`@color/red` = #E50914），圆角同为 8dp，
- *    **只画在 120×180 的海报区**，绝不包住下方剧名，见 [dispatchDraw]。
+ *    **只画在 120×180 的海报区**，绝不包住下方剧名，见 [drawFocusRing]。
  *
  * 对外接口只有四个内容字段：[title]、[imageUrl]、[topStartTag]、[bottomStartTag]。
  * 尺寸 / 圆角 / 描边没有任何 setter，构造后不可改。
@@ -76,11 +80,25 @@ class HeroPosterCard @JvmOverloads constructor(
     private val density: Float = resources.displayMetrics.density
 
     private val cardWidthPx: Int = dp(CARD_WIDTH_DP)
+    private val cardHeightPx: Int = dp(CARD_HEIGHT_DP)
     private val posterHeightPx: Int = dp(POSTER_HEIGHT_DP)
     private val cornerPx: Float = dp(CORNER_DP).toFloat()
     // dp() 返回 Int（画布坐标取整），而描边宽度需要 Float，必须显式转换，
     // 否则 Kotlin 会推断成 Int 并在 `strokeWidth = focusStrokePx` 处报类型不匹配。
     private val focusStrokePx: Float = dp(FOCUS_STROKE_DP).toFloat()
+
+    /**
+     * 卡片级唯一裁剪路径：整卡 8dp 圆角矩形。
+     *
+     * 这就是 Compose 里
+     * ```
+     * Modifier.size(120.dp, 214.dp)
+     *     .graphicsLayer { shape = RoundedCornerShape(8.dp); clip = true }
+     * ```
+     * 的 View 等价物：**clip 在最外层**，先裁路径再画背景 / 海报 / 标签 / 剧名，
+     * 所以任何子 View 都逃不出 8dp 圆角，四角必圆（见 [draw]）。
+     */
+    private val clipPath = Path()
 
     private val focusPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
@@ -150,12 +168,16 @@ class HeroPosterCard @JvmOverloads constructor(
         clipChildren = true
         clipToPadding = true
 
-        // 四角 8dp 全圆：等价于 Compose 的 Modifier.clip(RoundedCornerShape(8.dp))。
-        // 圆角裁切 + 半透明黑底一起包住「图片 + 下方剧名底板」，所以卡片底部不再是直角。
+        // 四角 8dp 全圆。GPU 路径用 outline（顺带保证阴影/裁剪一致），
+        // 真正的裁剪由 [draw] 里的 clipPath 强制执行，不依赖 RenderNode 是否缓存了空 outline。
         clipToOutline = true
         outlineProvider = object : ViewOutlineProvider() {
             override fun getOutline(view: View, outline: Outline) {
-                outline.setRoundRect(0, 0, view.width, view.height, cornerPx)
+                // 首帧 outline 可能在 width/height 还是 0 时被查询，
+                // 这里用固定尺寸兜底，避免缓存下 0×0 的空 outline（表现为「完全没圆角」）。
+                val w = if (view.width > 0) view.width else cardWidthPx
+                val h = if (view.height > 0) view.height else cardHeightPx
+                outline.setRoundRect(0, 0, w, h, cornerPx)
             }
         }
         setBackgroundColor(ContextCompat.getColor(context, R.color.black_20))
@@ -195,13 +217,55 @@ class HeroPosterCard @JvmOverloads constructor(
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         super.onMeasure(
             MeasureSpec.makeMeasureSpec(cardWidthPx, MeasureSpec.EXACTLY),
-            MeasureSpec.makeMeasureSpec(dp(CARD_HEIGHT_DP), MeasureSpec.EXACTLY),
+            MeasureSpec.makeMeasureSpec(cardHeightPx, MeasureSpec.EXACTLY),
         )
     }
 
+    override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
+        super.onSizeChanged(w, h, oldw, oldh)
+        rebuildClipPath(w, h)
+        // 尺寸变化后强制重算 outline，别让上一次的空 / 旧尺寸 outline 留在 RenderNode 里。
+        invalidateOutline()
+    }
+
+    override fun onAttachedToWindow() {
+        super.onAttachedToWindow()
+        rebuildClipPath(width, height)
+    }
+
+    /**
+     * **卡片级最外层裁剪**（本次修复的核心）。
+     *
+     * 等价 Compose：
+     * ```
+     * Modifier
+     *     .size(120.dp, 214.dp)
+     *     .graphicsLayer { shape = RoundedCornerShape(8.dp); clip = true }
+     *     .background(...)   // 背景在 clip 之内
+     * ```
+     * 顺序要点：**先 clip，再 super.draw()**。
+     * `super.draw()` 会依次画背景 → 子 View（海报、左上 / 左下标签）→ 剧名文字，
+     * 全部落在 8dp 圆角路径内，所以四个角一定是圆的，不会被任何子 View 的直角顶破。
+     * 焦点红框在 restore 之后画，避免被自身裁剪削掉描边。
+     */
+    override fun draw(canvas: Canvas) {
+        if (clipPath.isEmpty) rebuildClipPath(width, height)
+        val save = canvas.save()
+        canvas.clipPath(clipPath)
+        super.draw(canvas)
+        canvas.restore()
+        drawFocusRing(canvas)
+    }
+
+    /** 重建 8dp 圆角矩形路径：四个角用同一个 radius，不是只圆上方两角。 */
+    private fun rebuildClipPath(w: Int, h: Int) {
+        clipPath.reset()
+        if (w <= 0 || h <= 0) return
+        clipPath.addRoundRect(0f, 0f, w.toFloat(), h.toFloat(), cornerPx, cornerPx, Path.Direction.CW)
+    }
+
     /** 焦点红框：8dp 圆角、1.5dp 红描边，只包 120×180 海报区，绝不包剧名。 */
-    override fun dispatchDraw(canvas: Canvas) {
-        super.dispatchDraw(canvas)
+    private fun drawFocusRing(canvas: Canvas) {
         if (!isFocused) return
         val inset = focusStrokePx / 2f
         focusRect.set(inset, inset, width - inset, posterHeightPx - inset)

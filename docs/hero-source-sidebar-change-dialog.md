@@ -105,9 +105,15 @@
   `CARD_HEIGHT_DP = 214`；`onMeasure` 用 `EXACTLY` 强制 120×214 覆盖任何外部 `MeasureSpec`，
   因此不会被 `RecyclerView` / `weight` / `wrap_content` 拉伸或压扁。
   `ChangeSourceDialog` 的窗口高度常量直接引用 `HeroPosterCard.CARD_HEIGHT_DP`，不在弹窗里重复 214。
-- **圆角唯一**：`CORNER_DP = 8`，`clipToOutline + outlineProvider.setRoundRect(0, 0, w, h, 8dp)`
-  把海报与剧名底板一起裁成**四角全圆**（等价 Compose `Modifier.clip(RoundedCornerShape(8.dp))`）。
-  以用户截图为准：图片四角、卡片底部都必须是圆角，底层 `@style/Vod.Grid`（只圆上方两角）**不再参与**。
+- **圆角唯一**：`CORNER_DP = 8`。实现顺序与 Compose 严格一致 ——
+  `Modifier.size(...).graphicsLayer { shape = RoundedCornerShape(8.dp); clip = true }.background(...)`，
+  即 **clip 必须在最外层，背景在 clip 之内**。View 侧等价写法是重写 `draw(Canvas)`：
+  先 `canvas.clipPath(8dp 圆角矩形)`，再 `super.draw(canvas)`（画背景 → 海报 → 标签 → 剧名），
+  最后 `restore` 并在裁剪外画焦点红框。
+  上一版只靠 `clipToOutline + ViewOutlineProvider`，outline 在首帧被以 0×0 查询时会被缓存成空 outline，
+  表现为「完全没有圆角」；现在该路径只作 GPU 冗余保险，并在 `onSizeChanged` 里 `invalidateOutline()`
+  强制重算，背景与所有子 View 由 `clipPath` 强制裁到 8dp 圆角内，四角必圆。
+  底层 `@style/Vod.Grid`（只圆上方两角）**不再参与**。
 - **焦点唯一**：`dispatchDraw` 画 1.5dp 红色（`@color/red` #E50914）8dp 圆角描边，
   矩形上下界是 `0..120dp / 0..180dp`，只包海报、绝不包剧名；不做整体缩放。
 - **内容唯一**：只有 `title` / `imageUrl` / `topStartTag` / `bottomStartTag` 四个字段，
