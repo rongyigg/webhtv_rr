@@ -107,7 +107,6 @@ import kotlin.math.min
 fun HistoryScreen(viewModel: HistoryViewModel, modifier: Modifier = Modifier) {
     val state = viewModel.state
     val context = LocalContext.current
-    val activity = remember(context) { context.findActivity() }
 
     // 删除确认框当前指向的下标；-1 = 不显示。
     var deleteIndex by remember { mutableIntStateOf(-1) }
@@ -202,12 +201,18 @@ fun HistoryScreen(viewModel: HistoryViewModel, modifier: Modifier = Modifier) {
                         // 焦点滚动对齐到起点（`o11.H()` L173 `setFocusScrollStrategy(0)`）。
                         scope.launch { listState.scrollToItem(index) }
                     },
-                    onCardClick = { item -> viewModel.openResume(activity, item) },
+                    // `findActivity()` 可能返回 null（TV 上 Context 不保证是 Activity），
+                    // 取不到就静默不响应，不用 `!!` 强解包。
+                    onCardClick = { item ->
+                        context.findActivity()?.let { viewModel.openResume(it, item) }
+                    },
                     onCardLongClick = { index -> deleteIndex = index },
                     onCardUp = {
                         runCatching { resumeFocus.requestFocus() }
                     },
-                    onResumeClick = { viewModel.openDetail(activity) },
+                    onResumeClick = {
+                        context.findActivity()?.let { viewModel.openDetail(it) }
+                    },
                     onResumeDown = { pendingFocus = state.selectedIndex.coerceAtLeast(0) },
                     modifier = Modifier.align(Alignment.BottomCenter),
                 )
