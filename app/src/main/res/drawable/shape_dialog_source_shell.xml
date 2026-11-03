@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  换源弹窗（ChangeSourceDialog）面板底色。
+
+  取值与选集弹窗（HeroDialogShell，Compose）完全一致：
+    HeroCommonUi.kt: DIALOG_SHELL_BACKGROUND = Color(0xE6000000)、DIALOG_SHELL_SHAPE = RoundedCornerShape(16.dp)
+  即 #E6000000 + 16dp 圆角，内边距同样 18dp（见 dialog_source.xml 根节点 padding）。
+  原来用的 shape_dialog_source 是 #f214171f + 12dp 圆角，会显出偏蓝的灰壳，与选集弹窗不统一。
+-->
+<shape xmlns:android="http://schemas.android.com/apk/res/android">
+    <corners android:radius="16dp" />
+    <solid android:color="#E6000000" />
+</shape>

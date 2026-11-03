@@ -187,8 +187,9 @@ internal class SourceSidebar private constructor(
 
         override fun onBindViewHolder(holder: Holder, position: Int) {
             holder.name.text = entries[position].label
-            // 单选模式隐藏勾选圈；多选模式按会话内的勾选状态显示实心 / 空心。
-            holder.check.visibility = if (isMulti) View.VISIBLE else View.GONE
+            // 单选模式隐藏勾选圈时必须保留占位（INVISIBLE 而不是 GONE），
+            // 否则行宽会因少了 24dp 圈 + 12dp 间距而塌缩，白底焦点块比多选模式短一截。
+            holder.check.visibility = if (isMulti) View.VISIBLE else View.INVISIBLE
             holder.check.isSelected = checked[position]
             // 单选：当前接口源保持选中；多选：选中态与勾选一致。
             holder.itemView.isSelected = if (isMulti) checked[position] else position == currentIndex

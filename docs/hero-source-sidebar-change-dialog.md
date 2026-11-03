@@ -84,6 +84,15 @@
 - 结果确定 → `onSourceSelected` 后关闭；返回键 → 关闭。
 - 小房子确定 → `SourceSidebar`（Multi，后创建的窗口在弹窗之上）；关闭 → `homeBtn.requestFocus()`。
 
+### 3.2 底色与宽度（2026-11-03 微调）
+
+- **弹窗底色统一**：换源弹窗改用 `drawable/shape_dialog_source_shell.xml`
+  （`#E6000000` + 16dp 圆角），与选集弹窗 `HeroDialogShell`
+  （`HeroCommonUi.kt`：`DIALOG_SHELL_BACKGROUND = Color(0xE6000000)`、`RoundedCornerShape(16.dp)`、18dp 内边距）完全一致；
+  原来的 `shape_dialog_source`（`#f214171f` + 12dp 圆角）偏蓝灰，已不再用于换源弹窗。
+- **侧边栏宽度不塌缩**：单选模式隐藏勾选圈改用 `View.INVISIBLE`（保留 24dp 圈 + 12dp 间距的占位），
+  不用 `GONE`，保证单选 / 多选两种模式下面板宽度与白底焦点块宽度完全一致。
+
 侧边栏：
 
 - 打开 → 单选落在当前接口源，多选落在第 1 条（白底黑字可见）。
