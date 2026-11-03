@@ -3,23 +3,23 @@ package com.fongmi.android.tv.ui.hero
 
 import android.content.Context
 import android.graphics.Canvas
-import android.graphics.Outline
 import android.graphics.Paint
-import android.graphics.Path
 import android.graphics.Rect
 import android.graphics.RectF
+import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.text.TextUtils
 import android.util.AttributeSet
 import android.view.Gravity
 import android.view.View
-import android.view.ViewOutlineProvider
 import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.TextView
 import androidx.core.content.ContextCompat
 import com.bumptech.glide.Glide
 import com.fongmi.android.tv.R
+import com.google.android.material.imageview.ShapeableImageView
+import com.google.android.material.shape.ShapeAppearanceModel
 import kotlin.math.roundToInt
 
 /**
@@ -27,14 +27,12 @@ import kotlin.math.roundToInt
  *
  * 尺寸与本文件内的常量**全部写死**，外部既不能改宽度、也不能改高度、更不能改圆角：
  *  - 整卡 [CARD_WIDTH_DP] × [CARD_HEIGHT_DP] = 120dp × 214dp（[POSTER_HEIGHT_DP] 180 + [TITLE_HEIGHT_DP] 34）；
- *  - 四角 [CORNER_DP] = 8dp 全部圆角，分两层，**都对应用户模板里的唯一一个 `.clip()`**：
- *    首页 `HeroHomeActivity.kt` L1129 `POSTER_SHAPE = RoundedCornerShape(8.dp)`，
- *    L925-945 的顺序 `… .clip(POSTER_SHAPE).background(...)`（clip 在 background 之前）。
- *    1. 海报容器 [PosterClipLayout]（模板里的 `Box(120×180)`）：先 `clipPath(8dp)` 再画图片与标签；
- *    2. 整卡 [draw]（120×214）：同样先 `clipPath(8dp)` 再 `super.draw()`，负责剧名底板两个下角。
- *    两层同半径、同路径，等效于「图片与卡片一起被裁成 8dp 圆角」，且任意一层失效另一层仍能兜住圆角；
- *    容器**不设底色**，所以圆角处不会露出 `#161616` 方块。
- *    `clipToOutline` 只作为 GPU 路径的冗余保险，不作为唯一手段（其 outline 可能被缓存成空）；
+ *  - 四角 [CORNER_DP] = 8dp 全部圆角，**全部用原生 Drawable / Material 组件实现，不用 canvas.clipPath**：
+ *    1. 整卡背景 = `GradientDrawable` + `cornerRadius = 8dp`（四角一次性圆，见 [init]）；
+ *    2. 海报 = Material `ShapeableImageView`，`ShapeAppearanceModel` 左上 / 右上 8dp，
+ *       左下 / 右下 0f（海报底边与剧名底板平接，不留缺口，见 [image]）。
+ *    电视端硬件加速会忽略部分画布裁剪（`canvas.clipPath` / `clipToOutline`），
+ *    所以这里改走 Drawable 与 Material 的渲染路径，任何 TV 盒子都生效；
  *  - 焦点描边 [FOCUS_STROKE_DP] = 2dp、颜色 [FOCUS_COLOR] = #FFFF0000
  *    （**与首页 `POSTER_FOCUS_BORDER = 2.dp` + `HeroAccentColor = Color(0xFFFF0000)` 完全一致**），
  *    圆角同为 8dp，**只画在 120×180 的海报区**，绝不包住下方剧名，见 [drawFocusRing]。
@@ -92,17 +90,15 @@ class HeroPosterCard @JvmOverloads constructor(
     private val focusStrokePx: Float = dp(FOCUS_STROKE_DP).toFloat()
 
     /**
-     * 卡片级唯一裁剪路径：整卡 8dp 圆角矩形。
-     *
-     * 这就是 Compose 里
-     * ```
-     * Modifier.size(120.dp, 214.dp)
-     *     .graphicsLayer { shape = RoundedCornerShape(8.dp); clip = true }
-     * ```
-     * 的 View 等价物：**clip 在最外层**，先裁路径再画背景 / 海报 / 标签 / 剧名，
-     * 所以任何子 View 都逃不出 8dp 圆角，四角必圆（见 [draw]）。
+     * 卡片背景：`GradientDrawable` + 8dp `cornerRadius`，**四角一次性圆**。
+     * 这是整卡圆角的唯一来源，不依赖 `canvas.clipPath` / `clipToOutline` / `outlineProvider`，
+     * 电视端硬件加速也照常绘制（纯原生 Drawable 渲染）。
      */
-    private val clipPath = Path()
+    private val cardBackground: GradientDrawable = GradientDrawable().apply {
+        shape = GradientDrawable.RECTANGLE
+        cornerRadius = dp(CORNER_DP).toFloat()
+        setColor(ContextCompat.getColor(context, R.color.black_20))
+    }
 
     private val focusPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
@@ -111,10 +107,21 @@ class HeroPosterCard @JvmOverloads constructor(
     }
     private val focusRect = RectF()
 
-    /** 海报。**自身不带任何 shape / 圆角 / background**（模板排查点 1：内部禁止再写 shape），圆角由容器裁。 */
-    private val image: ImageView = ImageView(context).apply {
+    /**
+     * 海报：Material `ShapeableImageView`，**圆角由图片自己绘制**（不靠父容器裁剪）。
+     * - 左上 / 右上 = 8dp：与卡片顶部两个圆角重合；
+     * - 左下 / 右下 = 0f：海报底边与 34dp 剧名底板平接，不露底色缺口。
+     * 自身不设 background，透明区域露出卡片 `black_20`。
+     */
+    private val image: ShapeableImageView = ShapeableImageView(context).apply {
         scaleType = ImageView.ScaleType.CENTER_CROP
         setImageResource(R.drawable.shape_source_poster_placeholder)
+        shapeAppearanceModel = ShapeAppearanceModel.builder()
+            .setTopLeftCornerSize(cornerPx)
+            .setTopRightCornerSize(cornerPx)
+            .setBottomLeftCornerSize(0f)
+            .setBottomRightCornerSize(0f)
+            .build()
     }
 
     private val placeholder: TextView = TextView(context).apply {
@@ -150,26 +157,13 @@ class HeroPosterCard @JvmOverloads constructor(
     }
 
     /**
-     * 海报区容器 —— **严格对应你给的模板结构**（View 版）：
+     * 海报区容器：120 × 180，**普通 FrameLayout，不做任何裁剪**。
      *
-     * ```
-     * Box(
-     *     Modifier.width(120.dp).height(180.dp)
-     *         .clip(RoundedCornerShape(8.dp))   // ① 最外层先裁四角
-     *         .background(...)                  // ② 再画背景（本组件用海报自己的渐变占位，故不设底色）
-     * ) { ImageView(fillMaxSize, CenterCrop); 左上 / 左下标签 }
-     * ```
-     *
-     * 顺序要点与模板逐条一致：
-     * 1. 尺寸先定（120×180，见 [posterHeightPx]）；
-     * 2. `clip` 在 `background` 之前 —— View 侧就是 [PosterClipLayout.draw] 里先 `clipPath` 再 `super.draw()`；
-     * 3. 图片与标签都是它的子 View，**没有一个能超出**这个裁剪区域；图片自己**不带任何 shape / 圆角**。
-     *
-     * 这里**不设容器底色**（模板里的 `.background(Color(0xFF161616))`）：本组件的海报是渐变占位，
-     * 一旦给容器上底色，圆角缝隙就会露出 `#161616` 方块（上一轮你看到的那道缺口）。
-     * 不设底色时，圆角处露出的就是卡片自己的 `black_20`，与剧名底板同色，视觉上无缝。
+     * 圆角由里面的 [image]（`ShapeableImageView`）自己绘制，标签也放在这一层；
+     * 卡片整体的四个圆角由 [cardBackground]（`GradientDrawable`）负责。
+     * 这里不设置背景、不设置 clip，避免再出现「露出一块底色」或「裁剪不生效」的问题。
      */
-    private val posterFrame: FrameLayout = PosterClipLayout(context, cornerPx)
+    private val posterFrame: FrameLayout = FrameLayout(context)
 
     private val titleView: TextView = TextView(context).apply {
         setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, TITLE_SP)
@@ -193,19 +187,9 @@ class HeroPosterCard @JvmOverloads constructor(
         clipChildren = true
         clipToPadding = true
 
-        // 四角 8dp 全圆。GPU 路径用 outline（顺带保证阴影/裁剪一致），
-        // 真正的裁剪由 [draw] 里的 clipPath 强制执行，不依赖 RenderNode 是否缓存了空 outline。
-        clipToOutline = true
-        outlineProvider = object : ViewOutlineProvider() {
-            override fun getOutline(view: View, outline: Outline) {
-                // 首帧 outline 可能在 width/height 还是 0 时被查询，
-                // 这里用固定尺寸兜底，避免缓存下 0×0 的空 outline（表现为「完全没圆角」）。
-                val w = if (view.width > 0) view.width else cardWidthPx
-                val h = if (view.height > 0) view.height else cardHeightPx
-                outline.setRoundRect(0, 0, w, h, cornerPx)
-            }
-        }
-        setBackgroundColor(ContextCompat.getColor(context, R.color.black_20))
+        // 整卡圆角：只用 GradientDrawable 的 cornerRadius，四条边一次圆完。
+        // 不写 clipToOutline / outlineProvider —— 电视端可能忽略，且 outline 会被缓存成空。
+        background = cardBackground
 
         // 海报区：120 × 180，铺满卡片宽度。
         addView(
@@ -246,47 +230,16 @@ class HeroPosterCard @JvmOverloads constructor(
         )
     }
 
-    override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
-        super.onSizeChanged(w, h, oldw, oldh)
-        rebuildClipPath(w, h)
-        // 尺寸变化后强制重算 outline，别让上一次的空 / 旧尺寸 outline 留在 RenderNode 里。
-        invalidateOutline()
-    }
-
-    override fun onAttachedToWindow() {
-        super.onAttachedToWindow()
-        rebuildClipPath(width, height)
-    }
-
     /**
-     * **卡片级最外层裁剪**（本次修复的核心）。
+     * **不再做任何画布裁剪**：电视端硬件加速会忽略 `canvas.clipPath` / `clipToOutline`，
+     * 那是前几版「一直是直角」的根因。圆角改由 [cardBackground]（`GradientDrawable.cornerRadius`）
+     * 与 [image]（`ShapeableImageView`）自行绘制，走原生 Drawable / Material 渲染路径，任何盒子都生效。
      *
-     * 等价 Compose：
-     * ```
-     * Modifier
-     *     .size(120.dp, 214.dp)
-     *     .graphicsLayer { shape = RoundedCornerShape(8.dp); clip = true }
-     *     .background(...)   // 背景在 clip 之内
-     * ```
-     * 顺序要点：**先 clip，再 super.draw()**。
-     * `super.draw()` 会依次画背景 → 子 View（海报、左上 / 左下标签）→ 剧名文字，
-     * 全部落在 8dp 圆角路径内，所以四个角一定是圆的，不会被任何子 View 的直角顶破。
-     * 焦点红框在 restore 之后画，避免被自身裁剪削掉描边。
+     * 这里只负责在内容画完之后补上焦点红框。
      */
     override fun draw(canvas: Canvas) {
-        if (clipPath.isEmpty) rebuildClipPath(width, height)
-        val save = canvas.save()
-        canvas.clipPath(clipPath)
         super.draw(canvas)
-        canvas.restore()
         drawFocusRing(canvas)
-    }
-
-    /** 重建 8dp 圆角矩形路径：四个角用同一个 radius，不是只圆上方两角。 */
-    private fun rebuildClipPath(w: Int, h: Int) {
-        clipPath.reset()
-        if (w <= 0 || h <= 0) return
-        clipPath.addRoundRect(0f, 0f, w.toFloat(), h.toFloat(), cornerPx, cornerPx, Path.Direction.CW)
     }
 
     /** 焦点红框：8dp 圆角、2dp 纯红（#FFFF0000，同首页），只包 120×180 海报区，绝不包剧名。 */
@@ -353,48 +306,5 @@ class HeroPosterCard @JvmOverloads constructor(
         private const val TOP_TAG_SP = 13f
         private const val BOTTOM_TAG_SP = 14f
         private const val PLACEHOLDER_SP = 36f
-    }
-}
-
-/**
- * 海报容器：**用户模板里那个 `Box` 的 View 等价物**。
- *
- * ```
- * Box(Modifier.width(120.dp).height(180.dp)
- *         .clip(RoundedCornerShape(8.dp))   // ① 先 clip
- *         .background(...))                 // ② 再 background（本组件不设底色，见 HeroPosterCard 注释）
- * ```
- * `Modifier.clip` 在 View 里没有对应 API，只能自己裁画布 —— 顺序严格照抄模板：
- * `draw()` 里**先 `clipPath(8dp 圆角矩形)`，再 `super.draw()`**（画图片与两个标签），
- * 所以里面的 ImageView 用 `MATCH_PARENT`（= `Modifier.fillMaxSize()`）也绝不会溢出圆角。
- *
- * 为什么不用 `clipToOutline`：它依赖 RenderNode 缓存的 outline，首帧若以 0×0 查询会缓存成空 outline，
- * 表现就是「完全没有圆角」—— 这正是前面几版一直直角的原因。`Path` + `clipPath` 不受缓存影响。
- */
-private class PosterClipLayout(
-    context: Context,
-    private val radiusPx: Float,
-) : FrameLayout(context) {
-
-    private val clipPath = Path()
-
-    override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
-        super.onSizeChanged(w, h, oldw, oldh)
-        clipPath.reset()
-        if (w > 0 && h > 0) {
-            clipPath.addRoundRect(0f, 0f, w.toFloat(), h.toFloat(), radiusPx, radiusPx, Path.Direction.CW)
-        }
-    }
-
-    /** ① 先裁四角 8dp ② 再画背景 / ImageView / 标签：与 Compose 的 `.clip().background()` 完全同序。 */
-    override fun draw(canvas: Canvas) {
-        if (clipPath.isEmpty) {
-            super.draw(canvas)
-            return
-        }
-        val save = canvas.save()
-        canvas.clipPath(clipPath)
-        super.draw(canvas)
-        canvas.restore()
     }
 }

@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    历史页「查看详情」按钮状态。
+
+    focused → 纯红 @color/hero_accent + 白字（全局唯一高亮色）
+    normal  → @color/black_50 半透明黑底 + 白字
+    与首页分类 Tab 的三态规则一致：只有「有焦点」才涂红，绝不出现灰块。
+-->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <item
+        android:state_focused="true"
+        android:drawable="@drawable/shape_hero_resume_focused" />
+
+    <item
+        android:state_pressed="true"
+        android:drawable="@drawable/shape_hero_resume_focused" />
+
+    <item android:drawable="@drawable/shape_hero_resume_normal" />
+</selector>

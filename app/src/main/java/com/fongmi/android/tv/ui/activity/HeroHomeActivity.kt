@@ -450,7 +450,12 @@ private fun HeroTopBar(
                     label = TOP_BAR_LABELS[index],
                     isHome = false,
                     requester = requesters[index],
-                    onConfirm = { },
+                    // 目前只有「历史」接好了页面，其余项仍是占位（确定键无动作）。
+                    onConfirm = {
+                        if (TOP_BAR_LABELS[index] == TOP_BAR_HISTORY_LABEL) {
+                            HeroHistoryActivity.start(context)
+                        }
+                    },
                     onMoveDown = onMoveDown,
                 )
             }
@@ -1017,6 +1022,10 @@ private val HERO_POSTERS: List<HeroPoster> = listOf(
 
 // 顶栏顺序：小房子 | 直播 | 搜索 | 历史 | 收藏 | 推送 | 设置（对照 ref_docs/home_ui.png）。
 private val TOP_BAR_LABELS = listOf("首页", "直播", "搜索", "历史", "收藏", "推送", "设置")
+
+// 顶栏里当前唯一已接好页面的项：历史 → HeroHistoryActivity（View 体系 + HeroPosterCard）。
+// 直播 / 搜索 / 收藏 / 推送 / 设置 等对应页面就绪后再按同一写法接。
+private const val TOP_BAR_HISTORY_LABEL = "历史"
 
 // 分类 Tab 顺序对照 ref_docs/home_ui.png 的胶囊分类条。
 private val HERO_TABS = listOf("推荐", "电影", "电视剧", "动漫", "综艺", "纪录片")

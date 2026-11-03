@@ -55,4 +55,11 @@
     <!-- 详情页焦点态用色（原版 red / red_500）：补上逆向资源缺失的引用。 -->
     <color name="red">#E50914</color>
     <color name="red_500">#F44336</color>
+    <!--
+        HeroUI 全局高亮色：与 HeroHomeActivity 的 `HeroAccentColor = Color(0xFFFF0000)`
+        以及 HeroPosterCard 的 `FOCUS_COLOR = 0xFFFF0000` 是同一个红。
+        View 侧需要颜色资源（selector / shape 用），所以在这里落一份唯一来源；
+        Hero 页面若再加新的焦点控件，一律引用本资源，不得新造第二种高亮色。
+    -->
+    <color name="hero_accent">#FFFF0000</color>
 </resources>

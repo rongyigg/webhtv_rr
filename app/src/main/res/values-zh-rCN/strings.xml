@@ -2427,4 +2427,9 @@
     <string name="source_sidebar_select_all">全选</string>
     <string name="source_sidebar_select_none">全不选</string>
     <string name="source_sidebar_switched">已切换接口源：%1$s</string>
+
+    <!-- HeroUI 历史页 -->
+    <string name="hero_history_view_detail">查看详情</string>
+    <string name="hero_history_episode">E%1$02d</string>
+    <string name="hero_history_progress">%1$s / %2$s</string>
 </resources>

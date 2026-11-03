@@ -2432,4 +2432,11 @@
     <string name="source_sidebar_select_all">All</string>
     <string name="source_sidebar_select_none">None</string>
     <string name="source_sidebar_switched">Switched source: %1$s</string>
+
+    <!-- HeroUI 历史页（ref_docs/fragment_history.xml L171 @string/history_view_detail 的替代） -->
+    <string name="hero_history_view_detail">View details</string>
+    <!-- 当前观看集号，history_page.png 显示为 E02 -->
+    <string name="hero_history_episode">E%1$02d</string>
+    <!-- 已看位置 / 单集总时长，history_page.png 显示为 27:15 / 47:34 -->
+    <string name="hero_history_progress">%1$s / %2$s</string>
 </resources>

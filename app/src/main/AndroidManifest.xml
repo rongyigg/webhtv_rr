@@ -103,6 +103,15 @@
             android:screenOrientation="sensorLandscape"
             android:theme="@style/Theme.App" />
 
+        <!-- HeroUI 历史页（View 体系 + 全局唯一卡片 HeroPosterCard；数据层未接，先用 Mock）。 -->
+        <activity
+            android:name=".ui.activity.HeroHistoryActivity"
+            android:configChanges="screenSize|smallestScreenSize|screenLayout|orientation"
+            android:exported="false"
+            android:label="Hero History"
+            android:screenOrientation="sensorLandscape"
+            android:theme="@style/Theme.App" />
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.provider"

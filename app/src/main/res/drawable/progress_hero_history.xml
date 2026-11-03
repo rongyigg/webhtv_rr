@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    历史页观看进度条（2dp）。
+
+    对应 ref_docs/fragment_history.xml L214-218 的 `HistoryProgressBar`：
+    轨道 = 白色 10% / 进度 = 纯白，圆角取 1dp（高度的一半，保证 2dp 条两端是半圆）。
+    颜色全部复用工程已有 @color/white_10 / @color/white，不新增色值。
+-->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <item android:id="@android:id/background">
+        <shape android:shape="rectangle">
+            <corners android:radius="1dp" />
+            <solid android:color="@color/white_10" />
+        </shape>
+    </item>
+
+    <item android:id="@android:id/progress">
+        <clip>
+            <shape android:shape="rectangle">
+                <corners android:radius="1dp" />
+                <solid android:color="@color/white" />
+            </shape>
+        </clip>
+    </item>
+</layer-list>

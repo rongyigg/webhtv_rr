@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    历史页「查看详情」按钮 · 焦点态。
+
+    焦点色统一用 @color/hero_accent（= 首页 HeroAccentColor 的 #FFFF0000），
+    与海报卡 2dp 焦点框、顶栏红色短横线是同一个红，不再引入第二种高亮色。
+    圆角 / 内边距与常态完全一致，避免焦点切换时按钮尺寸跳动。
+-->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+
+    <corners android:radius="16dp" />
+
+    <solid android:color="@color/hero_accent" />
+
+    <padding
+        android:left="12dp"
+        android:right="12dp" />
+</shape>
