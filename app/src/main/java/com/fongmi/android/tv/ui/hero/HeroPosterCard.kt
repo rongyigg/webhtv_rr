@@ -27,11 +27,13 @@ import kotlin.math.roundToInt
  *
  * 尺寸与本文件内的常量**全部写死**，外部既不能改宽度、也不能改高度、更不能改圆角：
  *  - 整卡 [CARD_WIDTH_DP] × [CARD_HEIGHT_DP] = 120dp × 214dp（[POSTER_HEIGHT_DP] 180 + [TITLE_HEIGHT_DP] 34）；
- *  - 四角 [CORNER_DP] = 8dp 全部圆角，**只在最外层根容器裁剪一次**：
+ *  - 四角 [CORNER_DP] = 8dp 全部圆角，分两层，**都对应用户模板里的唯一一个 `.clip()`**：
  *    首页 `HeroHomeActivity.kt` L1129 `POSTER_SHAPE = RoundedCornerShape(8.dp)`，
- *    L925-945 的顺序是 `… .clip(POSTER_SHAPE).background(...)`（clip 在 background 之前）。
- *    View 没有 `Modifier.clip`，等价实现是整卡 [draw] 里先 `clipPath(8dp 圆角矩形)` 再 `super.draw()`，
- *    海报与剧名底板共用同一层裁剪、无缝衔接；内部**不再**套第二层裁剪（否则会露出底色缺口）。
+ *    L925-945 的顺序 `… .clip(POSTER_SHAPE).background(...)`（clip 在 background 之前）。
+ *    1. 海报容器 [PosterClipLayout]（模板里的 `Box(120×180)`）：先 `clipPath(8dp)` 再画图片与标签；
+ *    2. 整卡 [draw]（120×214）：同样先 `clipPath(8dp)` 再 `super.draw()`，负责剧名底板两个下角。
+ *    两层同半径、同路径，等效于「图片与卡片一起被裁成 8dp 圆角」，且任意一层失效另一层仍能兜住圆角；
+ *    容器**不设底色**，所以圆角处不会露出 `#161616` 方块。
  *    `clipToOutline` 只作为 GPU 路径的冗余保险，不作为唯一手段（其 outline 可能被缓存成空）；
  *  - 焦点描边 [FOCUS_STROKE_DP] = 2dp、颜色 [FOCUS_COLOR] = #FFFF0000
  *    （**与首页 `POSTER_FOCUS_BORDER = 2.dp` + `HeroAccentColor = Color(0xFFFF0000)` 完全一致**），
@@ -109,6 +111,7 @@ class HeroPosterCard @JvmOverloads constructor(
     }
     private val focusRect = RectF()
 
+    /** 海报。**自身不带任何 shape / 圆角 / background**（模板排查点 1：内部禁止再写 shape），圆角由容器裁。 */
     private val image: ImageView = ImageView(context).apply {
         scaleType = ImageView.ScaleType.CENTER_CROP
         setImageResource(R.drawable.shape_source_poster_placeholder)
@@ -147,12 +150,26 @@ class HeroPosterCard @JvmOverloads constructor(
     }
 
     /**
-     * 海报容器：只负责承载海报与两个标签，**不做任何裁剪**。
+     * 海报区容器 —— **严格对应你给的模板结构**（View 版）：
      *
-     * 裁剪统一放在最外层 [draw]（整卡 120×214 的 8dp 圆角），海报与剧名底板共享同一层裁剪、
-     * 无缝衔接；这里再套一层圆角会在图片下缘露出容器底色的缺口（已按决策去掉）。
+     * ```
+     * Box(
+     *     Modifier.width(120.dp).height(180.dp)
+     *         .clip(RoundedCornerShape(8.dp))   // ① 最外层先裁四角
+     *         .background(...)                  // ② 再画背景（本组件用海报自己的渐变占位，故不设底色）
+     * ) { ImageView(fillMaxSize, CenterCrop); 左上 / 左下标签 }
+     * ```
+     *
+     * 顺序要点与模板逐条一致：
+     * 1. 尺寸先定（120×180，见 [posterHeightPx]）；
+     * 2. `clip` 在 `background` 之前 —— View 侧就是 [PosterClipLayout.draw] 里先 `clipPath` 再 `super.draw()`；
+     * 3. 图片与标签都是它的子 View，**没有一个能超出**这个裁剪区域；图片自己**不带任何 shape / 圆角**。
+     *
+     * 这里**不设容器底色**（模板里的 `.background(Color(0xFF161616))`）：本组件的海报是渐变占位，
+     * 一旦给容器上底色，圆角缝隙就会露出 `#161616` 方块（上一轮你看到的那道缺口）。
+     * 不设底色时，圆角处露出的就是卡片自己的 `black_20`，与剧名底板同色，视觉上无缝。
      */
-    private val posterFrame: FrameLayout = FrameLayout(context)
+    private val posterFrame: FrameLayout = PosterClipLayout(context, cornerPx)
 
     private val titleView: TextView = TextView(context).apply {
         setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, TITLE_SP)
@@ -336,5 +353,48 @@ class HeroPosterCard @JvmOverloads constructor(
         private const val TOP_TAG_SP = 13f
         private const val BOTTOM_TAG_SP = 14f
         private const val PLACEHOLDER_SP = 36f
+    }
+}
+
+/**
+ * 海报容器：**用户模板里那个 `Box` 的 View 等价物**。
+ *
+ * ```
+ * Box(Modifier.width(120.dp).height(180.dp)
+ *         .clip(RoundedCornerShape(8.dp))   // ① 先 clip
+ *         .background(...))                 // ② 再 background（本组件不设底色，见 HeroPosterCard 注释）
+ * ```
+ * `Modifier.clip` 在 View 里没有对应 API，只能自己裁画布 —— 顺序严格照抄模板：
+ * `draw()` 里**先 `clipPath(8dp 圆角矩形)`，再 `super.draw()`**（画图片与两个标签），
+ * 所以里面的 ImageView 用 `MATCH_PARENT`（= `Modifier.fillMaxSize()`）也绝不会溢出圆角。
+ *
+ * 为什么不用 `clipToOutline`：它依赖 RenderNode 缓存的 outline，首帧若以 0×0 查询会缓存成空 outline，
+ * 表现就是「完全没有圆角」—— 这正是前面几版一直直角的原因。`Path` + `clipPath` 不受缓存影响。
+ */
+private class PosterClipLayout(
+    context: Context,
+    private val radiusPx: Float,
+) : FrameLayout(context) {
+
+    private val clipPath = Path()
+
+    override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
+        super.onSizeChanged(w, h, oldw, oldh)
+        clipPath.reset()
+        if (w > 0 && h > 0) {
+            clipPath.addRoundRect(0f, 0f, w.toFloat(), h.toFloat(), radiusPx, radiusPx, Path.Direction.CW)
+        }
+    }
+
+    /** ① 先裁四角 8dp ② 再画背景 / ImageView / 标签：与 Compose 的 `.clip().background()` 完全同序。 */
+    override fun draw(canvas: Canvas) {
+        if (clipPath.isEmpty) {
+            super.draw(canvas)
+            return
+        }
+        val save = canvas.save()
+        canvas.clipPath(clipPath)
+        super.draw(canvas)
+        canvas.restore()
     }
 }

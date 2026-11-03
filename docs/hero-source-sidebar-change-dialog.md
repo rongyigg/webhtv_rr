@@ -105,16 +105,18 @@
   `CARD_HEIGHT_DP = 214`；`onMeasure` 用 `EXACTLY` 强制 120×214 覆盖任何外部 `MeasureSpec`，
   因此不会被 `RecyclerView` / `weight` / `wrap_content` 拉伸或压扁。
   `ChangeSourceDialog` 的窗口高度常量直接引用 `HeroPosterCard.CARD_HEIGHT_DP`，不在弹窗里重复 214。
-- **圆角唯一（只在最外层裁一次）**：`CORNER_DP = 8`，与首页 `HeroHomeActivity.kt`
-  `POSTER_SHAPE = RoundedCornerShape(8.dp)`（L1129，四角同一半径）一致。
-  首页顺序是 `Modifier.width(120.dp).height(180.dp).graphicsLayer{...}.shadow(...)
-  .clip(POSTER_SHAPE).background(...)`（L925-945）——**clip 在 background 之前**。
-  View 没有 `Modifier.clip`，等价实现是整卡 `HeroPosterCard.draw()`：先 `clipPath(8dp 圆角矩形)`
-  再 `super.draw()`（画背景 → 海报 → 两个标签 → 剧名），**整个 120×214 卡片只裁这一层**，
-  海报与剧名底板无缝衔接；内部不再套第二层裁剪（上一轮在海报容器上加的 `PosterClipLayout` 已按决策删除，
-  否则海报下缘会露出 `#161616` 缺口）。
+- **圆角唯一（严格按模板的结构与顺序）**：`CORNER_DP = 8`，与首页 `HeroHomeActivity.kt`
+  `POSTER_SHAPE = RoundedCornerShape(8.dp)`（L1129，四角同一半径）一致。模板要求：
+  尺寸 → `.clip(RoundedCornerShape(8.dp))` → `.background(...)` → 图片 `fillMaxSize`，且内部图片不得再设 shape。
+  View 没有 `Modifier.clip`，等价实现是自绘裁剪，顺序逐一对应：
+  1. `PosterClipLayout`（模板里的 `Box(120×180)`）：`draw()` 先 `clipPath(8dp)` 再画 ImageView 与两个标签，
+     容器**不设底色**（否则圆角缝隙会露出 `#161616` 方块，这是上一轮缺口的来源），
+     圆角处露出的是卡片 `black_20`，与剧名底板同色、视觉无缝；
+  2. `HeroPosterCard.draw()`（整卡 120×214）：同样先 `clipPath(8dp)` 再 `super.draw()`，
+     负责剧名底板两个下角。两层同半径同路径，任意一层失效另一层仍能兜住圆角。
+  ImageView 自身**不设 shape / 圆角 / background**（模板排查点 1）。
   用 `Path` 而不是 `clipToOutline`：后者依赖 RenderNode 缓存的 outline，首帧若以 0×0 查询会缓存成
-  空 outline，表现就是「完全没有圆角」——上一版直角正是这个原因；`clipToOutline` 现在只作 GPU 冗余保险，
+  空 outline，表现就是「完全没有圆角」——前几版一直直角正是这个原因；`clipToOutline` 现在只作 GPU 冗余保险，
   并在 `onSizeChanged` 里 `invalidateOutline()` 强制重算。
   底层 `@style/Vod.Grid`（只圆上方两角）**不再参与**。
 - **焦点唯一（参数与首页完全一致）**：`FOCUS_STROKE_DP = 2f`、`FOCUS_COLOR = 0xFFFF0000`，
