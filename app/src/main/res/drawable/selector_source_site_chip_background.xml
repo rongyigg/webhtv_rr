@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  换源弹窗（ChangeSourceDialog）站点标签的三种状态：
+  focused  → 红底白字胶囊（shape_source_site_chip_focused，#E50914）
+  selected → 当前站点（shape_source_chip_round_activated，透明底）
+  normal   → 透明底
+  侧边栏（SourceSidebar）不用本文件，它走 selector_source_site_item_background（白底黑字）。
+-->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <item
+        android:state_focused="true"
+        android:drawable="@drawable/shape_source_site_chip_focused" />
+    <item
+        android:state_selected="true"
+        android:drawable="@drawable/shape_source_chip_round_activated" />
+    <item android:drawable="@drawable/shape_source_chip_round_normal" />
+</selector>

@@ -2426,4 +2426,5 @@
     <string name="play_change_count">%1$d个条目</string>
     <string name="source_sidebar_select_all">全选</string>
     <string name="source_sidebar_select_none">全不选</string>
+    <string name="source_sidebar_switched">已切换接口源：%1$s</string>
 </resources>

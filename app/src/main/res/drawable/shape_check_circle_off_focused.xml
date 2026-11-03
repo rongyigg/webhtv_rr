@@ -1,9 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+  勾选圈：行处于焦点 + 未勾选。行背景此时是白底，
+  白色描边会看不见，所以改用深色描边（空心）。
+-->
 <shape xmlns:android="http://schemas.android.com/apk/res/android"
-    android:shape="rectangle">
-    <solid android:color="#00000000" />
+    android:shape="oval">
+    <solid android:color="@android:color/transparent" />
     <stroke
         android:width="2dp"
-        android:color="#FFFFFF" />
-    <corners android:radius="9dp" />
+        android:color="@color/black_40" />
 </shape>

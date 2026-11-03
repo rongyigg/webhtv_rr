@@ -10,6 +10,8 @@ package com.fongmi.android.tv.ui.hero
 /** 侧边栏条目：站点 + 资源类型，显示为「豆瓣 | 海报」。 */
 internal data class HeroSourceEntry(
     val id: String,
+    /** 所属站点名，与 [HeroSourceResult.site] 同一套取值，用于多选后过滤搜索结果。 */
+    val site: String,
     val label: String,
 )
 
@@ -35,8 +37,8 @@ internal val HERO_SOURCE_SITES: List<String> = listOf(
 /** 侧边栏条目：每个站点都能单独勾选「海报 / 剧照」两类资源。 */
 internal val HERO_SOURCE_ENTRIES: List<HeroSourceEntry> = HERO_SOURCE_SITES.flatMapIndexed { index, site ->
     listOf(
-        HeroSourceEntry("$index-poster", "$site | 海报"),
-        HeroSourceEntry("$index-still", "$site | 剧照"),
+        HeroSourceEntry("$index-poster", site, "$site | 海报"),
+        HeroSourceEntry("$index-still", site, "$site | 剧照"),
     )
 }
 

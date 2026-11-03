@@ -8,7 +8,9 @@
 1. 首页「小房子」确定键 → 右侧滑出接口源侧边栏；返回键关闭，焦点回小房子。
 2. 详情页「换源」→ 换源弹窗；关闭后焦点回「换源」而不是默认「播放」。
 3. 换源弹窗内「小房子」→ 同一个侧边栏，层级在弹窗之上；关闭后焦点回该小房子。
-4. 站点标签：焦点 = 白色圆角胶囊（`shape_site_item_focused`），常态 = 纯透明，不再出现灰底条。
+4. 站点标签：焦点 = **红底 #E50914 + 白字胶囊**，常态 = 透明 + 白字。
+   侧边栏行：焦点 = **白底 #FFFFFF + 黑字圆角胶囊**，常态 = 透明 + 白字。
+   （两个组件各用一套 selector，互不影响，见 §3.7）
 5. 首页小房子：常态 = `white_10` 椭圆，焦点 = 红色椭圆。
 6. 不新增依赖；不改首页/详情页 layout、样式与焦点链；组件内零网络、零数据层写入。
 
@@ -17,15 +19,15 @@
 | 落地文件 | 来源 | 说明 |
 | --- | --- | --- |
 | `layout/dialog_source.xml` | `ref_docs/dialog_source.xml` | 根 padding 18dp / paddingBottom 0、`shape_dialog_source`、头 32dp、siteLayout 32dp、homeBtn 26dp + 16dp 图标、结果区 3dp 红条 + 13sp 标题 + 16dp 内边距，全部逐字保留 |
-| `layout/adapter_source_site.xml` | `ref_docs/adapter_v2_site.xml` | `item` 39dp→填满 26dp 行、宽度 wrap_content（横向栏），14sp、`selector_source_site_item_text`、`selector_source_site_item_background` 原样 |
+| `layout/adapter_source_site.xml` | `ref_docs/adapter_v2_site.xml` | 14sp + 白字；**根节点即标签本体**（合并原版内外两层，否则 adapter 的 isSelected 落在不画背景的外层）；背景用 `selector_source_site_chip_background`（focused → 红底胶囊） |
 | `layout/adapter_source_result.xml` | `ref_docs/adapter_vod_rect.xml` | imageWrapper + 120×180 + `@style/Vod.Grid.Large` + 13sp `#ccffffff` 标题 + `@color/black_20` 占位 |
-| `layout/dialog_source_sidebar.xml` | `ref_docs/dialog_search_site.xml` | 全选/全不选 39dp、12sp 文字 + 16dp 勾选圈、站点列表 |
-| `layout/adapter_source_sidebar_item.xml` | `ref_docs/adapter_site.xml` | 40dp 行高、18sp 文字、24dp 勾选圈 |
+| `layout/dialog_source_sidebar.xml` | `ref_docs/dialog_search_site.xml` | 全选/全不选 39dp（`@id/bulkBar`，单选模式代码隐藏）、12sp 文字 + 16dp 勾选圈、站点列表 |
+| `layout/adapter_source_sidebar_item.xml` | `ref_docs/adapter_site.xml` | 40dp 行高、18sp 文字、24dp 勾选圈；**根节点即行本体**（同上，否则行选中态不生效） |
 | `drawable/shape_source_site_item_focused.xml` | `ref_docs/shape_site_item_focused.xml` | inset 8/4dp + 白底 + 28dp 圆角（焦点胶囊） |
 | `drawable/shape_source_chip_round_{normal,activated}.xml` | `ref_docs/shape_chip_round_*.xml` | 只有 28dp 圆角 + 6dp 横向 padding，**无 solid**（上一版的灰底/红底就是这里多加的） |
 | `color/selector_source_site_item_text.xml` | `ref_docs/selector_site_item_text.xml` | focused→black，否则 white |
 | `drawable/selector_source_site_item_background.xml` | `ref_docs/selector_site_item_background.xml` | focused→白胶囊，selected→activated，默认→normal |
-| `drawable/selector_check_circle.xml` + `shape_check_circle_*` | `ref_docs/selector_check_circle.xml` + `shape_check_circle_*` | 勾选圈四态 |
+| `drawable/selector_check_circle.xml` + `shape_check_circle_*` | `ref_docs/selector_check_circle.xml`（四态顺序原样） | 四态改为**正圆**（`android:shape="oval"`）：勾选 = 红底实心、未勾选 = 空心描边；焦点态单独加深/加白描边，保证在白底行上也可见 |
 | `drawable/shape_home_logo_normal_white.xml` | `ref_docs/shape_home_logo_normal_white.xml` | **oval + `@color/white_10`**（上一版误做成 13dp 圆角矩形 + 纯白/半透明白） |
 | `drawable/shape_home_logo_source_focused.xml` | `ref_docs/selector_home_logo_source.xml` 的 focused 分支（其 shape 未随包提供） | 红色椭圆 `#e50914`，与 `shape_home_logo_normal_white` 同为 oval |
 | 窗口尺寸 / 间距 / 缩放 | `ref_docs/f23.java` | 宽 `0.82×`屏宽、高 `min(360dp, 0.65×`屏高`)`、站点间距 12dp、结果间距 16dp、结果卡焦点缩放 1.08 |
@@ -47,20 +49,47 @@
    面板宽度完全由内容（18sp 站点名 + 24dp 勾选圈）决定。
    代价：`shape_line_tapered` 的两条分隔线（`match_parent` 宽的 1dp View）会反过来把面板撑到整屏，
    故删除；这也是唯一牺牲的视觉元素。
+7. **两套焦点配色分离（2026-11-03 需求）**：换源弹窗与侧边栏原来是同一个
+   `selector_source_site_item_background`（focused → 白底黑字）。现拆成两套：
+   - 弹窗：`selector_source_site_chip_background` + `shape_source_site_chip_focused`
+     → focused = **红底 #E50914 + 白字**；文字固定 `@color/white`；
+   - 侧边栏：继续用 `selector_source_site_item_background` + `color/selector_source_site_item_text`
+     → focused = **白底 #FFFFFF + 黑字**（inset 8dp/4dp + 28dp 圆角，ref 原值）。
+8. **初始焦点可能落在 RecyclerView 上导致「没有焦点提示」**：`onStart` 里
+   `findViewHolderForAdapterPosition(...)` 在布局完成前返回 null 时会退化为 `list.requestFocus()`，
+   焦点停在列表上，行背景的 focused 态永远不出现。
+   现改为 `scrollToPosition` + 最多 6 次 / 50ms 的 `focusRow` 重试，并把
+   `descendantFocusability` 设为 `FOCUS_AFTER_DESCENDANTS`。
+9. **adapter 的 `itemView` 必须就是画背景的 View**：原版 `adapter_v2_site` / `adapter_site` 是
+   「外层容器 + 内层 `@id/item`」两层，背景与 `focusable` 在内层，而 adapter 设置
+   `itemView.isSelected` 落在外层 → 选中态永远不绘制。现把 id / background / focusable 合并到根节点。
+
+## 3.1 单 / 多选模式（`SourceSidebarMode`）
+
+| 模式 | 入口 | UI | 确定键 |
+| --- | --- | --- | --- |
+| `Single` | 首页小房子 | 隐藏勾选圈、隐藏「全选 / 全不选」整行（`@id/bulkBar` GONE） | `onSiteSelected(index)` 后关闭 |
+| `Multi` | 换源弹窗内小房子 | 显示勾选圈（实心 / 空心）与「全选 / 全不选」 | 切换该条勾选，`onCheckedChanged` 返回快照，不关闭 |
+
+多选结果联动（Mock）：`ChangeSourceDialog.applySiteFilter(flags)` 把勾选的
+`HeroSourceEntry.site` 与 `HeroSourceResult.site` 求交集，`visibleResults` 随之刷新，
+顶部统计在过滤后改为实际命中数；一条都没勾时走空态（`@id/empty`）。
 
 ## 4. 焦点契约
 
 换源弹窗：
 
-- 打开 → 当前站点标签；站点标签首个 LEFT → 小房子，其余在站点栏内滚动。
+- 打开 → 当前站点标签（红底白字）；站点标签首个 LEFT → 小房子，其余在站点栏内滚动。
 - 站点 ↓ → 结果卡片（`@id/recycler` 的 `nextFocusDown`）；结果 ↑ → 站点栏。
 - 结果确定 → `onSourceSelected` 后关闭；返回键 → 关闭。
-- 小房子确定 → `SourceSidebar`（后创建的窗口在弹窗之上）；关闭 → `homeBtn.requestFocus()`。
+- 小房子确定 → `SourceSidebar`（Multi，后创建的窗口在弹窗之上）；关闭 → `homeBtn.requestFocus()`。
 
 侧边栏：
 
-- 打开 → 列表第 1 条；顶部「全选/全不选」↓ → 列表；列表第 1 条 ↑ → 「全选」。
-- 左右键在列表内被消费，不掉出侧边栏；确定键切换勾选；返回键关闭 → `onClosed` 交还焦点。
+- 打开 → 单选落在当前接口源，多选落在第 1 条（白底黑字可见）。
+- 单选：确定键 = 切换接口源并关闭；多选：确定键 = 勾选 / 取消勾选，不关闭。
+- 多选：顶部「全选/全不选」↓ → 列表；列表第 1 条 ↑ → 「全选」。
+- 左右键在列表内被消费，不掉出侧边栏；返回键关闭 → `onClosed` 交还焦点。
 
 详情页：`showSourceDialog` 只作为「弹窗是否打开」的闸门，关闭时置 false，由既有 `LaunchedEffect`
 把焦点送回 `pendingActionFocus`（换源按钮）。
@@ -73,20 +102,23 @@
 - `drawable/`：`shape_dialog_source`、`shape_tmdb_badge`、`selector_home_logo_source`、
   `shape_home_logo_source_focused`、`shape_home_logo_normal_white`、
   `shape_source_site_item_focused`、`shape_source_chip_round_activated|normal`、
-  `selector_source_site_item_background`、`selector_check_circle`、`shape_check_circle_on|off|
+  `selector_source_site_item_background`、`selector_source_site_chip_background`、
+  `shape_source_site_chip_focused`、`selector_check_circle`、`shape_check_circle_on|off|
   on_focused|off_focused`、`shape_line_tapered`（当前无引用，保留备用）
 - `color/selector_source_site_item_text.xml`
 - `anim/source_sidebar_in|out`、`values/styles.xml` 的 `SourceDialogTheme` / `SourceSidebarAnimation`
 - `values/strings.xml`（+ zh-rCN / zh-rTW）：`play_change_result`、`play_change_empty`、
-  `play_change_count`、`source_sidebar_select_all|none`
+  `play_change_count`、`source_sidebar_select_all|none`、`source_sidebar_switched`
 
 改写：
-- `ui/hero/ChangeSourceDialog.kt`：独立 Dialog + `R.layout.dialog_source`，窗口尺寸/间距/缩放照搬 f23
-- `ui/hero/SourceSidebar.kt`：独立 Dialog + `R.layout.dialog_source_sidebar`，宽度由内容决定
-- `ui/hero/HeroSourceDemo.kt`：纯 Kotlin 假数据
+- `ui/hero/ChangeSourceDialog.kt`：独立 Dialog + `R.layout.dialog_source`，窗口尺寸/间距/缩放照搬 f23，
+  站点标签红底白字，多选侧边栏勾选即时过滤结果
+- `ui/hero/SourceSidebar.kt`：独立 Dialog + `R.layout.dialog_source_sidebar`，宽度由内容决定，
+  `SourceSidebarMode.Single|Multi` 两种模式
+- `ui/hero/HeroSourceDemo.kt`：纯 Kotlin 假数据（`HeroSourceEntry` 增加 `site` 字段供过滤）
 
 入口（只加回调）：
-- `HeroHomeActivity.kt`：小房子 → `SourceSidebar.show(...)`，关闭回焦小房子
+- `HeroHomeActivity.kt`：小房子 → `SourceSidebar.show(mode = Single, onSiteSelected = ...)`，关闭回焦小房子
 - `HeroDetailActivity.kt`：「换源」→ `ChangeSourceDialog.show(...)`，关闭回焦「换源」
 
 保留：`HeroCommonUi.kt` 整份（`HeroDialogShell` 仍供选集 / 演员弹窗）。

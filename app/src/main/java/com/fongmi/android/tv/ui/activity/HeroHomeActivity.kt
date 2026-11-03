@@ -87,13 +87,14 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import coil3.compose.AsyncImage
+import com.fongmi.android.tv.R
 import com.fongmi.android.tv.api.SiteApi
 import com.fongmi.android.tv.ui.hero.HERO_SOURCE_ENTRIES
-import com.fongmi.android.tv.ui.hero.HERO_SOURCE_INITIAL_CHECKED
 import com.fongmi.android.tv.ui.hero.HeroAccentColor
 import com.fongmi.android.tv.ui.hero.HeroHomeLogoButton
 import com.fongmi.android.tv.ui.hero.HeroImageLoader
 import com.fongmi.android.tv.ui.hero.SourceSidebar
+import com.fongmi.android.tv.ui.hero.SourceSidebarMode
 import com.fongmi.android.tv.utils.Notify
 import com.fongmi.android.tv.utils.PushParser
 import kotlinx.coroutines.launch
@@ -291,7 +292,14 @@ private fun HeroHomeScreen(onOpenDetail: (String) -> Unit) {
                     SourceSidebar.show(
                         context = context,
                         entries = HERO_SOURCE_ENTRIES,
-                        initialChecked = HERO_SOURCE_INITIAL_CHECKED,
+                        mode = SourceSidebarMode.Single,
+                        // 单选模式：确定键直接切换当前接口源并关闭侧边栏。
+                        // TODO(数据层对接)：这里接真实的接口源切换；当前只做提示，证明回调已生效。
+                        onSiteSelected = { index ->
+                            Notify.show(
+                                context.getString(R.string.source_sidebar_switched, HERO_SOURCE_ENTRIES[index].label)
+                            )
+                        },
                         onClosed = {
                             scope.launch {
                                 withFrameNanos { }

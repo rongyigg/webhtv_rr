@@ -2431,4 +2431,5 @@
     <string name="play_change_count">%1$d items</string>
     <string name="source_sidebar_select_all">All</string>
     <string name="source_sidebar_select_none">None</string>
+    <string name="source_sidebar_switched">Switched source: %1$s</string>
 </resources>

@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  换源弹窗（ChangeSourceDialog）站点标签的焦点态：红底（@color/red = #E50914）白字胶囊。
+  与常态 `shape_source_chip_round_normal` 保持同一套 padding（左右各 6dp），
+  避免获得焦点时文字位置发生跳动；上下各 inset 2dp，让胶囊在 26dp 的标签行里不贴边。
+-->
+<inset xmlns:android="http://schemas.android.com/apk/res/android"
+    android:insetTop="2dp"
+    android:insetBottom="2dp">
+    <shape android:shape="rectangle">
+        <solid android:color="@color/red"/>
+        <corners android:radius="28dp"/>
+        <padding
+            android:left="6dp"
+            android:right="6dp"/>
+    </shape>
+</inset>
