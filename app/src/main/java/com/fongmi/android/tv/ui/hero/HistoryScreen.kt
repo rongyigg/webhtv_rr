@@ -6,6 +6,7 @@ import android.content.ContextWrapper
 import android.util.Log
 import android.view.KeyEvent
 import android.view.LayoutInflater
+import android.view.View
 import android.widget.FrameLayout
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.LinearOutSlowInEasing
@@ -34,11 +35,9 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -84,6 +83,8 @@ import coil3.compose.AsyncImage
 import com.fongmi.android.tv.R
 import com.fongmi.android.tv.bean.History
 import com.fongmi.android.tv.utils.HistoryProgressFormatter
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -121,8 +122,12 @@ fun HistoryScreen(
     val state = viewModel.state
     val context = LocalContext.current
 
-    // 删除确认框当前指向的下标；-1 = 不显示。
-    var deleteIndex by remember { mutableIntStateOf(-1) }
+    // 编辑模式：长按确定键进入，卡片中心出现垃圾桶遮罩；再按一次确定键才真正删除。
+    //
+    // 原版是**适配器级**标志（`o11.m0()` L383-395：`this.g0 = z` + `this.f0.i = z` +
+    // `notifyItemRangeChanged(0, size)`），所以编辑态下所有卡片一起显示垃圾桶，
+    // 而不是只有被长按的那一张。删除目标 = 编辑态下按下确定键的那一张卡（`pp` case 14）。
+    var isEditMode by remember { mutableStateOf(false) }
     // 需要把 D-pad 焦点抢到第几张卡；-1 = 不需要。
     var pendingFocus by remember { mutableIntStateOf(-1) }
     // 删除后要求重新落焦点（删掉的是当前聚焦卡，View 随列表项一起销毁）。
@@ -155,6 +160,40 @@ fun HistoryScreen(
         state
     }
 
+    // ---- 编辑模式三件事：进入 / 退出 / 确认删除 ------------------------------
+    // 都是普通局部函数（非 @Composable），只在按键回调里被调用，不参与重组。
+
+    fun enterEditMode() {
+        if (isEditMode) return
+        isEditMode = true
+        Log.d(LOG_TAG_EDIT, "进入编辑模式，遮罩卡片数 = ${renderState.items.size}")
+    }
+
+    fun exitEditMode() {
+        if (!isEditMode) return
+        isEditMode = false
+        Log.d(LOG_TAG_EDIT, "退出编辑模式（未删除）")
+    }
+
+    fun confirmDelete(index: Int) {
+        val items = renderState.items
+        if (index !in items.indices) {
+            exitEditMode()
+            return
+        }
+        Log.d(LOG_TAG_EDIT, "删除第 $index 条：${items[index].vodName}")
+        if (FORCE_FAKE_RENDER) {
+            // 假数据只在内存里，直接移除；选中项回退到删除位置（同 `m11` case 1 L39 的公式）。
+            if (index in fakeItems.indices) fakeItems.removeAt(index)
+            fakeSelected = if (fakeItems.isEmpty()) -1 else index.coerceAtMost(fakeItems.size - 1)
+        } else {
+            viewModel.deleteAt(index)
+        }
+        isEditMode = false
+        refocusAfterDelete = true
+    }
+    // -----------------------------------------------------------------------
+
     // 排查用日志：确认 LazyRow 真的拿到 6 条。`adb logcat -s MockDebug`
     LaunchedEffect(renderState.items.size) {
         Log.d(LOG_TAG_FAKE, "当前渲染的数据量: ${renderState.items.size}")
@@ -183,7 +222,21 @@ fun HistoryScreen(
     }
 
     MaterialTheme(colorScheme = darkColorScheme()) {
-        Box(modifier = modifier.fillMaxSize().background(Color.Black)) {
+        Box(
+            modifier = modifier
+                .fillMaxSize()
+                .background(Color.Black)
+                // 返回键退出编辑模式。卡片自己的 OnKeyListener 也有 BACK 分支，
+                // 这里兜底「焦点不在卡片上」（例如刚落到续播按钮）的情况。
+                .onPreviewKeyEvent { event ->
+                    if (isEditMode && event.type == KeyEventType.KeyDown && event.key == Key.Back) {
+                        exitEditMode()
+                        true
+                    } else {
+                        false
+                    }
+                },
+        ) {
 
             // ---------------------------------------------------------------
             // 1) 背景层（自下而上）
@@ -252,51 +305,34 @@ fun HistoryScreen(
                     onCardClick = { item ->
                         context.findActivity()?.let { viewModel.openResume(it, item) }
                     },
-                    onCardLongClick = { index -> deleteIndex = index },
+                    isEditMode = isEditMode,
+                    onEnterEditMode = { enterEditMode() },
+                    onConfirmDelete = { index -> confirmDelete(index) },
+                    onExitEditMode = { exitEditMode() },
                     onCardUp = {
                         runCatching { resumeFocus.requestFocus() }
                     },
+                    // 「查看详情」必须显式传当前项：`openDetail(activity)` 的默认参数取的是
+                    // ViewModel 的 `state.selectedItem`，假数据模式下那是空的 → `open()` 直接 return。
                     onResumeClick = {
-                        context.findActivity()?.let { viewModel.openDetail(it) }
+                        val currentItem = renderState.selectedItem
+                        val activity = context.findActivity()
+                        Log.e(LOG_TAG_DETAIL, "查看详情被点击 activity=$activity currentItem=${currentItem?.vodName}")
+                        if (activity == null) {
+                            Log.e(LOG_TAG_DETAIL, "findActivity() 返回 null，无法打开详情页")
+                        } else if (currentItem == null) {
+                            Log.e(LOG_TAG_DETAIL, "currentItem 为 null，无法打开详情页")
+                        } else {
+                            viewModel.openDetail(activity, currentItem)
+                        }
                     },
                     onResumeDown = { pendingFocus = renderState.selectedIndex.coerceAtLeast(0) },
                     modifier = Modifier.align(Alignment.BottomCenter),
                 )
             }
 
-            // ---------------------------------------------------------------
-            // 6) 删除确认框（长按卡片；文案为建议值，见文档待确认清单）
-            // ---------------------------------------------------------------
-            val deleting = renderState.items.getOrNull(deleteIndex)
-            if (deleting != null) {
-                AlertDialog(
-                    onDismissRequest = { deleteIndex = -1 },
-                    title = { Text(text = DELETE_TITLE) },
-                    text = { Text(text = deleteMessage(deleting.vodName.orEmpty())) },
-                    confirmButton = {
-                        TextButton(onClick = {
-                            val index = deleteIndex
-                            deleteIndex = -1
-                            if (index >= 0) {
-                                if (FORCE_FAKE_RENDER) {
-                                    // 假数据只在内存里，直接移除即可。
-                                    if (index in fakeItems.indices) fakeItems.removeAt(index)
-                                } else {
-                                    viewModel.deleteAt(index)
-                                }
-                                refocusAfterDelete = true
-                            }
-                        }) {
-                            Text(text = DELETE_CONFIRM)
-                        }
-                    },
-                    dismissButton = {
-                        TextButton(onClick = { deleteIndex = -1 }) {
-                            Text(text = DELETE_CANCEL)
-                        }
-                    },
-                )
-            }
+            // 删除确认不再走弹窗：长按进入编辑模式 → 卡片中心垃圾桶 → 再按确定键直接删除
+            // （原版 `pp` case 14 L361-372：`history.delete()` + 从列表移除，全程没有 Dialog）。
         }
     }
 }
@@ -453,10 +489,13 @@ private fun PosterContent(
     listState: LazyListState,
     resumeFocus: FocusRequester,
     pendingFocus: Int,
+    isEditMode: Boolean,
     onFocusConsumed: () -> Unit,
     onCardFocused: (Int) -> Unit,
     onCardClick: (History) -> Unit,
-    onCardLongClick: (Int) -> Unit,
+    onEnterEditMode: () -> Unit,
+    onConfirmDelete: (Int) -> Unit,
+    onExitEditMode: () -> Unit,
     onCardUp: () -> Unit,
     onResumeClick: () -> Unit,
     onResumeDown: () -> Unit,
@@ -480,10 +519,13 @@ private fun PosterContent(
             state = state,
             listState = listState,
             pendingFocus = pendingFocus,
+            isEditMode = isEditMode,
             onFocusConsumed = onFocusConsumed,
             onCardFocused = onCardFocused,
             onCardClick = onCardClick,
-            onCardLongClick = onCardLongClick,
+            onEnterEditMode = onEnterEditMode,
+            onConfirmDelete = onConfirmDelete,
+            onExitEditMode = onExitEditMode,
             onCardUp = onCardUp,
         )
     }
@@ -767,10 +809,13 @@ private fun PosterRow(
     state: HistoryUiState,
     listState: LazyListState,
     pendingFocus: Int,
+    isEditMode: Boolean,
     onFocusConsumed: () -> Unit,
     onCardFocused: (Int) -> Unit,
     onCardClick: (History) -> Unit,
-    onCardLongClick: (Int) -> Unit,
+    onEnterEditMode: () -> Unit,
+    onConfirmDelete: (Int) -> Unit,
+    onExitEditMode: () -> Unit,
     onCardUp: () -> Unit,
 ) {
     Box(modifier = Modifier.fillMaxWidth().height(POSTER_ROW_HEIGHT)) {
@@ -798,10 +843,13 @@ private fun PosterRow(
                         item = item,
                         index = index,
                         pendingFocus = pendingFocus,
+                        isEditMode = isEditMode,
                         onFocusConsumed = onFocusConsumed,
                         onFocused = onCardFocused,
                         onClick = { onCardClick(item) },
-                        onLongClick = { onCardLongClick(index) },
+                        onEnterEditMode = onEnterEditMode,
+                        onConfirmDelete = { onConfirmDelete(index) },
+                        onExitEditMode = onExitEditMode,
                         onUp = onCardUp,
                     )
                 }
@@ -818,20 +866,31 @@ private fun PosterRow(
  * - `image` → [HeroPosterCard.imageUrl]（`j71.e` 加载，这里由组件内 Glide 负责）；
  * - `siteTag` + `siteGradient` → [HeroPosterCard.siteTag]（`s11` L90-118，站点名为空时两者都隐藏）；
  * - `tmdbTag` → [HeroPosterCard.tmdbTag]（`s11.b(history)`，见 [HistoryCardTags]）；
- * - `delete` 遮罩 → 不复刻（编辑模式不在本次范围，见「未实现清单」）。
+ * - `delete` 遮罩 → [HeroPosterCard.isEditMode]（`s11` L130-131 + `adapter_history_poster.xml` L64-76）。
+ *
+ * **长按必须手写按键**：`HeroPosterCard` 是 View（`FrameLayout`），没有 Compose 的 `Modifier`，
+ * 所以这里用 `setOnKeyListener` 手动接 `DPAD_CENTER` 的 ACTION_DOWN / ACTION_UP + 500ms 计时，
+ * 不用 `combinedClickable`，也不用 `setOnLongClickListener`（遥控器长按不走 View 的 long-click 计时）。
  */
 @Composable
 private fun HistoryCard(
     item: History,
     index: Int,
     pendingFocus: Int,
+    isEditMode: Boolean,
     onFocusConsumed: () -> Unit,
     onFocused: (Int) -> Unit,
     onClick: () -> Unit,
-    onLongClick: () -> Unit,
+    onEnterEditMode: () -> Unit,
+    onConfirmDelete: () -> Unit,
+    onExitEditMode: () -> Unit,
     onUp: () -> Unit,
 ) {
     val cardRef = remember { mutableStateOf<HeroPosterCard?>(null) }
+    val keyScope = rememberCoroutineScope()
+    // 长按计时器：DOWN 起 500ms Job，UP 取消。`fired` 记录本轮是否已经进了编辑模式，
+    // 这样「长按松手」不会被同一轮的 UP 误判成「编辑态单击删除」。
+    val longPress = remember { LongPressState() }
 
     AndroidView(
         modifier = Modifier.fillMaxSize(),
@@ -851,21 +910,55 @@ private fun HistoryCard(
             // 历史卡没有备注节点（`adapter_history_poster.xml` 无 bottomTag），保持隐藏。
             card.bottomStartTag = ""
             card.topStartTag = ""
+
+            // 编辑态遮罩：原版是适配器级标志，编辑态下所有卡片一起显示。
+            if (card.isEditMode != isEditMode) card.isEditMode = isEditMode
+            // 触屏点遮罩 = 删除；遥控器确定键走下面的 OnKeyListener。
+            card.onDeleteClick = onConfirmDelete
+
             card.setOnFocusChangeListener { _, hasFocus ->
                 if (hasFocus) onFocused(index)
             }
-            card.setOnClickListener { onClick() }
-            card.setOnLongClickListener {
-                onLongClick()
-                true
+            card.setOnClickListener {
+                if (isEditMode) onConfirmDelete() else onClick()
             }
-            card.setOnKeyListener { _, keyCode, event ->
-                // ↑ → btnResume（XML `btnResume.nextFocusDown = posterRecycler` 的反向）。
-                if (event.action == KeyEvent.ACTION_DOWN && keyCode == KeyEvent.KEYCODE_DPAD_UP) {
-                    onUp()
-                    true
-                } else {
-                    false
+            card.setOnKeyListener { view, keyCode, event ->
+                when (keyCode) {
+                    KeyEvent.KEYCODE_DPAD_CENTER,
+                    KeyEvent.KEYCODE_ENTER,
+                    KeyEvent.KEYCODE_NUMPAD_ENTER -> handleCenterKey(
+                        view = view,
+                        event = event,
+                        isEditMode = isEditMode,
+                        longPress = longPress,
+                        scope = keyScope,
+                        onEnterEditMode = onEnterEditMode,
+                        onConfirmDelete = onConfirmDelete,
+                        onClick = onClick,
+                    )
+
+                    // ↑ → btnResume（XML `btnResume.nextFocusDown = posterRecycler` 的反向）。
+                    // 编辑态不跳走：焦点离开卡片就按不到删除了。
+                    KeyEvent.KEYCODE_DPAD_UP -> {
+                        if (event.action == KeyEvent.ACTION_DOWN) {
+                            if (!isEditMode) onUp()
+                            true
+                        } else {
+                            false
+                        }
+                    }
+
+                    // 返回键退出编辑模式（焦点在卡片上时优先走这里）。
+                    KeyEvent.KEYCODE_BACK -> {
+                        if (isEditMode && event.action == KeyEvent.ACTION_DOWN) {
+                            onExitEditMode()
+                            true
+                        } else {
+                            false
+                        }
+                    }
+
+                    else -> false
                 }
             }
         },
@@ -879,6 +972,63 @@ private fun HistoryCard(
             if (card.requestFocus()) onFocusConsumed()
         }
     }
+}
+
+/**
+ * 确定键（遥控器 OK）的 DOWN / UP 分流，复刻原版「长按进编辑模式 → 再按一次才删除」。
+ *
+ * - **DOWN**：普通态起 500ms 长按计时（`repeatCount > 0` 不重置）；编辑态不再计时。
+ * - **UP**：取消计时。本轮已经触发长按 → 什么都不做（松手不删除）；
+ *   编辑态短按 → [onConfirmDelete]；普通态短按 → [onClick]。
+ *
+ * 返回 `true` 表示消费事件，避免 View 再把 DPAD_CENTER 当成普通 click（否则会同时触发续播）。
+ */
+private fun handleCenterKey(
+    view: View,
+    event: KeyEvent,
+    isEditMode: Boolean,
+    longPress: LongPressState,
+    scope: CoroutineScope,
+    onEnterEditMode: () -> Unit,
+    onConfirmDelete: () -> Unit,
+    onClick: () -> Unit,
+): Boolean = when (event.action) {
+    KeyEvent.ACTION_DOWN -> {
+        if (event.repeatCount == 0 && !isEditMode) {
+            longPress.job?.cancel()
+            longPress.fired = false
+            longPress.job = scope.launch {
+                delay(LONG_PRESS_EDIT_MS)
+                longPress.fired = true
+                onEnterEditMode()
+                // 遮罩出现后焦点可能被系统抢走，拉回当前卡片。
+                view.post { view.requestFocus() }
+            }
+        }
+        true
+    }
+
+    KeyEvent.ACTION_UP -> {
+        longPress.job?.cancel()
+        longPress.job = null
+        val fired = longPress.fired
+        longPress.fired = false
+        when {
+            // 长按刚进编辑模式：松手不删除，等下一次确定键。
+            fired -> Unit
+            isEditMode -> onConfirmDelete()
+            else -> onClick()
+        }
+        true
+    }
+
+    else -> false
+}
+
+/** 长按计时的可变状态：必须 `remember` 住，否则重组会丢掉正在跑的 [Job]。 */
+private class LongPressState {
+    var job: Job? = null
+    var fired: Boolean = false
 }
 
 // ---------------------------------------------------------------------------
@@ -930,12 +1080,19 @@ private fun Context.findActivity(): Activity? {
     }
 }
 
-/** 删除确认框文案（建议值，未在原版资源里找到对应条目 → 待确认 #8）。 */
-private const val DELETE_TITLE = "删除记录"
-private const val DELETE_CONFIRM = "删除"
-private const val DELETE_CANCEL = "取消"
+/** 「查看详情」排查日志：`adb logcat -s HistoryDebug`。 */
+private const val LOG_TAG_DETAIL = "HistoryDebug"
 
-private fun deleteMessage(vodName: String): String = "确定删除《$vodName》的观看记录？"
+/** 编辑模式日志：`adb logcat -s HistoryEdit`。 */
+private const val LOG_TAG_EDIT = "HistoryEdit"
+
+/**
+ * 长按进编辑模式的判定时长：500ms。
+ *
+ * 遥控器上不能用 `ViewConfiguration.getLongPressTimeout()`（那是触屏语义，D-pad 的 DOWN/UP
+ * 不经过 `View` 的 long-click 计时），所以这里显式写死，DOWN 起计时、UP 取消。
+ */
+private const val LONG_PRESS_EDIT_MS = 500L
 
 // ---------------------------------------------------------------------------
 // 尺寸 / 颜色 / 时长常量（全部标注 ref_docs 出处）

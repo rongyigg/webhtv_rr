@@ -41,7 +41,8 @@ import kotlin.math.roundToInt
  *    （**与首页 `POSTER_FOCUS_BORDER = 2.dp` + `HeroAccentColor = Color(0xFFFF0000)` 完全一致**），
  *    圆角同为 8dp，**只画在 120×180 的海报区**，绝不包住下方剧名，见 [drawFocusRing]。
  *
- * 对外接口只有四个内容字段：[title]、[imageUrl]、[topStartTag]、[bottomStartTag]。
+ * 对外接口只有四个内容字段：[title]、[imageUrl]、[topStartTag]、[bottomStartTag]，
+ * 外加历史页的两个可选开关：[siteTag]、[tmdbTag]，以及编辑模式的 [isEditMode]、[onDeleteClick]。
  * 尺寸 / 圆角 / 描边没有任何 setter，构造后不可改。
  */
 class HeroPosterCard @JvmOverloads constructor(
@@ -50,6 +51,8 @@ class HeroPosterCard @JvmOverloads constructor(
     defStyleAttr: Int = 0,
     siteTag: String? = null,
     tmdbTag: Boolean = false,
+    isEditMode: Boolean = false,
+    onDeleteClick: (() -> Unit)? = null,
 ) : FrameLayout(context, attrs, defStyleAttr) {
 
     /** 剧名：16sp 白色、单行省略、居中、上下 6dp 内边距，落在 34dp 的底部文字区。 */
@@ -258,6 +261,45 @@ class HeroPosterCard @JvmOverloads constructor(
     }
 
     /**
+     * 编辑模式遮罩（`ref_docs/adapter_history_poster.xml` L64-76 的 `delete` 层）。
+     *
+     * 原版是 `ShapeableImageView` + `android:background="@color/black_50"` + `ic_vod_delete`
+     * + `scaleType="center"`，四角 `Vod.Grid.Large`（8dp）。这里用 `GradientDrawable` 画 8dp 圆角底
+     * （与 [cardBackground] 同一条渲染路径，电视端硬件加速也生效），图标是 56dp 的白色垃圾桶。
+     */
+    private val deleteOverlay: ImageView = ImageView(context).apply {
+        background = GradientDrawable().apply {
+            shape = GradientDrawable.RECTANGLE
+            cornerRadius = dp(CORNER_DP).toFloat()
+            setColor(ContextCompat.getColor(context, R.color.black_50))
+        }
+        setImageResource(R.drawable.ic_vod_delete)
+        scaleType = ImageView.ScaleType.CENTER
+        // 不能抢焦点：编辑态必须让卡片本身继续持有焦点，确定键才能落到删除分支。
+        isFocusable = false
+        isClickable = true
+        visibility = View.GONE
+    }
+
+    /**
+     * 编辑模式：`true` 时海报中心出现「半透明黑底 + 白色垃圾桶」遮罩。
+     *
+     * 原版是适配器级标志（`s11.java` L27 `boolean i` + `o11.m0()` L383-395 `notifyItemRangeChanged(0, size)`），
+     * 即编辑态下**所有**卡片一起显示遮罩，不是只有被长按的那一张。
+     */
+    var isEditMode: Boolean = isEditMode
+        set(value) {
+            field = value
+            applyEditMode()
+        }
+
+    /**
+     * 遮罩点击回调（触屏用）。遥控器确定键的长按 / 短按由调用方的 `setOnKeyListener` 处理，
+     * 组件本身不接管按键，避免把「进入编辑模式」和「删除」两个语义耦合进卡片。
+     */
+    var onDeleteClick: (() -> Unit)? = onDeleteClick
+
+    /**
      * 海报区容器：120 × 180，**普通 FrameLayout，不做任何裁剪**。
      *
      * 圆角由里面的 [image]（`ShapeableImageView`）自己绘制，标签也放在这一层；
@@ -340,6 +382,12 @@ class HeroPosterCard @JvmOverloads constructor(
                 setMargins(0, dp(TMDB_TAG_MARGIN_DP), dp(TMDB_TAG_MARGIN_DP), 0)
             },
         )
+        // 编辑态遮罩：铺满 120×180 海报区，最后添加 → 盖住图片与所有角标
+        // （`adapter_history_poster.xml` L64-76 的 `delete` 层同样在 imageWrapper 之后）。
+        posterFrame.addView(
+            deleteOverlay,
+            LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT),
+        )
 
         // 剧名区：34dp，紧贴海报下方，高度写死，不吃 weight、不吃 wrap_content。
         addView(
@@ -350,9 +398,17 @@ class HeroPosterCard @JvmOverloads constructor(
             },
         )
 
-        // 构造参数（siteTag / tmdbTag）不走 setter，这里补一次初始状态。
+        // 构造参数（siteTag / tmdbTag / isEditMode）不走 setter，这里补一次初始状态。
         applySiteTag()
         applyTmdbTag()
+        applyEditMode()
+    }
+
+    /** 编辑模式开关：只切遮罩可见性，尺寸 / 圆角 / 焦点框一律不动。 */
+    private fun applyEditMode() {
+        deleteOverlay.visibility = if (isEditMode) View.VISIBLE else View.GONE
+        // 触屏点遮罩 = 删除（遥控器确定键由调用方 OnKeyListener 处理）。
+        deleteOverlay.setOnClickListener { onDeleteClick?.invoke() }
     }
 
     /** 站点标签与渐变同进同出（`s11.java` L91-98：站点名为空时两者都隐藏）。 */

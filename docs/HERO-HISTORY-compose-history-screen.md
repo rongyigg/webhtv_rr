@@ -57,7 +57,7 @@
 | `tmdbTag` L28-43 | 5sp bold 白「TMDB」/ `bg_tmdb_tag`（`#99000000` + 3dp）/ paddingStart/End 3dp / paddingBottom 1dp / margin 4dp / gone | 本次新增 `tmdbTag: Boolean` ✅ |
 | `siteGradient` L44-49 | 96×96 / `start|top` / gone | 本次新增（`GradientDrawable` TL_BR，仅左上 8dp 圆角）✅ |
 | `siteTag` L50-62 | 10sp bold 白 / margin 4dp / shadow `@color/black` r6 / gone | 本次新增 `siteTag: String?` ✅ |
-| `delete` 遮罩 L64-76 | `black_50` + `ic_vod_delete`，编辑态才显示 | **不复刻**（见「未实现清单」） |
+| `delete` 遮罩 L64-76 | `black_50` + `ic_vod_delete`，编辑态才显示 | `HeroPosterCard.isEditMode`：8dp 圆角 `black_50` + 居中 56dp `ic_vod_delete`（本次新增）✅ |
 | `name` L77-89 | 13sp `#ccffffff` / marginTop 8dp / ellipsize marquee / 居中 | 组件既有：**16sp** + 34dp 文字区 + `basicMarquee`（差异见 §5） |
 
 ---
@@ -75,13 +75,14 @@
 | `q0(i)`（背景/预热） | `o11` L513-555 | `HeroBackdrop`（Coil）+ `HeroImagePrefetch` |
 | `k0(i)`（±2 窗口） | `o11` L356-368 | `prefetch(index)`（±2） |
 | `pp` case 14（点击） | `pp` L355-390 | `openResume()` / `openDetail()` 三步分支 |
-| `pp` case 14（编辑态删除） | `pp` L361-372 | `deleteAt(index)`（长按触发，非编辑态） |
-| `g20` case 2（btnResume） | `g20` L104-119 | `openDetail()` |
+| `pp` case 14（编辑态删除） | `pp` L361-372 | `confirmDelete(index)`：编辑态下按确定键 → `deleteAt(index)`（假数据模式直接内存移除） |
+| `g20` case 2（btnResume） | `g20` L104-119 | `openDetail(activity, renderState.selectedItem)` |
 | `m11` case 1（删除后选中回退） | `m11` L39 | `index.coerceAtMost(remaining.size - 1)` |
 | `onRefreshEvent`（`zj2.a==3`） | `o11` L413-455 | `HeroHistoryActivity.onRefreshEvent` → `reload()` |
 | `H()` 焦点策略 0 + 缩放 1.08 | `o11` L173-174 | `LazyRow` + `scrollToItem(index)`；焦点项 `scale 1.08` |
 | `c0()` 长按 TMDB 匹配 | `o11` L248-294 | **不复刻** |
-| `m0()` 编辑模式 | `o11` L383-395 | **不复刻** |
+| `m0()` 编辑模式 | `o11` L383-395 | `isEditMode`（全局）+ `HeroPosterCard.isEditMode` 遮罩；长按确定键 500ms 进入，BACK 退出 |
+| `b11` 卡片长按（触屏） | `s11` L122 | **不复刻**（遥控器长按走 `OnKeyListener`；触屏长按不再进编辑态） |
 | `m11` case 9 站点备注队列 | `m11` | **不复刻** |
 
 ---
@@ -139,30 +140,50 @@
 | 全仓库 `HeroPosterCard(` 调用点只有 2 处：`ChangeSourceDialog.kt:252`（`HeroPosterCard(parent.context)`）与本次新增 `HistoryScreen.kt` | 唯一既有调用方用的是 1 参构造，走默认值 |
 | 默认 `siteTag = null` → `applySiteTag()` 令 `siteGradient` 与 `siteTagView` 都 `GONE` | 首页 / 搜索 / 换源的卡片渲染与改动前完全一致 |
 | 默认 `tmdbTag = false` → `tmdbTagView` `GONE` | 同上 |
+| 默认 `isEditMode = false` → `deleteOverlay` `GONE`（`applyEditMode()` 在 `init` 末尾同步） | 同上 |
+| 默认 `onDeleteClick = null` → 遮罩点击是空操作 | 同上 |
 | 新增子 View 只 `addView` 到 `posterFrame`（120×180 内），不改 `onMeasure` / `draw` / `drawFocusRing` / `title` / `imageUrl` / `topStartTag` / `bottomStartTag` | 尺寸、圆角、焦点红框、文字区逻辑零改动 |
 | `topStartTag`（13sp + `shape_vod_site`）与 `siteTag`（10sp + 渐变）互不影响、可同时存在，但历史页只设置 `siteTag`，其它页面只设置 `topStartTag` | 不会出现双标签叠加 |
 
 ---
 
-## 6. 删除确认框实现说明
+## 6. 编辑模式删除说明（无弹窗）
+
+> 本次已**移除**原来的 `AlertDialog` 删除确认：原版 `pp` case 14 L361-372 是「编辑态下直接 `history.delete()` + 从列表移除」，全程没有弹窗。
+
+### 6.1 按键时序（`HeroPosterCard` 是 View，没有 Compose `Modifier`）
+
+`HeroPosterCard` 是 `FrameLayout`，所以长按判定写在 `HistoryCard` 的 `setOnKeyListener` 里，
+手动接 `KEYCODE_DPAD_CENTER` / `KEYCODE_ENTER` / `KEYCODE_NUMPAD_ENTER`：
+
+| 事件 | 行为 |
+| --- | --- |
+| `ACTION_DOWN`（`repeatCount == 0`，非编辑态） | 起 500ms `Job`（`delay`），到点 `fired = true` + `onEnterEditMode()` + `view.requestFocus()` |
+| `ACTION_DOWN`（编辑态） | 不重新计时 |
+| `ACTION_UP`（本轮已触发长按） | 取消 Job，**不删除**（松手不消失、也不误删） |
+| `ACTION_UP`（编辑态短按） | `confirmDelete(index)` |
+| `ACTION_UP`（普通态短按） | `onClick()` → 续播 |
+| `KEYCODE_BACK`（编辑态） | `onExitEditMode()`，仅退出不删除 |
+| `KEYCODE_DPAD_UP`（编辑态） | 消费掉，焦点不离开卡片 |
+
+`OnKeyListener` 对 DOWN / UP 都返回 `true`，`View` 不会再把它当成普通 click（否则会同时触发续播）。
+**没有**使用 `combinedClickable`，也**没有**使用 `setOnLongClickListener`。
+
+### 6.2 遮罩与删除
 
 | 项 | 实现 |
 | --- | --- |
-| 触发 | `HeroPosterCard.setOnLongClickListener` → `deleteIndex = index` → 显示 `AlertDialog` |
-| 标题 | 「删除记录」 |
-| 内容 | 「确定删除《{vodName}》的观看记录？」 |
-| 确认按钮 | 「删除」→ `viewModel.deleteAt(index)` |
-| 取消按钮 | 「取消」→ 仅关闭对话框 |
-| 删除动作 | `History.delete()`（bean 自身方法，`History.java` L1177）在 `Task.execute` 中执行 |
+| 触发 | 长按确定键 500ms → `isEditMode = true` |
+| 遮罩 | `HeroPosterCard.isEditMode` → 120×180 海报区叠加 8dp 圆角 `black_50` + 居中 56dp `ic_vod_delete` |
+| 显示范围 | **所有卡片**（原版 `s11.java` L119 `setVisibility(s11Var.i ? 0 : 8)` 读的是适配器级标志 `i`，`o11.m0()` 用 `notifyItemRangeChanged(0, size)` 刷新全部） |
+| 删除动作 | 编辑态按确定键 → `viewModel.deleteAt(index)` → `History.delete()`（bean 自身方法，`History.java` L1177）在 `Task.execute` 中执行 |
 | 列表更新 | 主线程移除该项：`state.items - index`，同步 `empty` / `loaded` |
 | 选中回退 | `select(index.coerceAtMost(remaining.size - 1))`（同 `m11` case 1 L39 的公式） |
 | 空列表 | `clearSelection()` + 显示空态（`posterContent` 整体隐藏，与 `ProgressLayout.EMPTY` 一致） |
 | 焦点 | 删除后 `pendingFocus = state.selectedIndex`，等新卡片挂到窗口再 `requestFocus()` |
-| 卡片遮罩 | **不叠加**（`HeroPosterCard` 没有删除遮罩槽位，且本次禁止改造组件） |
+| 触屏 | 编辑态点遮罩（`HeroPosterCard.onDeleteClick`）= 删除；触屏长按不再进入编辑态（`b11` 未复刻） |
 
-> 文案为建议值：`ref_docs` 的 `strings.xml` 是第三方库语言包，未收录删除单条历史的文案；
-> 本仓库 `dialog_delete_record` / `dialog_delete_history` 只存在于 flavor 资源且语义是「删除全部记录」，
-> 因此不复用，改用文件内常量并列入待确认 #8。
+`ic_vod_delete.xml` 本仓库原本缺失，已按 `ref_docs/ic_vod_delete.xml` 逐字节新增（56dp、白色）。
 
 ---
 
@@ -176,7 +197,7 @@
 | 剧名位置 | 固定 34dp 文字区、上下 6dp、居中 | marginTop 8dp、居中、marquee | 沿用组件 |
 | 左上标签 | `topStartTag` 13sp + `shape_vod_site` | `siteTag` 10sp + 96×96 渐变 | 新增 `siteTag`，首页不设置 |
 | 右上角标 | 无 | `tmdbTag` 5sp「TMDB」+ `#99000000` | 新增 `tmdbTag` |
-| 删除遮罩 | 无 | `delete`（`black_50` + `ic_vod_delete`） | 不复刻 |
+| 删除遮罩 | 无 | `delete`（`black_50` + `ic_vod_delete`） | 已复刻：`isEditMode` 时叠加（默认关闭） |
 | 焦点 | 2dp `#FFFF0000` 只包海报 | `selector_vod` → `shape_vod_focused`（值未知） | 沿用组件 2dp `#FFFF0000`（待确认 #4） |
 | 行内缩放 | 无 | `mm3.f(recyclerView, 1.08f)` | 焦点项 `scale 1.08` |
 
@@ -193,7 +214,7 @@
 | 5 | `view_empty.xml` 的空态图标与文案 | 复用本仓库 `view_empty.xml`（Lottie 200×224 + `@string/error_empty`） | `HistoryScreen.HistoryEmptyState` |
 | 6 | `History.get()` 的排序规则 | 直接用 `History.getForDisplay()`（已含展示排序），Compose 侧不重排 | `HistoryViewModel.loadInternal` |
 | 7 | `heroDescText` 的 `lineSpacingExtra="3dp"` 在 Compose 无对应属性 | `lineHeight = 18.sp` 近似；该行恒空不会绘制 | `HistoryScreen.HERO_DESC_LINE_HEIGHT` |
-| 8 | 删除确认框文案 | 「删除记录 / 确定删除《X》的观看记录？/ 删除 / 取消」为建议值 | `HistoryScreen` 文件内常量 |
+| 8 | ~~删除确认框文案~~ | **已失效**：删除确认框整段移除，不再有弹窗文案 | — |
 | 9 | `tmdbTag` 可见性 | 原版 `s11.b` = `gd3.t` + (`gd3.z` 或 `gd3.p`)；本工程近似为「剧名 + 海报 + 背景都非空」 | `HistoryViewModel.HistoryCardTags` |
 | 10 | 空列表时的默认焦点 | 规格写「列表空 → 焦点给 btnResume」，但原版 `ProgressLayout.EMPTY` 会把 `posterContent`（含 btnResume）整体隐藏，二者冲突；本次按原版隐藏内容、空态无焦点 | `HistoryScreen` 空态分支 |
 
@@ -207,7 +228,7 @@
 ## 9. 未实现清单
 
 1. **长按触发 TMDB 匹配**（`o11.c0()` L248-294 → `pc3.i0`）：不复刻。
-2. **`KEYCODE_MENU` 编辑模式**（`o11.m0()` L383-395）与卡片删除遮罩（`adapter_history_poster.xml` `delete` L64-76）：不复刻。
+2. **`KEYCODE_MENU` 切换编辑模式**（`o11.c0()` L252-255 `m0(!g0)`）：不复刻；编辑模式改由「长按确定键 500ms」进入、BACK 退出（卡片遮罩本身已实现）。
 3. **`m11` case 9 站点备注队列**（`o11.l0()` / `u0` / `t0`）：不复刻。
 4. **旧版网格 `HistoryActivity`**（leanback/mobile 源集）：不做，只做 `o11` 对应页。
 5. **`gd3.h(...)` 元数据写入 / `je2.e(...)` 图片下载缓存**：本工程无等价 TMDB 接口，改为纯 Coil 加载 + 预热。
@@ -221,9 +242,12 @@
 
 | 检查 | 结果 |
 | --- | --- |
-| `git status --short` 只含本文档声明的路径 | ✅（4 个代码/资源文件 + 1 个文档） |
+| `git status --short` 只含本文档声明的路径 | ✅（3 个代码/资源文件 + 1 个文档） |
 | 所有 dp / sp / 颜色 / 时长均有 `ref_docs` 出处或标注待确认 | ✅ |
 | 卡片未内联重写、只 `import` 全局 `HeroPosterCard` | ✅ |
 | 未调用/修改被禁文件（PlayerManager、PlaybackActivity、catvod、`ds3`、`Config`、`History`） | ✅ |
 | 点击分支未跳过「Config 判空 → 切源」前两步 | ✅（`HistoryViewModel.open`） |
-| **编译** | ❌ 按任务要求未执行，存在未验证点：Compose 焦点在 `AndroidView` 子 View 上的接管、`LazyRow` 对 1.08 缩放的裁剪行为、Coil `SingletonImageLoader` 预热调用 |
+| 无 `AlertDialog` / `TextButton` / 任何弹窗删除确认 | ✅（`grep` 结果 0） |
+| 无 `combinedClickable` / `setOnLongClickListener` 处理遥控器长按 | ✅（长按在 `setOnKeyListener` 里手写 DOWN/UP + 500ms `Job`） |
+| 「查看详情」显式传 `renderState.selectedItem` 并打 `Log.e("HistoryDebug", …)` | ✅（`openDetail(activity)` 的默认参数取 ViewModel 选中项，假数据模式下为空 → 会静默 return） |
+| **编译** | ❌ 按任务要求未执行，存在未验证点：Compose 焦点在 `AndroidView` 子 View 上的接管、`LazyRow` 对 1.08 缩放的裁剪行为、Coil `SingletonImageLoader` 预热调用、`KEYCODE_BACK` 是否先到 `OnKeyListener` |
