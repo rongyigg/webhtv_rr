@@ -104,7 +104,17 @@ import kotlin.math.min
  * `docs/HERO-HISTORY-compose-history-screen.md` 的「待确认清单」，代码里保留占位常量。
  */
 @Composable
-fun HistoryScreen(viewModel: HistoryViewModel, modifier: Modifier = Modifier) {
+fun HistoryScreen(
+    viewModel: HistoryViewModel,
+    modifier: Modifier = Modifier,
+    /**
+     * Mock 开关：`true` 时允许在真实历史为空的情况下注入 [MockHistory]。
+     *
+     * 默认 `false` → 永远走真实数据。真实历史非空时即使为 `true` 也仍显示真实数据。
+     * 由 `HeroHistoryActivity` 从 Intent extra 读入（缺省取 `BuildConfig.DEBUG`）。
+     */
+    forceMock: Boolean = false,
+) {
     val state = viewModel.state
     val context = LocalContext.current
 
@@ -121,7 +131,7 @@ fun HistoryScreen(viewModel: HistoryViewModel, modifier: Modifier = Modifier) {
     val contentAlpha = remember { Animatable(0f) }
 
     // 首次装载（对应 `o11.a0()` + `m11` case 3）。
-    LaunchedEffect(Unit) { viewModel.load() }
+    LaunchedEffect(forceMock) { viewModel.load(forceMock) }
 
     // 数据到达：内容 alpha 0→1，100ms（对应 `posterContent` 从 gone 到可见的淡入）。
     LaunchedEffect(state.loaded) {
