@@ -82,7 +82,6 @@ jobs:
 
       - name: Install Android packages
         run: |
-          # API 37 is not published in sdkmanager's stable channel; install the platform archive directly.
           sdkmanager "platform-tools" "platforms;android-28" "build-tools;36.0.0"
           curl -fsSL -o /tmp/platform-37.zip https://dl.google.com/android/repository/platform-37.0_r01.zip
           rm -rf /tmp/platform-37 "$ANDROID_HOME/platforms/android-37"
@@ -182,11 +181,13 @@ jobs:
           fi
           mkdir -p app/signing
           printf '%s' "$KS_BASE64" | base64 --decode > app/signing/release.jks
-          export ORG_GRADLE_PROJECT_RELEASE_STORE_FILE="$GITHUB_WORKSPACE/app/signing/release.jks"
-          export ORG_GRADLE_PROJECT_RELEASE_STORE_PASSWORD="$STORE_PASSWORD"
-          export ORG_GRADLE_PROJECT_RELEASE_KEY_ALIAS="$ALIAS"
-          export ORG_GRADLE_PROJECT_RELEASE_KEY_PASSWORD="$KEY_PASS"
-          echo "Release signing configured via Gradle properties"
+          {
+            echo "ORG_GRADLE_PROJECT_RELEASE_STORE_FILE=$GITHUB_WORKSPACE/app/signing/release.jks"
+            echo "ORG_GRADLE_PROJECT_RELEASE_STORE_PASSWORD=$STORE_PASSWORD"
+            echo "ORG_GRADLE_PROJECT_RELEASE_KEY_ALIAS=$ALIAS"
+            echo "ORG_GRADLE_PROJECT_RELEASE_KEY_PASSWORD=$KEY_PASS"
+          } >> "$GITHUB_ENV"
+          echo "Release signing configured via GITHUB_ENV"
 
       - name: Build release APKs
         env:
@@ -196,9 +197,12 @@ jobs:
           chmod +x ./gradlew
           rm -rf Release/apk
           ./gradlew \
+            clean \
             :app:assembleMobileArmeabi_v7aRelease \
             :app:assembleLeanbackArmeabi_v7aRelease \
-            --no-daemon
+            --no-daemon \
+            --stacktrace \
+            --continue
 
       - name: Collect artifacts
         run: |
@@ -210,7 +214,7 @@ jobs:
       - name: Set up ORAS
         id: oras
         if: ${{ inputs.publish_oci }}
-        uses: oras-project/setup-oras@22ce207df3b08e061f537244349aac6ae1d214f6 # v1
+        uses: oras-project/setup-oras@22ce207df3b08e061f537244349aac6ae1d214f6
         with:
           url: https://github.com/oras-project/oras/releases/download/v1.3.4/oras_1.3.4_linux_amd64.tar.gz
           checksum: f27adb935022d94df8dc77719c322dda592c78a0d57a6f7dcdd8d900b248c454
