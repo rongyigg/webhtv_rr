@@ -217,11 +217,14 @@ private fun HeroHomeScreen(onOpenDetail: (String) -> Unit) {
 
     // Tab 栏的记忆索引：从第一排按“下”或从第三排按“上”进入时，都落回这一项。
     var rememberedTabIndex by remember { mutableIntStateOf(0) }
-    var selectedTabIndex by remember { mutableIntStateOf(0) }
+    // 真正的“选中分类”：**只有确定键能改**，焦点移动一律不改。
+    // 初值 -1 = 用户还没明确选过任何分类（此时海报用第 0 类数据兜底，但 Tab 一律不涂红）。
+    // 焦点态由每个 Tab 自己用 onFocusChanged 局部管理，不落到这个全局状态里。
+    var selectedTabIndex by remember { mutableIntStateOf(-1) }
     var focusedPosterIndex by remember { mutableIntStateOf(0) }
 
     // 换分类时用同一批假数据做轮转，视觉上列表确实换了，但不需要第二套资源。
-    val posters = remember(selectedTabIndex) { postersForTab(selectedTabIndex) }
+    val posters = remember(selectedTabIndex) { postersForTab(selectedTabIndex.coerceAtLeast(0)) }
     val heroPoster = posters.getOrElse(focusedPosterIndex) { posters[0] }
 
     // 任意一排 → 顶栏：默认落在最左侧的第一项（小房子），不记忆上次位置。
@@ -230,10 +233,12 @@ private fun HeroHomeScreen(onOpenDetail: (String) -> Unit) {
     }
 
     // 任意一排 → Tab：落在“记忆中的上一次选中项”，而不是第一项。
+    // 注意：这里只移动焦点，**绝不改 selectedTabIndex**。
+    // 旧实现把「焦点经过的 Tab」也写进选中态，于是焦点一离开，那个 Tab 仍然保持红色 ——
+    // 正是「没有任何焦点却仍有红底」的根因。
     fun focusTab(index: Int = rememberedTabIndex) {
         val target = index.coerceIn(0, HERO_TABS.lastIndex)
         rememberedTabIndex = target
-        selectedTabIndex = target
         scope.launch { tabState.animateScrollToItem(target) }
         if (!requestFocus(tabRequesters, target)) requestFocus(tabRequesters, 0)
     }
@@ -317,12 +322,15 @@ private fun HeroHomeScreen(onOpenDetail: (String) -> Unit) {
             HeroTabBar(
                 state = tabState,
                 requesters = tabRequesters,
+                // -1 = 尚未明确选择任何分类 → 所有 Tab 都不涂红（只有焦点态才红）。
                 selectedIndex = selectedTabIndex,
-                onFocused = { index ->
+                // 焦点只记录“上次停留位置”，不改变分类，也不改变选中态。
+                onFocused = { index -> rememberedTabIndex = index },
+                // 确定键才是「明确被选中」：只有这里会切换分类（红底随之转移）。
+                onConfirm = { index ->
                     rememberedTabIndex = index
                     selectedTabIndex = index
                 },
-                onConfirm = { index -> selectedTabIndex = index },
                 // Tab ↑ 回顶栏、↓ 进海报行：两边都默认落在各自最左侧的第一项。
                 onMoveUp = { focusTopBar() },
                 onMoveDown = { focusPoster() },
@@ -641,10 +649,12 @@ private fun HeroInfoArea(poster: HeroPoster) {
  *
  * 胶囊样式严格对照 `ref_docs/adapter_type.xml` 的 `selector_item_round`，三态严格分离：
  * - focused（无论是否选中）：HeroAccentColor 纯红底 + 纯白字。
- * - 无焦点 + selected：HeroAccentColor 纯红底 + 纯白字。
- * - 无焦点 + 未选中：`Color.Transparent` 全透明底（绝不能出现灰块）+ 60% 白字。
+ * - 无焦点 + selected：HeroAccentColor 纯红底 + 纯白字。**selected 只由确定键产生**，
+ *   焦点经过某个 Tab（包括左右键移动）不会把它置为 selected；
+ *   用户还没按过确定键时 `selectedIndex = -1`，此时整排都没有红底。
+ * - 无焦点 + 未选中：`Color.Transparent` 全透明底（绝不能出现红块 / 灰块）+ 60% 白字。
  * - 形状为胶囊（[HERO_TAB_SHAPE]，13dp 圆角，高度 26dp 时刚好半圆）。
- * 背景不做颜色动画，避免过渡帧出现半透明灰块。
+ * 背景不做颜色动画，避免过渡帧出现半透明色块。
  * 左右键不交给系统焦点搜索，而是显式 [focusTab]，这样横向滚动与选中态永远同步。
  */
 @Composable
@@ -706,14 +716,19 @@ private fun HeroTabChip(
     onMoveRight: () -> Unit,
 ) {
     var focused by remember { mutableStateOf(false) }
-    // 三态严格分离，只有「焦点」或「选中」才允许出现背景色块：
-    //   1. focused                → 红底（HeroAccentColor）+ 纯白字
-    //   2. 无焦点 + selected      → 红底（HeroAccentColor）+ 纯白字
-    //   3. 无焦点 + 未选中        → Color.Transparent（全透明，绝不能有灰块）+ 60% 白字
-    // 这里不做颜色动画：动画会在中间帧留下半透明色块，正是「未选中仍有灰底」的来源。
-    val hasBackground = focused || selected
-    val chipBackground = if (hasBackground) HeroAccentColor else Color.Transparent
-    val chipTextColor = if (hasBackground) Color.White else HERO_TAB_IDLE_TEXT
+    // 背景三态，用 when 显式列出（不留任何隐式默认分支）：
+    //   1. isFocused  → HeroAccentColor 红底
+    //   2. isSelected → HeroAccentColor 红底（只有确定键能置位；焦点经过不会改它）
+    //   3. 其余       → Color.Transparent（完全透明，绝不能有红块 / 灰块）
+    val bgColor = when {
+        focused -> HeroAccentColor
+        selected -> HeroAccentColor
+        else -> Color.Transparent
+    }
+    val chipTextColor = when {
+        focused || selected -> Color.White
+        else -> HERO_TAB_IDLE_TEXT
+    }
     val interaction = remember { MutableInteractionSource() }
 
     Box(
@@ -749,11 +764,13 @@ private fun HeroTabChip(
                     else -> false
                 }
             }
+            // 基础 Box + Text：不是 Material3 的 FilterChip / Button / Surface，
+            // 没有任何自带底色；clickable 传 indication = null，不会残留 ripple 圆圈。
             .clickable(interactionSource = interaction, indication = null, onClick = onConfirm)
             // 高度锁死 26dp + 13dp 圆角 = 完美半圆胶囊；左右 12dp、上下 0dp。
             .height(HERO_TAB_HEIGHT)
             .clip(HERO_TAB_SHAPE)
-            .background(chipBackground)
+            .background(bgColor, HERO_TAB_SHAPE)
             .padding(horizontal = HERO_TAB_H_PADDING, vertical = HERO_TAB_V_PADDING),
         contentAlignment = Alignment.Center,
     ) {
@@ -761,7 +778,7 @@ private fun HeroTabChip(
             text = label,
             color = chipTextColor,
             fontSize = HERO_LABEL_SP.sp,
-            fontWeight = if (hasBackground) FontWeight.Medium else FontWeight.Normal,
+            fontWeight = if (focused || selected) FontWeight.Medium else FontWeight.Normal,
             maxLines = 1,
         )
     }
