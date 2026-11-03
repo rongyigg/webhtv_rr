@@ -511,11 +511,13 @@ private fun HeroTopBarItem(
         )
     } else {
         Column(
-            modifier = itemModifier
-                // 不加左右 padding：顶栏第一项的左边线必须与 Tab / 海报的 24dp 基准线完全重合。
-                .padding(vertical = 4.dp),
+            modifier = itemModifier,
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
+            // 顶部预留与「间距 + 下划线」等高的空白，让 24dp 文字区的中心正好落在
+            // 64dp navBar 的垂直中线上，与小房子同心。
+            // 不用 offset / marginTop / 非对称 padding —— 那些都会把文字整体顶偏。
+            Spacer(modifier = Modifier.height(TOP_BAR_UNDERLINE_RESERVE))
             // 文字项固定 24dp 内容区，字号为第一排专属的 [TOP_BAR_SP] = 16sp，
             // 放大只走 graphicsLayer，不参与布局，下划线不会跳动。
             Box(
@@ -535,12 +537,12 @@ private fun HeroTopBarItem(
                     maxLines = 1,
                 )
             }
-            Spacer(modifier = Modifier.height(6.dp))
+            Spacer(modifier = Modifier.height(TOP_BAR_UNDERLINE_GAP))
             // 焦点态指示器：2dp 高红色短横线（长度固定 26dp，仅淡入淡出，避免文字宽度变化导致抖动）。
             Box(
                 modifier = Modifier
-                    .width(26.dp)
-                    .height(2.dp)
+                    .width(TOP_BAR_UNDERLINE_WIDTH)
+                    .height(TOP_BAR_UNDERLINE_HEIGHT)
                     .alpha(underlineAlpha)
                     .background(HeroAccentColor, RoundedCornerShape(2.dp)),
             )
@@ -637,10 +639,12 @@ private fun HeroInfoArea(poster: HeroPoster) {
  * 分类 Tab 栏（XML `typeRecycler`，L128-141）：
  * - 左右 padding 24dp（L138-139）、`paddingBottom=2dp`（L130）、`layout_marginBottom=12dp`（L137）。
  *
- * 胶囊样式严格对照 `ref_docs/adapter_type.xml` 的 `selector_item_round`：
- * - 选中 / 焦点：HeroAccentColor 纯红底 + 纯白字。
- * - 未选中且未聚焦：**全透明**（Color.Transparent），不能出现任何灰块。
- * - 形状为胶囊（[HERO_TAB_SHAPE]，24dp 圆角，高度不足时自动收成半圆）。
+ * 胶囊样式严格对照 `ref_docs/adapter_type.xml` 的 `selector_item_round`，三态严格分离：
+ * - focused（无论是否选中）：HeroAccentColor 纯红底 + 纯白字。
+ * - 无焦点 + selected：HeroAccentColor 纯红底 + 纯白字。
+ * - 无焦点 + 未选中：`Color.Transparent` 全透明底（绝不能出现灰块）+ 60% 白字。
+ * - 形状为胶囊（[HERO_TAB_SHAPE]，13dp 圆角，高度 26dp 时刚好半圆）。
+ * 背景不做颜色动画，避免过渡帧出现半透明灰块。
  * 左右键不交给系统焦点搜索，而是显式 [focusTab]，这样横向滚动与选中态永远同步。
  */
 @Composable
@@ -702,13 +706,14 @@ private fun HeroTabChip(
     onMoveRight: () -> Unit,
 ) {
     var focused by remember { mutableStateOf(false) }
-    val active = selected || focused
-    // 选中 / 焦点纯红；未选中且未聚焦全透明（不能有灰块），文字一律纯白。
-    val chipBackground by animateColorAsState(
-        targetValue = if (active) HeroAccentColor else HERO_TAB_IDLE_BACKGROUND,
-        animationSpec = tween(durationMillis = 150),
-        label = "tabBackground",
-    )
+    // 三态严格分离，只有「焦点」或「选中」才允许出现背景色块：
+    //   1. focused                → 红底（HeroAccentColor）+ 纯白字
+    //   2. 无焦点 + selected      → 红底（HeroAccentColor）+ 纯白字
+    //   3. 无焦点 + 未选中        → Color.Transparent（全透明，绝不能有灰块）+ 60% 白字
+    // 这里不做颜色动画：动画会在中间帧留下半透明色块，正是「未选中仍有灰底」的来源。
+    val hasBackground = focused || selected
+    val chipBackground = if (hasBackground) HeroAccentColor else Color.Transparent
+    val chipTextColor = if (hasBackground) Color.White else HERO_TAB_IDLE_TEXT
     val interaction = remember { MutableInteractionSource() }
 
     Box(
@@ -754,9 +759,9 @@ private fun HeroTabChip(
     ) {
         Text(
             text = label,
-            color = Color.White,
+            color = chipTextColor,
             fontSize = HERO_LABEL_SP.sp,
-            fontWeight = if (active) FontWeight.Medium else FontWeight.Normal,
+            fontWeight = if (hasBackground) FontWeight.Medium else FontWeight.Normal,
             maxLines = 1,
         )
     }
@@ -1011,6 +1016,11 @@ private val HERO_PADDING = 24.dp
 private val NAV_BAR_HEIGHT = 64.dp          // L207 layout_height（homeBtn 在此高度内 center_vertical）
 private val NAV_ITEMS_START_GAP = 20.dp     // L259 navRecycler layout_marginStart
 private val TOP_BAR_TEXT_BOX = 24.dp        // 文字项固定内容区（16sp 的贴合高度）
+private val TOP_BAR_UNDERLINE_WIDTH = 26.dp // 焦点状态红色短横线长度
+private val TOP_BAR_UNDERLINE_HEIGHT = 2.dp // 焦点状态红色短横线高度
+private val TOP_BAR_UNDERLINE_GAP = 6.dp    // 文字与短横线之间的间距
+// 上方预留 = 间距 + 横线高度，使 24dp 文字区的中心与 64dp navBar 中心重合（与小房子同心）。
+private val TOP_BAR_UNDERLINE_RESERVE = TOP_BAR_UNDERLINE_GAP + TOP_BAR_UNDERLINE_HEIGHT
 private const val TOP_BAR_SP = 16f          // 第一排字号（比第二排 Tab 的 13sp 大一档，形成层级）
 private const val TOP_BAR_FOCUS_SCALE = 1.1f // 焦点态整体放大 1.1 倍（只走 graphicsLayer，不动布局）
 private const val TOP_BAR_ANIM_MS = 150
@@ -1066,7 +1076,9 @@ private val HERO_TAB_HEIGHT = 26.dp         // 胶囊高度，严格 26dp
 private val HERO_TAB_H_PADDING = 12.dp      // 左右 12dp
 private val HERO_TAB_V_PADDING = 0.dp       // 上下 0dp（高度由 HERO_TAB_HEIGHT 锁死）
 private val HERO_TAB_SHAPE = RoundedCornerShape(13.dp) // 13dp = 高度的一半，完美半圆胶囊
-private val HERO_TAB_IDLE_BACKGROUND = Color.Transparent // 未选中 / 未聚焦：全透明，不能出现灰块
+// 未选中且未聚焦的 Tab 只用文字区分：背景恒为 Color.Transparent（直接在 HeroTabChip 里写死，
+// 不再保留背景色常量，避免以后被误用成灰色），文字用 60% 白。
+private val HERO_TAB_IDLE_TEXT = Color.White.copy(alpha = 0.6f)
 
 // ---------------------------------------------------------------------------
 // 海报区 posterArea（L142-191）+ 卡片 adapter_vod_rect（L24-27、L45-57）
