@@ -78,7 +78,9 @@ class HeroPosterCard @JvmOverloads constructor(
     private val cardWidthPx: Int = dp(CARD_WIDTH_DP)
     private val posterHeightPx: Int = dp(POSTER_HEIGHT_DP)
     private val cornerPx: Float = dp(CORNER_DP).toFloat()
-    private val focusStrokePx: Float = dp(FOCUS_STROKE_DP.toFloat())
+    // dp() 返回 Int（画布坐标取整），而描边宽度需要 Float，必须显式转换，
+    // 否则 Kotlin 会推断成 Int 并在 `strokeWidth = focusStrokePx` 处报类型不匹配。
+    private val focusStrokePx: Float = dp(FOCUS_STROKE_DP).toFloat()
 
     private val focusPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
