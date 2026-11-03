@@ -25,14 +25,16 @@ import kotlin.math.roundToInt
  * - 窗口宽 = 屏幕宽 × 0.82（f23 `c0(0.82f)`）；
  * - 窗口高 = min(360dp, 屏幕高 dp × 0.65)（f23 `Math.min(360, Math.round(h / density * 0.65f))`）；
  * - 站点栏横向间距 12dp（f23 `siteRecycler.setHorizontalSpacing(dp(12))`）；
- * - 结果栏横向间距 16dp（f23 `recycler.setHorizontalSpacing(dp(16))`）；
- * - 结果卡获得焦点放大 1.08（f23 `mm3.f(recycler, 1.08f)`）。
+ * - 结果栏横向间距 16dp（f23 `recycler.setHorizontalSpacing(dp(16))`）。
  *
  * 站点标签用 `adapter_source_site`，焦点态用 `selector_source_site_chip_background`：
  * **focused → 红底 #E50914 白字胶囊**，normal / selected → 透明底白字。
  * （侧边栏的行用的是另一套：白底黑字，见 [SourceSidebar]。）
  *
- * 结果卡用 `adapter_source_result`（照搬 `ref_docs/adapter_vod_rect.xml`，120×180 + 13sp 标题）。
+ * 结果卡用 `adapter_source_result`：结构照抄 `ref_docs/adapter_search.xml`
+ * （13sp site / 14sp remark / 16sp name + `ShapeableImageView`），
+ * 尺寸照抄 `adapter_vod_rect.xml` 的 120×180 与 `ks2.java` 的 `dp(34)` 剧名栏。
+ * 焦点白框放在 `@id/imageWrapper` 上，只贴海报、不包剧名。
  *
  * 多选联动：点弹窗内小房子 → [SourceSidebarMode.Multi]，勾选的站点会即时过滤下方结果，
  * 只有被勾选站点的结果才会展示。TODO(数据层对接)：换成真实检索条件。
@@ -237,24 +239,21 @@ internal class ChangeSourceDialog private constructor(
 
         override fun onBindViewHolder(holder: Holder, position: Int) {
             val result = visibleResults[position]
-            // 字段与逆向 adapter_search.xml 一一对应：
-            // name → @id/name（16sp 剧名底板）、remark → @id/remark（14sp 备注）、
-            // site → @id/site（13sp 左上角小标，显示「来源 + 日期」）。
+            // 字段与逆向 adapter_search.xml / ks2.java 一一对应：
+            // name   → @id/name   16sp 剧名底板（ks2 L74 `setText(vod.getName())`）
+            // remark → @id/remark 14sp 集数标签（ks2 L78-79 `setText(vod.getRemarks())`）
+            // site   → @id/site   13sp 站点标签（ks2 L77 `setText(vod.getSiteName())`）
             holder.name.text = result.name
             holder.remark.text = result.remark
-            // 左上角小标：逆向 @id/site 只放站点，这里按需求显示「日期 | 来源」，13sp。
+            // 按需求显示「日期 | 来源」；标签 maxWidth 110dp（< 海报 120dp），单行省略。
             holder.site.text = "${result.date} | ${result.site}"
             // Mock 阶段没有海报：渐变占位 + 剧名首字，证明图片区域的位置与尺寸。
             holder.placeholder.text = result.name.take(1)
             holder.placeholder.visibility = View.VISIBLE
             // TODO(数据层对接)：result.poster 非空时加载真实海报，并把 placeholder 置 GONE。
-            holder.itemView.scaleX = 1f
-            holder.itemView.scaleY = 1f
-            holder.itemView.setOnFocusChangeListener { view, hasFocus ->
-                // ref_docs/f23.java：mm3.f(recycler, 1.08f)，焦点卡片放大 1.08 倍。
-                val scale = if (hasFocus) FOCUS_SCALE else 1f
-                view.animate().scaleX(scale).scaleY(scale).setDuration(FOCUS_ANIM_MS).start()
-            }
+            // 焦点态由 @id/imageWrapper 的 foreground + duplicateParentState 承担：
+            // 白色 1.5dp 描边只贴海报边缘，不包剧名，因此这里不做整体缩放
+            // （整卡 214dp × 1.08 = 231dp 会超出结果区 ~225dp，反而把剧名切掉）。
             holder.itemView.setOnClickListener {
                 onSourceSelected(result)
                 dismiss()
@@ -285,9 +284,6 @@ internal class ChangeSourceDialog private constructor(
         /** f23：`recycler.setHorizontalSpacing(dp(16))`。 */
         private const val RESULT_SPACING_DP = 16
 
-        /** f23：`mm3.f(recycler, 1.08f)`。 */
-        private const val FOCUS_SCALE = 1.08f
-        private const val FOCUS_ANIM_MS = 150L
         private const val DIM_AMOUNT = 0.6f
 
         /** 初始焦点重试：ViewHolder 未布局完成时，焦点会停在 RecyclerView 上，标签就没有红底。 */

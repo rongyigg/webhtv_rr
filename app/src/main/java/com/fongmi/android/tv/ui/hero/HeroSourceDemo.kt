@@ -20,7 +20,9 @@ internal data class HeroSourceEntry(
  * - [name]    → `@id/name`   16sp 剧名（底部底板）
  * - [remark]  → `@id/remark` 14sp 备注（海报内偏下）
  * - [site]    → `@id/site`   来源（海报左上角小标）+ 与 [HeroSourceEntry.site] 同一套取值，用于多选过滤
- * - [date]    → 与 [site] 一起显示在左上角小标里
+ * - [date]    → 与 [site] 一起显示在左上角标签里（`"日期 | 来源"`，13sp、单行省略，宽 ≤ 110dp）。
+ *               注意真值 `adapter_search.xml` 的 `@id/site` 只有 96dp 且只写 `getSiteName()`，
+ *               本工程按需求放宽到 110dp（仍 < 海报 120dp），其余不变。 
  * - [poster]  → 海报地址；为空时卡片走渐变占位 + 剧名首字
  */
 internal data class HeroSourceResult(
