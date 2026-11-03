@@ -31,15 +31,16 @@ import kotlin.math.roundToInt
  * **focused → 红底 #E50914 白字胶囊**，normal / selected → 透明底白字。
  * （侧边栏的行用的是另一套：白底黑字，见 [SourceSidebar]。）
  *
- * 结果卡用 `adapter_source_result`：结构照抄 `ref_docs/adapter_search.xml`
- * （13sp site / 14sp remark / 16sp name + `ShapeableImageView`），
- * 尺寸照抄 `adapter_vod_rect.xml` 的 120×180 与 `ks2.java` 的 `dp(34)` 剧名栏。
- * 焦点白框放在 `@id/imageWrapper` 上，只贴海报、不包剧名。
+ * 结果卡**只允许**用全局唯一组件 [HeroPosterCard]（120dp × 214dp、四角 8dp 全圆、
+ * 1.5dp 红色焦点框只包 120×180 海报、34dp 剧名栏），弹窗内部不再手写任何卡片尺寸。
+ * 卡片内容映射照抄 `ref_docs/adapter_search.xml` / `ks2.java`：
+ * `topStartTag` = `MM-dd | 来源`（13sp）、`bottomStartTag` = 备注（14sp）、`title` = 剧名（16sp）。
  *
  * 多选联动：点弹窗内小房子 → [SourceSidebarMode.Multi]，勾选的站点会即时过滤下方结果，
  * 只有被勾选站点的结果才会展示。TODO(数据层对接)：换成真实检索条件。
  *
- * 组件内零网络、零数据层写入；站点切换后的检索与结果卡写库由调用方实现。
+ * 组件内零数据层写入；站点切换后的检索与结果卡写库由调用方实现。
+ * 海报只在 [HeroPosterCard.imageUrl] 非空时才由组件用 Glide 加载（Mock 阶段恒为空，走渐变占位）。
  * TODO(数据层对接)：站点切换刷新、结果卡确定键写库、海报地址。
  */
 internal class ChangeSourceDialog private constructor(
@@ -238,11 +239,17 @@ internal class ChangeSourceDialog private constructor(
         }
     }
 
+    /**
+     * 结果卡适配器。
+     *
+     * 卡片本体是全局唯一组件 [HeroPosterCard]：尺寸 120×214、四角 8dp 全圆、
+     * 红色 1.5dp 焦点框只包 120×180 海报——**全部写死在组件内部**，
+     * 这里只塞四个内容字段，不允许再 inflate 布局或改宽高。
+     */
     private inner class ResultAdapter : RecyclerView.Adapter<ResultAdapter.Holder>() {
 
         override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): Holder {
-            val view = layoutInflater.inflate(R.layout.adapter_source_result, parent, false)
-            return Holder(view)
+            return Holder(HeroPosterCard(parent.context))
         }
 
         override fun getItemCount(): Int = visibleResults.size
@@ -250,34 +257,22 @@ internal class ChangeSourceDialog private constructor(
         override fun onBindViewHolder(holder: Holder, position: Int) {
             val result = visibleResults[position]
             // 字段与逆向 adapter_search.xml / ks2.java 一一对应：
-            // name   → @id/name   16sp 剧名底板（ks2 L74 `setText(vod.getName())`）
-            // remark → @id/remark 14sp 集数标签（ks2 L78-79 `setText(vod.getRemarks())`）
-            // site   → @id/site   13sp 站点标签（ks2 L77 `setText(vod.getSiteName())`）
-            holder.name.text = result.name
-            holder.remark.text = result.remark
-            // 按需求显示「日期 | 来源」；日期截短成 MM-dd（如 `10-28 | 豆瓣`），
-            // 配合 maxWidth 110dp + 单行省略，标签永远在 120dp 海报的左上角内。
-            holder.site.text = "${shortDate(result.date)} | ${result.site}"
-            // Mock 阶段没有海报：渐变占位 + 剧名首字，证明图片区域的位置与尺寸。
-            holder.placeholder.text = result.name.take(1)
-            holder.placeholder.visibility = View.VISIBLE
-            // TODO(数据层对接)：result.poster 非空时加载真实海报，并把 placeholder 置 GONE。
-            // 焦点态由 @id/imageWrapper 的 foreground + duplicateParentState 承担：
-            // 白色 1.5dp 描边只贴海报边缘，不包剧名，因此这里不做整体缩放
-            // （整卡 214dp × 1.08 = 231dp 会超出结果区 ~225dp，反而把剧名切掉）。
-            holder.itemView.setOnClickListener {
+            // title          → 16sp 剧名（ks2 L74 `setText(vod.getName())`）
+            // bottomStartTag → 14sp 备注（ks2 L78-79 `setText(vod.getRemarks())`）
+            // topStartTag    → 13sp 左上角标签（ks2 L77 `setText(vod.getSiteName())`），
+            //                  本工程按需求显示「日期 | 来源」，日期截短成 MM-dd（如 `10-28 | 豆瓣`），
+            //                  组件内 maxWidth 110dp（< 海报 120dp）+ 单行省略，永远不越出海报。
+            holder.card.title = result.name
+            holder.card.imageUrl = result.poster
+            holder.card.topStartTag = "${shortDate(result.date)} | ${result.site}"
+            holder.card.bottomStartTag = result.remark
+            holder.card.setOnClickListener {
                 onSourceSelected(result)
                 dismiss()
             }
         }
 
-        inner class Holder(view: View) : RecyclerView.ViewHolder(view) {
-            val name: TextView = view.findViewById(R.id.name)
-            val site: TextView = view.findViewById(R.id.site)
-            val remark: TextView = view.findViewById(R.id.remark)
-            val placeholder: TextView = view.findViewById(R.id.placeholder)
-            val image: View = view.findViewById(R.id.image)
-        }
+        inner class Holder(val card: HeroPosterCard) : RecyclerView.ViewHolder(card)
 
         /** `2026-10-28` → `10-28`；不是三段日期（如已经是 `10-28`）就原样返回。 */
         private fun shortDate(date: String): String {
@@ -301,13 +296,16 @@ internal class ChangeSourceDialog private constructor(
         /** f23：`recycler.setHorizontalSpacing(dp(16))`。 */
         private const val RESULT_SPACING_DP = 16
 
-        /** 结果卡整高，写死在 `adapter_source_result.xml`：海报 180dp + 剧名栏 34dp。 */
-        private const val RESULT_CARD_HEIGHT_DP = 214
+        /**
+         * 结果卡整高，**直接取组件常量**，不允许在弹窗里重复写 214：
+         * [HeroPosterCard.CARD_HEIGHT_DP] = 海报 180dp + 剧名栏 34dp。
+         */
+        private const val RESULT_CARD_HEIGHT_DP = HeroPosterCard.CARD_HEIGHT_DP
 
         /** `@id/recycler` 的 paddingTop（4dp）。 */
         private const val RESULT_ROW_PADDING_DP = 4
 
-        /** 结果区最小高度 = 卡片 + 顶部内边距，与 `dialog_source.xml` 的 `minHeight="218dp"` 一致。 */
+        /** 结果区最小高度 = 卡片 214dp + `@id/recycler` 的 paddingTop 4dp = 218dp。 */
         private const val RESULT_ROW_HEIGHT_DP = RESULT_CARD_HEIGHT_DP + RESULT_ROW_PADDING_DP
 
         /** 弹窗其余固定高度：root paddingTop 18 + 头部 40 + 站点栏 40 + 结果标题行 20 + 8。 */

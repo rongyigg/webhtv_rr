@@ -20,7 +20,7 @@
 | --- | --- | --- |
 | `layout/dialog_source.xml` | `ref_docs/dialog_source.xml` | 根 padding 18dp / paddingBottom 0、`shape_dialog_source`、头 32dp、siteLayout 32dp、homeBtn 26dp + 16dp 图标、结果区 3dp 红条 + 13sp 标题 + 16dp 内边距，全部逐字保留 |
 | `layout/adapter_source_site.xml` | `ref_docs/adapter_v2_site.xml` | 14sp + 白字；**根节点即标签本体**（合并原版内外两层，否则 adapter 的 isSelected 落在不画背景的外层）；背景用 `selector_source_site_chip_background`（focused → 红底胶囊） |
-| `layout/adapter_source_result.xml` | `ref_docs/adapter_search.xml` + `ks2.java` + `adapter_vod_rect.xml` | 120dp 宽、海报 120×180（= 宽 × 1.5，`VodRectPresenter` L75）、剧名栏写死 `34dp`、整卡写死 `214dp`（`ks2` L108 `dp(34)` + 海报 180）、`@id/site` 13sp + `shape_vod_site`（`bg_site`：#F44336 α0.7 / mobile `colorErrorContainer` α0.8，左上+右上+右下 8dp，内边距 4dp；`maxWidth` 96dp → **110dp** 以容纳「日期 \| 来源」，仍 < 海报 120dp；日期显示为 `MM-dd`，超长走 `ellipsize=end`）、`@id/remark` 14sp + `shape_vod_remark`（`bg_remark`：#177535 α0.7 / mobile `colorSecondaryContainer` α0.8，右 4dp，内边距 4dp）、`@id/name` 16sp + `black_20` + 下两角 8dp + `padding 6dp`、焦点白框 1.5dp 只包海报（`imageWrapper` foreground + `duplicateParentState`） |
+| `ui/hero/HeroPosterCard.kt`（**全局唯一卡片组件**） | `ref_docs/adapter_search.xml` + `ks2.java` + `adapter_vod_rect.xml` + 用户截图 | 尺寸在组件内部**写死**，外部无 setter：整卡 `120dp × 214dp`、海报 `120×180`（= 宽 × 1.5，`VodRectPresenter` L75）、剧名栏 `34dp`（`ks2` L108 `dp(34)`）。**四角全部 8dp 圆角**（`clipToOutline` + `ViewOutlineProvider.setRoundRect(8dp)`，等价 Compose 的 `Modifier.clip(RoundedCornerShape(8.dp))`；以用户截图为准，视觉规范高于局部 Style 代码）。焦点 = **红色 1.5dp 描边 + 8dp 圆角，只包 120×180 海报区，绝不包剧名**（`dispatchDraw` 画在 `0..width / 0..180dp`）。对外只有四个内容字段：`title`（16sp + `padding 6dp` + 单行省略）、`imageUrl`、`topStartTag`（13sp + `shape_vod_site` = `bg_site` #F44336 α0.7 / mobile `colorErrorContainer` α0.8，左上+右上+右下 8dp，内边距 4dp；`maxWidth` 96dp → **110dp** 以容纳「日期 \| 来源」，仍 < 海报 120dp；日期显示为 `MM-dd`，超长走 `ellipsize=end`）、`bottomStartTag`（14sp + `shape_vod_remark` = `bg_remark` #177535 α0.7 / mobile `colorSecondaryContainer` α0.8，右 4dp，内边距 4dp）；剧名底板复用 `@color/black_20`（#33000000） |
 | `layout/dialog_source_sidebar.xml` | `ref_docs/dialog_search_site.xml` | 全选/全不选 39dp（`@id/bulkBar`，单选模式代码隐藏）、12sp 文字 + 16dp 勾选圈、站点列表 |
 | `layout/adapter_source_sidebar_item.xml` | `ref_docs/adapter_site.xml` | 40dp 行高、18sp 文字、24dp 勾选圈；**根节点即行本体**（同上，否则行选中态不生效） |
 | `drawable/shape_source_site_item_focused.xml` | `ref_docs/shape_site_item_focused.xml` | inset 8/4dp + 白底 + 28dp 圆角（焦点胶囊） |
@@ -93,6 +93,29 @@
 - **侧边栏宽度不塌缩**：单选模式隐藏勾选圈改用 `View.INVISIBLE`（保留 24dp 圈 + 12dp 间距的占位），
   不用 `GONE`，保证单选 / 多选两种模式下面板宽度与白底焦点块宽度完全一致。
 
+### 3.3 全局唯一卡片组件（2026-11-03 铁律）
+
+`ui/hero/HeroPosterCard.kt` 顶部写死：
+
+```
+// 【全局 UI 铁律】历史页、搜索页、换源弹窗必须复用此组件。尺寸 120x180，四角 8dp 圆角，严禁 AI 私自发明新尺寸！
+```
+
+- **尺寸唯一**：`CARD_WIDTH_DP = 120`、`POSTER_HEIGHT_DP = 180`、`TITLE_HEIGHT_DP = 34`、
+  `CARD_HEIGHT_DP = 214`；`onMeasure` 用 `EXACTLY` 强制 120×214 覆盖任何外部 `MeasureSpec`，
+  因此不会被 `RecyclerView` / `weight` / `wrap_content` 拉伸或压扁。
+  `ChangeSourceDialog` 的窗口高度常量直接引用 `HeroPosterCard.CARD_HEIGHT_DP`，不在弹窗里重复 214。
+- **圆角唯一**：`CORNER_DP = 8`，`clipToOutline + outlineProvider.setRoundRect(0, 0, w, h, 8dp)`
+  把海报与剧名底板一起裁成**四角全圆**（等价 Compose `Modifier.clip(RoundedCornerShape(8.dp))`）。
+  以用户截图为准：图片四角、卡片底部都必须是圆角，底层 `@style/Vod.Grid`（只圆上方两角）**不再参与**。
+- **焦点唯一**：`dispatchDraw` 画 1.5dp 红色（`@color/red` #E50914）8dp 圆角描边，
+  矩形上下界是 `0..120dp / 0..180dp`，只包海报、绝不包剧名；不做整体缩放。
+- **内容唯一**：只有 `title` / `imageUrl` / `topStartTag` / `bottomStartTag` 四个字段，
+  尺寸、圆角、描边没有任何 setter。
+- **minSdk 24 兼容**：`View.setDefaultFocusHighlightEnabled` 是 API 26 方法，组件里已按
+  `Build.VERSION.SDK_INT >= O` 判版本，避免 API 24/25 设备 `NoSuchMethodError`。
+- **待办**：历史页（`HeroHistoryActivity`）、搜索页的卡片后续也换成该组件；本轮只落地换源弹窗。
+
 侧边栏：
 
 - 打开 → 单选落在当前接口源，多选落在第 1 条（白底黑字可见）。
@@ -106,7 +129,10 @@
 ## 5. 文件清单
 
 新增（main 源集）：
-- `layout/`：`dialog_source`、`dialog_source_sidebar`、`adapter_source_site`、`adapter_source_result`、
+- `ui/hero/HeroPosterCard.kt`：**全局唯一海报卡片组件**（历史页 / 搜索页 / 换源弹窗必须复用）。
+  文件顶部写死铁律注释；尺寸、圆角、焦点描边全部私有常量，无对外 setter。
+  组件内部用代码绘制，不再依赖任何 `adapter_source_result` 布局。
+- `layout/`：`dialog_source`、`dialog_source_sidebar`、`adapter_source_site`、
   `adapter_source_sidebar_item`
 - `drawable/`：`shape_dialog_source`、`shape_tmdb_badge`、`selector_home_logo_source`、
   `shape_home_logo_source_focused`、`shape_home_logo_normal_white`、
@@ -119,9 +145,17 @@
 - `values/strings.xml`（+ zh-rCN / zh-rTW）：`play_change_result`、`play_change_empty`、
   `play_change_count`、`source_sidebar_select_all|none`、`source_sidebar_switched`
 
+已删除：
+- `layout/adapter_source_result.xml`：卡片改为 `HeroPosterCard` 后不再被任何文件引用（纯死资源）。
+  随之失去引用的 `shape_source_vod_name` / `selector_source_card_foreground` /
+  `shape_source_card_focused` 三个 main 等价 drawable **暂时保留**（无引用但无副作用，
+  由用户决定是否一并删除）。
+
 改写：
-- `ui/hero/ChangeSourceDialog.kt`：独立 Dialog + `R.layout.dialog_source`，窗口尺寸/间距/缩放照搬 f23，
-  站点标签红底白字，多选侧边栏勾选即时过滤结果
+- `ui/hero/ChangeSourceDialog.kt`：独立 Dialog + `R.layout.dialog_source`，窗口尺寸/间距照搬 f23，
+  站点标签红底白字，多选侧边栏勾选即时过滤结果；结果卡**只调用 `HeroPosterCard`**
+  （`title` / `imageUrl` / `topStartTag` = `MM-dd | 来源` / `bottomStartTag` = 备注），
+  弹窗里不再 inflate 卡片布局、也不再出现任何卡片宽高数值
 - `ui/hero/SourceSidebar.kt`：独立 Dialog + `R.layout.dialog_source_sidebar`，宽度由内容决定，
   `SourceSidebarMode.Single|Multi` 两种模式
 - `ui/hero/HeroSourceDemo.kt`：纯 Kotlin 假数据（`HeroSourceEntry` 增加 `site` 字段供过滤）
@@ -144,7 +178,7 @@
 2. `shape_home_logo_source_focused` 不在 ref_docs 内，按红色椭圆实现；若原版另有取值需要再对一次截图。
 3. 站点切换刷新结果、结果卡确定键写库、海报加载仍是 `TODO(数据层对接)`；侧边栏勾选只存会话内。
 4. `keywordRow` 按 ref 保留 id 且 `gone`；`progress` 为三态之一，默认隐藏。
-5. 结果卡暂无海报地址，显示原版的 `@color/black_20` 占位底色 + 「站点 · 日期」。
+5. 结果卡暂无海报地址，`HeroPosterCard` 走渐变占位 + 剧名首字；接入真实数据时只填 `imageUrl`。
 
 ## 8. 回滚
 
