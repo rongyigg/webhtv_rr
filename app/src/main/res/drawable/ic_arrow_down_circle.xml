@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    历史页「查看详情」按钮左侧图标（fragment_history.xml L173 `app:drawableStartCompat`）。
+    逐字节复制 ref_docs/ic_arrow_down_circle.xml：14dp / viewport 1024 / 白色 tint / 旋转 90°。
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:tint="@color/white"
+    android:height="14dp"
+    android:width="14dp"
+    android:viewportWidth="1024"
+    android:viewportHeight="1024">
+    <group
+        android:pivotX="512"
+        android:pivotY="512"
+        android:rotation="90">
+        <path
+            android:fillColor="@android:color/white"
+            android:pathData="M493.24,285.72 a64,64 0,1,0 -90.5,90.51 L538.49,512 L402.74,647.76 a64,64 0,1,0 90.5,90.51 l181,-181 a64,64 0,0,0 0,-90.5 z"/>
+        <path
+            android:fillColor="@android:color/white"
+            android:pathData="M512,0 C229.21,0 0,229.23 0,512 s229.19,512 512,512 s512,-229.24 512,-512 S794.77,0 512,0 z m0,896 c-212.06,0 -384,-171.92 -384,-384 s171.92,-384 384,-384 s384,171.93 384,384 s-171.92,384 -384,384 z"/>
+    </group>
+</vector>

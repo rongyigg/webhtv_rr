@@ -3,9 +3,11 @@ package com.fongmi.android.tv.ui.hero
 
 import android.content.Context
 import android.graphics.Canvas
+import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Rect
 import android.graphics.RectF
+import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.text.TextUtils
@@ -46,6 +48,8 @@ class HeroPosterCard @JvmOverloads constructor(
     context: Context,
     attrs: AttributeSet? = null,
     defStyleAttr: Int = 0,
+    siteTag: String? = null,
+    tmdbTag: Boolean = false,
 ) : FrameLayout(context, attrs, defStyleAttr) {
 
     /** 剧名：16sp 白色、单行省略、居中、上下 6dp 内边距，落在 34dp 的底部文字区。 */
@@ -79,6 +83,31 @@ class HeroPosterCard @JvmOverloads constructor(
             field = value
             bottomTag.text = value
             bottomTag.visibility = if (value.isEmpty()) View.GONE else View.VISIBLE
+        }
+
+    /**
+     * 历史页站点标签（`ref_docs/adapter_history_poster.xml` L44-62 的 `siteGradient` + `siteTag`）。
+     *
+     * null / 空串 → 渐变与文字一起 GONE（同 `s11.java` L90-98 `TextUtils.isEmpty(siteName)` 分支）。
+     * 与 [topStartTag] 互不影响：首页/搜索/换源继续用 [topStartTag]（13sp + `shape_vod_site`），
+     * 历史页只用本字段（10sp + 96×96 渐变），两者不会同时显示。
+     */
+    var siteTag: String? = siteTag
+        set(value) {
+            field = value
+            applySiteTag()
+        }
+
+    /**
+     * 历史页右上角 TMDB 角标（`adapter_history_poster.xml` L28-43 `tmdbTag`）。
+     *
+     * 可见性规则由调用方给出（原版是 `s11.b(history)`，见 [HeroHistoryCardTags.isTmdbTagVisible]），
+     * 组件只负责画：5sp 粗体白字「TMDB」+ `bg_tmdb_tag`（#99000000、3dp 圆角）。
+     */
+    var tmdbTag: Boolean = tmdbTag
+        set(value) {
+            field = value
+            applyTmdbTag()
         }
 
     private val density: Float = resources.displayMetrics.density
@@ -171,6 +200,64 @@ class HeroPosterCard @JvmOverloads constructor(
     }
 
     /**
+     * 站点渐变层（`adapter_history_poster.xml` L44-49 `siteGradient`，96dp × 96dp）。
+     *
+     * 1:1 照抄 `s11.java` L99-101：
+     * ```
+     * new GradientDrawable(Orientation.TL_BR, new int[]{dl3.a(), 0, 0});
+     * setCornerRadii(new float[]{r, r, 0, 0, 0, 0, 0, 0});   // r = dp(8)
+     * ```
+     * 只有左上角 8dp 圆角，和海报左上圆角重合。
+     * **待确认 #1**：[SITE_GRADIENT_START] 是 `dl3.a()` 的占位值（ref_docs 未给出该色值）。
+     */
+    private val siteGradient: View = View(context).apply {
+        background = GradientDrawable(
+            GradientDrawable.Orientation.TL_BR,
+            intArrayOf(SITE_GRADIENT_START, Color.TRANSPARENT, Color.TRANSPARENT),
+        ).apply {
+            val radius = dp(CORNER_DP).toFloat()
+            cornerRadii = floatArrayOf(radius, radius, 0f, 0f, 0f, 0f, 0f, 0f)
+        }
+        isFocusable = false
+        visibility = View.GONE
+    }
+
+    /** 站点标签文字（L50-62）：10sp 粗体白、margin 4dp、阴影 #000000 r6 dx0 dy0。 */
+    private val siteTagView: TextView = TextView(context).apply {
+        setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, SITE_TAG_SP)
+        setTypeface(typeface, Typeface.BOLD)
+        setTextColor(ContextCompat.getColor(context, R.color.white))
+        gravity = Gravity.START or Gravity.TOP
+        setShadowLayer(
+            SITE_TAG_SHADOW_RADIUS,
+            0f,
+            0f,
+            ContextCompat.getColor(context, R.color.black),
+        )
+        maxLines = 1
+        isFocusable = false
+        visibility = View.GONE
+    }
+
+    /** TMDB 角标（L28-43）：5sp 粗体白「TMDB」+ `bg_tmdb_tag`（#99000000 / 3dp 圆角）。 */
+    private val tmdbTagView: TextView = TextView(context).apply {
+        setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, TMDB_TAG_SP)
+        setTypeface(typeface, Typeface.BOLD)
+        setTextColor(ContextCompat.getColor(context, R.color.white))
+        text = TMDB_TAG_TEXT
+        gravity = Gravity.CENTER
+        background = GradientDrawable().apply {
+            shape = GradientDrawable.RECTANGLE
+            cornerRadius = dp(TMDB_TAG_CORNER_DP).toFloat()
+            setColor(TMDB_TAG_BACKGROUND)
+        }
+        // L42-43 paddingStart/End 3dp，L35 paddingTop 0dp，L36 paddingBottom 1dp。
+        setPadding(dp(TMDB_TAG_PADDING_H_DP), 0, dp(TMDB_TAG_PADDING_H_DP), dp(TMDB_TAG_PADDING_BOTTOM_DP))
+        isFocusable = false
+        visibility = View.GONE
+    }
+
+    /**
      * 海报区容器：120 × 180，**普通 FrameLayout，不做任何裁剪**。
      *
      * 圆角由里面的 [image]（`ShapeableImageView`）自己绘制，标签也放在这一层；
@@ -214,6 +301,20 @@ class HeroPosterCard @JvmOverloads constructor(
         // 不写 MATCH_PARENT：ShapeableImageView 的圆角按自身尺寸裁剪，尺寸必须和原版一致。
         posterFrame.addView(image, LayoutParams(posterWidthPx, posterHeightPx))
         posterFrame.addView(placeholder, LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT).apply { gravity = Gravity.CENTER })
+        // 历史页站点渐变 + 站点文字：96×96 只圆左上角，贴在图片之上、其它标签之下。
+        posterFrame.addView(
+            siteGradient,
+            LayoutParams(dp(SITE_GRADIENT_SIZE_DP), dp(SITE_GRADIENT_SIZE_DP)).apply {
+                gravity = Gravity.START or Gravity.TOP
+            },
+        )
+        posterFrame.addView(
+            siteTagView,
+            LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT).apply {
+                gravity = Gravity.START or Gravity.TOP
+                setMargins(dp(SITE_TAG_MARGIN_DP), dp(SITE_TAG_MARGIN_DP), 0, 0)
+            },
+        )
         // 左上角标签：13sp，maxWidth 110dp < 海报 120dp（在属性初始化里设置），永远不越过海报右边界。
         // 贴左上不偏移：`shape_vod_site` 自身左上 8dp 圆角与海报左上圆角重合，不会出现直角挡圆角。
         posterFrame.addView(
@@ -231,6 +332,14 @@ class HeroPosterCard @JvmOverloads constructor(
                 bottomMargin = dp(CORNER_DP)
             },
         )
+        // TMDB 角标：右上角，margin 4dp（L40），最后添加保证盖在渐变与图片之上。
+        posterFrame.addView(
+            tmdbTagView,
+            LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT).apply {
+                gravity = Gravity.END or Gravity.TOP
+                setMargins(0, dp(TMDB_TAG_MARGIN_DP), dp(TMDB_TAG_MARGIN_DP), 0)
+            },
+        )
 
         // 剧名区：34dp，紧贴海报下方，高度写死，不吃 weight、不吃 wrap_content。
         addView(
@@ -240,6 +349,22 @@ class HeroPosterCard @JvmOverloads constructor(
                 gravity = Gravity.TOP
             },
         )
+
+        // 构造参数（siteTag / tmdbTag）不走 setter，这里补一次初始状态。
+        applySiteTag()
+        applyTmdbTag()
+    }
+
+    /** 站点标签与渐变同进同出（`s11.java` L91-98：站点名为空时两者都隐藏）。 */
+    private fun applySiteTag() {
+        val visible = !siteTag.isNullOrEmpty()
+        siteTagView.text = siteTag.orEmpty()
+        siteTagView.visibility = if (visible) View.VISIBLE else View.GONE
+        siteGradient.visibility = if (visible) View.VISIBLE else View.GONE
+    }
+
+    private fun applyTmdbTag() {
+        tmdbTagView.visibility = if (tmdbTag) View.VISIBLE else View.GONE
     }
 
     /** 尺寸强制 120×214：外部传入任何 MeasureSpec 都不生效（铁律）。 */
@@ -321,6 +446,58 @@ class HeroPosterCard @JvmOverloads constructor(
 
         /** 剧名左右内边距：6dp（`ref_docs/adapter_search.xml` 的 `padding="6dp"`）。 */
         const val TITLE_PADDING_DP = 6
+
+        // ------------------------------------------------------------------
+        // 历史页站点标签（`ref_docs/adapter_history_poster.xml` L44-62 + `s11.java` L99-101）
+        // ------------------------------------------------------------------
+
+        /** 站点标签字号：10sp（`adapter_history_poster.xml` L51 `android:textSize="10sp"`）。 */
+        private const val SITE_TAG_SP = 10f
+
+        /** 站点标签四边外边距：4dp（L58 `android:layout_margin="4dp"`）。 */
+        private const val SITE_TAG_MARGIN_DP = 4
+
+        /** 站点标签阴影半径：6，dx/dy 均为 0（L59-62，阴影色 `@color/black`）。 */
+        private const val SITE_TAG_SHADOW_RADIUS = 6f
+
+        /** 站点渐变尺寸：96dp × 96dp（L48-49 `siteGradient`）。 */
+        private const val SITE_GRADIENT_SIZE_DP = 96
+
+        /**
+         * **待确认 #1**：站点渐变起始色 = 原版 `dl3.a()`（`s11.java` L99）。
+         * ref_docs 只给出调用点、没有给出色值，这里先取工程既有 `@color/hero_accent`（#FFFF0000，
+         * `res/values/colors.xml` L64）作为占位，确认后只改这一行。
+         */
+        private val SITE_GRADIENT_START = 0xFFFF0000.toInt()
+
+        // ------------------------------------------------------------------
+        // 历史页 TMDB 角标（`adapter_history_poster.xml` L28-43 + `bg_tmdb_tag.xml`）
+        // ------------------------------------------------------------------
+
+        /** TMDB 角标字号：5sp（L29 `android:textSize="5sp"`）。 */
+        private const val TMDB_TAG_SP = 5f
+
+        /** 角标圆角：3dp（`ref_docs/bg_tmdb_tag.xml` `corners android:radius="3dp"`）。 */
+        private const val TMDB_TAG_CORNER_DP = 3
+
+        /** 角标底色：#99000000（`ref_docs/bg_tmdb_tag.xml` `solid android:color="#99000000"`）。 */
+        private val TMDB_TAG_BACKGROUND = 0x99000000.toInt()
+
+        /** 角标左右内边距：3dp（L42-43 `paddingStart/paddingEnd`）。 */
+        private const val TMDB_TAG_PADDING_H_DP = 3
+
+        /** 角标底部内边距：1dp（L36 `paddingBottom`），顶部 0dp（L35）。 */
+        private const val TMDB_TAG_PADDING_BOTTOM_DP = 1
+
+        /** 角标外边距：4dp（L40 `android:layout_margin="4dp"`）。 */
+        private const val TMDB_TAG_MARGIN_DP = 4
+
+        /**
+         * 角标文案（L41 `android:text="@string/home_tmdb_tag"`）。
+         * 本工程未收录 `home_tmdb_tag` 字符串资源（`res/values/strings.xml` 无此条目），
+         * 因此直接使用资源里那个字面量「TMDB」，不新增 strings.xml 条目。
+         */
+        private const val TMDB_TAG_TEXT = "TMDB"
 
         private const val TITLE_SP = 16f
         private const val TOP_TAG_SP = 13f
