@@ -96,7 +96,7 @@
 | ~~`Config.find(cid)`~~ | **已移除** | 见 §11：这正是「点击被降级到搜索页」的根因 |
 | ~~`CollectActivity.c2(context, vodName)`~~ | **已移除**（原 `SearchActivity.directFromHistory` 兜底） | 见 §11：不再有降级分支 |
 | `VideoActivity.q3(...)`（续播） | `VideoActivity.startFromHistory(activity, history)` | mobile L703-710 / leanback L730-737，两 flavor 同签名 |
-| `DetailActivity.q2(...)`（详情） | `TmdbDetailActivity.startFromHistory(activity, history)` | `TmdbDetailActivity.java` L544-547，main 源集，两 flavor 通用 |
+| `DetailActivity.q2(...)`（详情） | `HeroDetailActivity.start(activity, vodName)` | 与首页同一入口（`HeroHomeActivity.kt` L146）；历史页只传 `activity` + 剧名，不用 siteKey / vodId |
 | `history.delete()` | `History.delete()` | `History.java` L1177-1179（bean 自身方法，不碰 catvod） |
 | `History.get()` / 排序 | `History.getForDisplay()` | `History.java` L201-206（已含全局历史聚合 + 展示排序，Compose 侧不再二次排序） |
 | `gd3.l(vodName)`（背景） | `history.wallPic` | 字段存在（`History.java` L62） |
@@ -276,15 +276,18 @@ endpoint(activity, history, resume)
 
 | 行为 | 首页实际入口 | 位置 |
 | --- | --- | --- |
-| 卡片 → 详情页 | `TmdbDetailActivity.start(activity, siteKey, vodId, title, pic, remarks)`；themed 站点走 `WebThemeDetailActivity.start(...)` | `web/WebHomeThemeBridge.java` L282-284（另一条路由 L297） |
-| 详情页 → 播放 | `VideoActivity.start(...)` / `VideoActivity.startDirect(..., resume)` | `web/WebHomeThemeBridge.java` L175-177 |
+| 卡片 → 详情页 | `HeroDetailActivity.start(activity, title)` | `ui/activity/HeroHomeActivity.kt` L146 `HeroHomeScreen(onOpenDetail = { title -> HeroDetailActivity.start(this, title) })`；`HeroDetailActivity.start(context: Context, title: String)` L159 |
+| 详情页 → 播放 | `VideoActivity.start(...)` / `VideoActivity.startDirect(..., resume)` | `web/WebHomeThemeBridge.java` L175-177（Web 主题首页同源桥接） |
 
-历史页对应的「既有入口」与首页同源，且已经内置站点策略分流：
+> 注：`web/WebHomeThemeBridge.java` L282-284 / L297 的 `TmdbDetailActivity.start(...)` 属于 **Web 主题首页**分支，
+> 不是二开 Compose 首页（`HeroHomeActivity`）的跳转目标，历史页不复用该分支。
+
+历史页对应的「既有入口」：
 
 | 行为 | 历史页入口 | 内部行为 |
 | --- | --- | --- |
 | 续播 | `VideoActivity.startFromHistory(activity, item)` | mobile L703-710 / leanback L730-737：`shouldOpenLegacyTmdbDetail(siteKey, vodId)` 为真 → 转 `TmdbDetailActivity.startFromHistory`，否则 `startDirect(..., item)` 携带整条历史 |
-| 详情 | `TmdbDetailActivity.startFromHistory(activity, item)` | L544-547：按 `Setting.getDetailOpenMode()` 进对应详情形态，并带 `EXTRA_RESUME_FROM_HISTORY` |
+| 详情 | `HeroDetailActivity.start(activity, item.vodName.orEmpty())` | 与首页同一个入口：只传 `activity` + 剧名，无 siteKey / vodId / 集数参与 |
 
 ### 11.3 改动（`HistoryViewModel.kt`）
 
@@ -298,11 +301,11 @@ fun openResume(activity: Activity, history: History? = state.selectedItem) {
 
 fun openDetail(activity: Activity, history: History? = state.selectedItem) {
     val item = history ?: return
-    TmdbDetailActivity.startFromHistory(activity, item)
+    HeroDetailActivity.start(activity, item.vodName.orEmpty())
 }
 ```
 
-同步删除因此不再使用的 import：`bean.Config`、`impl.Callback`、`ui.activity.SearchActivity`
+同步删除因此不再使用的 import：`bean.Config`、`impl.Callback`、`ui.activity.SearchActivity`、`ui.activity.TmdbDetailActivity`
 （`VodConfig` 仍被 `MockHistory` 使用，保留）。
 
 ### 11.4 调用侧（`HistoryScreen.kt`，未改动）
@@ -317,6 +320,9 @@ fun openDetail(activity: Activity, history: History? = state.selectedItem) {
 | 检查 | 结果 |
 | --- | --- |
 | `Config.find(` / `selectConfig` / `SearchActivity` / `impl.Callback` 在 `HistoryViewModel.kt` 中命中数 | 0（`Config.find` 仅剩注释里的一句话说明） |
+| `openDetail` 的跳转目标 | `HeroDetailActivity.start(activity, item.vodName.orEmpty())`，与首页同入口；`TmdbDetailActivity` 已从 import 移除 |
+| `openResume` 的跳转目标 | 保持 `VideoActivity.startFromHistory(activity, item)`（用户确认播放已正确） |
+| 前置拦截逻辑 | 仅 `history == null` 时 return；无配置 / cid / 站点 / 搜索页降级 |
 | `private fun open(` / `endpoint(` 残留 | 0 |
 | `HistoryScreen.kt` 绑定 | 未改动，卡片→`openResume`、按钮→`openDetail` |
 | 改动文件 | 仅 `HistoryViewModel.kt` + 本文档 |

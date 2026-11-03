@@ -9,7 +9,7 @@ import com.fongmi.android.tv.App
 import com.fongmi.android.tv.api.config.VodConfig
 import com.fongmi.android.tv.bean.History
 import com.fongmi.android.tv.db.AppDatabase
-import com.fongmi.android.tv.ui.activity.TmdbDetailActivity
+import com.fongmi.android.tv.ui.activity.HeroDetailActivity
 import com.fongmi.android.tv.ui.activity.VideoActivity
 import coil3.SingletonImageLoader
 import coil3.request.ImageRequest
@@ -29,7 +29,7 @@ import java.util.regex.Pattern
  * - [openResume] / [openDetail] ← `pp` case 14 L374-385 + `g20` case 2 L104-119
  *
  * **不碰数据层**：只调用 `History.getForDisplay()` / `history.delete()` 这类既有公开入口，
- * 跳转同样直接走工程既有入口（[VideoActivity.startFromHistory] / [TmdbDetailActivity.startFromHistory]），
+ * 跳转同样直接走工程既有入口（[VideoActivity.startFromHistory] / [HeroDetailActivity.start]），
  * 不做任何配置/cid 前置校验。
  * 所有线程切换走 `Task.execute`（读库）+ `App.post`（回主线程），与工程既有写法一致。
  */
@@ -153,14 +153,15 @@ class HistoryViewModel : ViewModel() {
     }
 
     /**
-     * 「查看详情」按钮 → **详情页**（原版 `g20` case 2 终点 = `o11.h0` → `DetailActivity.q2`）。
+     * 「查看详情」按钮 → **详情页**，与首页卡片**完全同一个入口**：
+     * `HeroHomeActivity` L146 `HeroHomeScreen(onOpenDetail = { HeroDetailActivity.start(this, it) })`。
      *
-     * 与首页卡片同一入口 [TmdbDetailActivity.startFromHistory]：内部按 `Setting.getDetailOpenMode()`
-     * 选择详情页形态，并携带 `EXTRA_RESUME_FROM_HISTORY` 保留续播语义。
+     * 只需要 `activity` + 剧名（`History.getVodName()`）；历史记录里的 siteKey / vodId / 集数
+     * 一律不参与跳转，因此不存在任何配置、cid 或站点前置校验。
      */
     fun openDetail(activity: Activity, history: History? = state.selectedItem) {
         val item = history ?: return
-        TmdbDetailActivity.startFromHistory(activity, item)
+        HeroDetailActivity.start(activity, item.vodName.orEmpty())
     }
 
     /**
