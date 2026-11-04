@@ -156,10 +156,12 @@ import kotlinx.coroutines.launch
  *   ↓ 先落同一区块的下一行（如「建议」第二排），再落下一个区块 / 站点 Tab；
  *   Tab ↓ → 首张海报；海报 ←→ 行内移动、↑ → 站点 Tab；确定键 → [HeroDetailActivity.start]。
  *
- * 外观：
+ * 外观 / 焦点态（严格按《焦点总结》的三态）：
  * - 背景 = 首页大图极小尺寸解码后放大（等价高斯模糊）+ 半透明黑遮罩，同原版
  *   `SearchActivityV2` 的 `heroBitmap` 模糊 + `0x33000000` 蒙层；
- * - 胶囊焦点 = 红色渐变色块（#E50914 → #F44336），同原版 `shape_item_round_focused`，不是描边。
+ * - **聚焦**（胶囊 / 站点 Tab）→ 实心红渐变色块 #E50914 → #F44336 → 玫瑰粉 + 纯白字，无描边；
+ * - **失焦但仍选中、且焦点还在结果区** → 站点 Tab 挂红框描边 + 弱底，提示下方属于哪个站点；
+ * - **焦点离开结果区**（回键盘 / 顶栏）→ 无红底无红框，选中态暂时休眠。
  */
 class HeroSearchActivity : ComponentActivity() {
 
@@ -544,7 +546,9 @@ private fun HeroSearchScreen(
                         setKeyword(text)
                         recordHistory(text)
                     },
-                    onDownToResults = { focusSite(0) },
+                    // 胶囊 ↓ 到底时的兜底落点：**回到刚才高亮的站点 Tab**（《焦点总结》第 4 条），
+                    // 而不是盲目落到第一个。
+                    onDownToResults = { focusSite(focusedSite) },
                 )
             }
 
@@ -559,6 +563,7 @@ private fun HeroSearchScreen(
                     siteState = siteState,
                     posterState = posterState,
                     selectedSite = selectedSite,
+                    resultModuleFocused = resultsFocused,
                     siteRequesters = siteRequesters,
                     posterRegistry = posterRegistry,
                     onSiteFocused = { index ->
@@ -1034,7 +1039,8 @@ private fun HeroSectionTitle(title: String) {
 }
 
 /**
- * 历史 / 热搜 / 建议区：`FlowRow`，胶囊 16sp、内边距 12dp×6dp、12dp 圆角、外边距 6dp。
+ * 历史 / 热搜 / 建议区：`FlowRow`，胶囊 16sp、内边距 6dp×2dp（紧贴文字的小药丸，同
+ * `shape_chip_round_normal.xml`）、12dp 圆角、外边距 6dp。
  * 整体左移 6dp 抵消首尾外边距，对应 XML 的 `layout_marginStart="-6dp"`。
  */
 @OptIn(ExperimentalLayoutApi::class)
@@ -1081,9 +1087,12 @@ private fun HeroWordSection(
 }
 
 /**
- * 胶囊标签：**不铺纯黑**，底色沿用 `selector_item_round.xml` 的半透明黑；
- * 焦点态是原版 `shape_item_round_focused` 的**红色渐变色块**（#E50914 → #F44336），
- * 只在焦点时整块变红，不使用描边。
+ * 胶囊标签：**不铺纯黑**，底色沿用 `selector_item_round.xml` 的半透明黑（`#33000000`）；
+ * 焦点态是原版 `shape_item_round_focused` 的**红色渐变色块**
+ * （#E50914 → #F44336 → 玫瑰粉），整块实心、无描边。
+ *
+ * 底色药丸紧贴文字：横向 6dp、纵向 2dp（`shape_chip_round_normal.xml` 只声明了左右 6dp），
+ * 不做大块 padding —— 大块 padding 会让半透明底看起来比文字宽一圈。
  */
 @Composable
 private fun HeroWordChip(
@@ -1186,6 +1195,8 @@ private fun ResultSection(
     siteState: LazyListState,
     posterState: LazyListState,
     selectedSite: Int,
+    // 结果区（Tab 行 / 海报）当前是否持有焦点 —— 站点 Tab 三态里的第 2 态要用。
+    resultModuleFocused: Boolean,
     siteRequesters: List<FocusRequester>,
     posterRegistry: HeroPosterViewRegistry,
     onSiteFocused: (Int) -> Unit,
@@ -1218,6 +1229,7 @@ private fun ResultSection(
                 HeroSiteTab(
                     label = label,
                     selected = index == selectedSite,
+                    resultModuleFocused = resultModuleFocused,
                     requester = siteRequesters[index],
                     onFocused = { onSiteFocused(index) },
                     onConfirm = { onSiteConfirm(index) },
@@ -1299,12 +1311,22 @@ private fun ResultSection(
 
 /**
  * 站点胶囊：26dp 高、16sp、13dp 圆角（`adapter_type.xml` L3/L10，字号按需求统一到 16sp）；
- * 选中放大 1.08 / 140ms（`dz2.java` L45-47）；焦点态红描边 + 提亮底色。
+ * 选中放大 1.08 / 140ms（`dz2.java` L45-47）。
+ *
+ * 三态严格按《焦点总结》，与首页分类 Tab 同一套规则：
+ * 1. **聚焦**（不论是否选中）→ 实心红渐变色块 + 纯白字，无描边（图1 的焦点样式）；
+ * 2. **失焦 + 当前站点 + 焦点还在下方结果区** → 红框描边 + 弱底，
+ *    提示「下方这批海报属于哪个站点」；
+ * 3. **焦点离开结果区**（回键盘 / 顶栏）→ 半透明普通底，无红底无红框，选中态暂时休眠。
+ *
+ * 第 2 态必须依赖 [resultModuleFocused]：只看 `selected` 会在焦点回到键盘时
+ * 仍然挂一圈红框，正是《焦点总结》第 3 条要消掉的「多出来的红框」。
  */
 @Composable
 private fun HeroSiteTab(
     label: String,
     selected: Boolean,
+    resultModuleFocused: Boolean,
     requester: FocusRequester,
     onFocused: () -> Unit,
     onConfirm: () -> Unit,
@@ -1317,6 +1339,8 @@ private fun HeroSiteTab(
     val isFocused by interaction.collectIsFocusedAsState()
     var focusFlag by remember { mutableStateOf(false) }
     val focused = isFocused || focusFlag
+    // 三态里的第 2 态：失焦、仍是当前站点、且焦点还在结果区。
+    val selectedRing = selected && !focused && resultModuleFocused
     val scale by animateFloatAsState(
         targetValue = if (selected) SITE_SELECTED_SCALE else 1f,
         animationSpec = tween(durationMillis = SITE_SCALE_DURATION_MS),
@@ -1329,15 +1353,19 @@ private fun HeroSiteTab(
             .height(SITE_TAB_HEIGHT)
             .focusRequester(requester)
             .clip(SITE_TAB_SHAPE)
+            // 焦点态 = 红色渐变色块，和胶囊共用同一支 CHIP_FOCUS_BRUSH，全页焦点色一致。
             .background(
-                when {
-                    focused -> CHIP_BG_FOCUSED
-                    selected -> CHIP_BG_SELECTED
-                    else -> CHIP_BG_NORMAL
-                },
-                SITE_TAB_SHAPE,
+                brush = if (focused) CHIP_FOCUS_BRUSH else SolidColor(CHIP_BG_NORMAL),
+                shape = SITE_TAB_SHAPE,
             )
-            .then(if (focused) Modifier.border(CHIP_STROKE, FOCUS_RED, SITE_TAB_SHAPE) else Modifier)
+            // 第 2 态：只有「失焦 + 选中 + 焦点仍在结果区」才挂红框。
+            .then(
+                if (selectedRing) {
+                    Modifier.border(CHIP_STROKE, FOCUS_RED, SITE_TAB_SHAPE)
+                } else {
+                    Modifier
+                },
+            )
             .onFocusChanged {
                 focusFlag = it.isFocused
                 if (it.isFocused) onFocused()
@@ -1374,7 +1402,8 @@ private fun HeroSiteTab(
                 }
             }
             .clickable(interactionSource = interaction, indication = null, onClick = onConfirm)
-            .padding(horizontal = CHIP_PADDING_H),
+            // 站点 Tab 的左右内边距**独立于胶囊**：胶囊这次收窄到 6dp，Tab 保持原尺寸不变。
+            .padding(horizontal = SITE_TAB_PADDING_H),
         contentAlignment = Alignment.Center,
     ) {
         Text(
@@ -1752,21 +1781,23 @@ private val SECTION_BAR_MARGIN_END = 10.dp
 private val SECTION_BAR_SHAPE = RoundedCornerShape(2.dp)
 private val SECTION_TITLE_BOTTOM_GAP = 8.dp
 
-// 胶囊：16sp、12dp×6dp 内边距、12dp 圆角、6dp 外边距（缩小内边距，避免视觉拥挤）。
+// 胶囊：16sp；内边距严格照 `adapter_search_word.xml` + `shape_chip_round_normal.xml`
+// （shape 只声明 paddingStart/End = 6dp、上下 0dp），所以**横向 6dp、纵向只留 2dp 呼吸**，
+// 底色就是紧贴文字的一圈小药丸；外边距 6dp 与原版 layout_margin 一致。
 private const val CHIP_TEXT_SP = 16f
-private val CHIP_PADDING_H = 12.dp
-private val CHIP_PADDING_V = 6.dp
+private val CHIP_PADDING_H = 6.dp
+private val CHIP_PADDING_V = 2.dp
 private val CHIP_MARGIN = 6.dp
 private val CHIP_SHAPE = RoundedCornerShape(12.dp)
 private val CHIP_STROKE = 1.5.dp
 private val CHIP_BG_NORMAL = Color(0x33000000)      // black_20（半透明，不是纯黑）
-private val CHIP_BG_FOCUSED = Color(0x66000000)     // black_40 + 红描边
-private val CHIP_BG_SELECTED = Color(0x66000000)    // activated
 
 // 站点 Tab：16sp（与胶囊标签同字号）+ 行高 32dp（activity_search.xml L152-161）+ 间距 8dp。
 private const val SITE_TAB_SP = 16f
 private val SITE_TAB_HEIGHT = 26.dp
 private val SITE_TAB_SHAPE = RoundedCornerShape(13.dp)
+// Tab 自己的左右内边距（12dp），不跟随胶囊收窄，保持图1里的块宽。
+private val SITE_TAB_PADDING_H = 12.dp
 private const val SITE_SELECTED_SCALE = 1.08f
 private const val SITE_SCALE_DURATION_MS = 140
 private val SITE_ROW_HEIGHT = 32.dp
