@@ -101,6 +101,8 @@ import com.fongmi.android.tv.ui.hero.HeroHomeLogoButton
 import com.fongmi.android.tv.ui.hero.HeroImageLoader
 import com.fongmi.android.tv.ui.hero.SourceSidebar
 import com.fongmi.android.tv.ui.hero.SourceSidebarMode
+import com.fongmi.android.tv.ui.hero.TmdbMatchDialog
+import com.fongmi.android.tv.ui.hero.TmdbMatchItem
 import com.fongmi.android.tv.utils.Notify
 import com.fongmi.android.tv.utils.PushParser
 import kotlinx.coroutines.launch
@@ -234,10 +236,21 @@ private fun HeroHomeScreen(onOpenDetail: (String) -> Unit) {
     var moduleFocused by remember { mutableStateOf(false) }
     // 换源弹窗（View Dialog）打开状态 + 关闭后要还焦点的那张卡（-1 = 没有待处理）。
     var showSourceDialog by remember { mutableStateOf(false) }
+    // TMDB 手动匹配弹窗（Compose Dialog）打开状态；关闭后的焦点同样由 pendingPosterFocus 交还。
+    var showTmdbDialog by remember { mutableStateOf(false) }
     var pendingPosterFocus by remember { mutableIntStateOf(-1) }
 
     // 换分类时用同一批假数据做轮转，视觉上列表确实换了，但不需要第二套资源。
-    val posters = remember(selectedTabIndex) { postersForTab(selectedTabIndex.coerceAtLeast(0)) }
+    val basePosters = remember(selectedTabIndex) { postersForTab(selectedTabIndex.coerceAtLeast(0)) }
+    // TMDB 手动匹配结果：按「剧名 → 匹配项」记一份 override，
+    // 命中时把首页这张卡的海报与背景图一起换成 TMDB 海报（第一段只换图，不动其它字段）。
+    var tmdbOverrides by remember { mutableStateOf<Map<String, TmdbMatchItem>>(emptyMap()) }
+    val posters = remember(basePosters, tmdbOverrides) {
+        basePosters.map { poster ->
+            val override = tmdbOverrides[poster.title]
+            if (override != null) poster.copy(url = override.poster, backdropUrl = override.poster) else poster
+        }
+    }
     val heroPoster = posters.getOrElse(focusedPosterIndex) { posters[0] }
 
     // 任意一排 → 顶栏：默认落在最左侧的第一项（小房子），不记忆上次位置。
@@ -311,6 +324,19 @@ private fun HeroHomeScreen(onOpenDetail: (String) -> Unit) {
     // 单次 requestFocus 常落空（与详情页同一套处理），所以重试几帧。
     LaunchedEffect(showSourceDialog) {
         if (showSourceDialog) return@LaunchedEffect
+        val target = pendingPosterFocus
+        pendingPosterFocus = -1
+        if (target < 0) return@LaunchedEffect
+        repeat(5) {
+            if (requestFocus(posterRequesters, target)) return@LaunchedEffect
+            withFrameNanos { }
+        }
+    }
+
+    // TMDB 匹配弹窗关闭后再抢焦点：Compose Dialog 消失时首页窗口同样要过一帧才重新拿到焦点，
+    // 所以和换源弹窗一样重试几帧，把焦点还给长按的那张卡。
+    LaunchedEffect(showTmdbDialog) {
+        if (showTmdbDialog) return@LaunchedEffect
         val target = pendingPosterFocus
         pendingPosterFocus = -1
         if (target < 0) return@LaunchedEffect
@@ -412,11 +438,30 @@ private fun HeroHomeScreen(onOpenDetail: (String) -> Unit) {
                 onClick = onOpenDetail,
                 // 卡片长按确定键：呼出换源弹窗（见 changeSource）。
                 onLongPress = { changeSource() },
+                // 卡片长按方向下键 1.5s：呼出 TMDB 手动匹配弹窗（见下面的 TmdbMatchDialog）。
+                onLongPressTmdb = { index ->
+                    pendingPosterFocus = index
+                    showTmdbDialog = true
+                },
                 // 海报行 ↑ 回 Tab 栏：落到**当前选中的分类**（见 focusTab 的注释）。
                 onMoveUp = { focusTab() },
                 onMoveDown = { },
                 onMoveLeft = { index -> focusPosterHorizontal(index, -1) },
                 onMoveRight = { index -> focusPosterHorizontal(index, 1) },
+            )
+        }
+
+        // ---- 最上层：TMDB 手动匹配弹窗（Compose Dialog，层级盖在首页之上）----
+        // 确定键写回 override → 首页对应卡片的海报/背景换成 TMDB 海报；
+        // 关闭后由 LaunchedEffect(showTmdbDialog) 把焦点还给长按的那张卡。
+        if (showTmdbDialog) {
+            TmdbMatchDialog(
+                initialKeyword = heroPoster.title,
+                onConfirm = { item ->
+                    tmdbOverrides = tmdbOverrides + (heroPoster.title to item)
+                    showTmdbDialog = false
+                },
+                onDismiss = { showTmdbDialog = false },
             )
         }
     }
@@ -897,6 +942,7 @@ private fun PosterArea(
     onFocused: (Int) -> Unit,
     onClick: (String) -> Unit,
     onLongPress: () -> Unit,
+    onLongPressTmdb: (Int) -> Unit,
     onMoveUp: (Int) -> Unit,
     onMoveDown: (Int) -> Unit,
     onMoveLeft: (Int) -> Unit,
@@ -919,6 +965,8 @@ private fun PosterArea(
                 onClick = { onClick(poster.title) },
                 // 长按确定键 = 呼出换源弹窗（与这张卡具体是哪部剧无关，换的是接口源）。
                 onLongPress = { onLongPress() },
+                // 长按方向下键 1.5s = 呼出 TMDB 手动匹配弹窗（按这张卡自己的剧名去匹配）。
+                onLongPressTmdb = { onLongPressTmdb(index) },
                 // 把“从哪一张发起”带回上层：滚动锚点与左右边界都在上层统一处理。
                 onMoveUp = { onMoveUp(index) },
                 onMoveDown = { onMoveDown(index) },
@@ -949,6 +997,7 @@ private fun PosterCard(
     onFocused: () -> Unit,
     onClick: () -> Unit,
     onLongPress: () -> Unit,
+    onLongPressTmdb: () -> Unit,
     onMoveUp: () -> Unit,
     onMoveDown: () -> Unit,
     onMoveLeft: () -> Unit,
@@ -982,6 +1031,8 @@ private fun PosterCard(
     // 长按确认键自己计时：遥控器不发 View/Compose 的 long-click，只能靠按下时刻自己算。
     // `pressAt == 0L` 表示当前没有按着（长按时系统会重复发 KeyDown，用它去重）。
     var pressAt by remember { mutableLongStateOf(0L) }
+    // 方向下键同样自己计时：短按仍是「下移」，按住 ≥ [TMDB_LONG_PRESS_MS] 再松手才呼出 TMDB 匹配弹窗。
+    var downPressAt by remember { mutableLongStateOf(0L) }
 
     Column(
         modifier = Modifier
@@ -989,7 +1040,13 @@ private fun PosterCard(
             .focusRequester(requester)
             .onFocusChanged {
                 // 这里只负责把“焦点换到哪一张”通知给上层，焦点样式统一走 interactionSource。
-                if (it.isFocused) onFocused() else pressAt = 0L
+                if (it.isFocused) {
+                    onFocused()
+                } else {
+                    // 焦点离开时把两个计时都清零，避免下次进来用上一次的按下时刻算出假长按。
+                    pressAt = 0L
+                    downPressAt = 0L
+                }
             }
             .onPreviewKeyEvent { event ->
                 // 确定键 / 回车完全由卡片接管（见下方 when 的前两个分支），
@@ -1008,16 +1065,25 @@ private fun PosterCard(
 
                     else -> Unit
                 }
+                // 方向下键必须在下面的「只处理 KeyDown」总闸之前拦一次，
+                // 否则 KeyUp 会被直接放行，永远算不出按住了多久。
+                if (event.key == Key.DirectionDown) {
+                    if (event.type == KeyEventType.KeyDown) {
+                        if (downPressAt == 0L) downPressAt = System.currentTimeMillis()
+                    } else {
+                        val held = if (downPressAt == 0L) 0L else System.currentTimeMillis() - downPressAt
+                        downPressAt = 0L
+                        // 长按 → TMDB 手动匹配弹窗；短按 → 原来的下移（首页为空操作）。
+                        if (held >= TMDB_LONG_PRESS_MS) onLongPressTmdb() else onMoveDown()
+                    }
+                    return@onPreviewKeyEvent true
+                }
                 if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
-                // 四个方向都由卡片自己接管：左右决定行滚动锚点，上回分类条、下留在原地。
+                // 三个方向由卡片自己接管：左右决定行滚动锚点，上回分类条。
+                // （↓ 已在上面单独处理：短按下移 / 长按呼出 TMDB 匹配，走不到这里。）
                 when (event.key) {
                     Key.DirectionUp -> {
                         onMoveUp()
-                        true
-                    }
-
-                    Key.DirectionDown -> {
-                        onMoveDown()
                         true
                     }
 
@@ -1256,6 +1322,9 @@ private val POSTER_PLACEHOLDER = Color(0xFF161616)
 
 // 长按阈值：与历史页卡片的长按计时（500ms）保持一致，超过就当成「长按确定键」。
 private const val POSTER_LONG_PRESS_MS = 500L
+
+// 方向下键的长按阈值：按住 1.5s 才呼出 TMDB 手动匹配弹窗，短按仍是原来的下移。
+private const val TMDB_LONG_PRESS_MS = 1500L
 
 // ---------------------------------------------------------------------------
 // 全局主题色统一在 HeroCommonUi 定义：

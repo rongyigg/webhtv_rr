@@ -2439,4 +2439,15 @@
     <string name="hero_history_episode">E%1$02d</string>
     <!-- 已看位置 / 单集总时长，history_page.png 显示为 27:15 / 47:34 -->
     <string name="hero_history_progress">%1$s / %2$s</string>
+
+    <!-- HeroUI 首页 TMDB 手动匹配弹窗（ref_docs/dialog_tmdb_match.xml） -->
+    <string name="home_tmdb_match">TMDB 匹配</string>
+    <string name="home_tmdb_match_hint">输入标题或关键词</string>
+    <string name="home_tmdb_match_result">匹配结果</string>
+    <string name="home_tmdb_match_empty">未找到匹配结果</string>
+    <string name="home_tmdb_match_count">共 %1$d 条</string>
+    <string name="home_tmdb_match_season">第 %1$d 季</string>
+    <!-- 结果卡左上角类型标签（adapter_tmdb_match.xml L24-31 typeLabel：剧集 / 电影） -->
+    <string name="home_tmdb_match_type_tv">TV</string>
+    <string name="home_tmdb_match_type_movie">MOV</string>
 </resources>
