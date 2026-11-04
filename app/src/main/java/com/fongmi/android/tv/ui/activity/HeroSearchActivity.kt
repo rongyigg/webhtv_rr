@@ -20,6 +20,7 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
@@ -49,6 +50,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -80,12 +82,14 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
@@ -94,6 +98,7 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import com.fongmi.android.tv.R
+import com.fongmi.android.tv.setting.Setting
 import com.fongmi.android.tv.ui.hero.HERO_SOURCE_ENTRIES
 import com.fongmi.android.tv.ui.hero.HeroImageLoader
 import com.fongmi.android.tv.ui.hero.HeroPosterCard
@@ -141,6 +146,24 @@ import kotlinx.coroutines.launch
  *   确定键 → [HeroDetailActivity.start]。
  */
 class HeroSearchActivity : ComponentActivity() {
+
+    /**
+     * 【关键】与全站其它页面共用同一套「设计画布」。
+     *
+     * `ui/base/BaseActivity` 用 AutoSize 把屏幕固定成 960×540dp，再按「界面缩放」设置
+     * 换算（`designW = 960 / factor`、`designH = 540 / factor`）；换算到 density 上，
+     * 等价于 `density = 系统 density × factor`，正是 [Setting.wrapUiScale] 做的事。
+     *
+     * 本页是 Compose 的 [ComponentActivity]，不走 BaseActivity。以前没有套用这一步，
+     * 于是用原始 density 渲染：用户把界面缩放调成 0.85 时，其它页面按 635dp 高的画布排版，
+     * 本页只有 540dp —— 固定内容（24 + 键盘 328 + 结果区 267 = 619dp）装不下，
+     * 键盘就被压到结果区下面，同时整体比其它页面大 1/0.85 ≈ 1.18 倍，看起来又粗又大。
+     *
+     * 套用之后：density 与全站一致 → dp 视口变回 635dp → 键盘完整显示、字号与其它页相同。
+     */
+    override fun attachBaseContext(newBase: Context) {
+        super.attachBaseContext(Setting.wrapDisplay(newBase))
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -425,20 +448,29 @@ private fun HeroSearchScreen(
                 .fillMaxWidth()
                 .weight(1f),
         ) {
-            // 左列：完全自适应（wrapContentWidth），宽 328dp / 高 328dp 都由内容撑出；
-            // 24dp 左边距由 KeyboardSection 自己补，不写死宽度、不 fillMaxHeight、不滚动。
-            KeyboardSection(
-                field = field,
-                inputRequester = inputRequester,
-                searchRequester = searchRequester,
-                keyRequesters = keyRequesters,
-                onInputDown = { focusKeyboard(FIRST_KEY_INDEX) },
-                onSearch = { confirmSearch() },
-                onSearchDown = { focusKeyboard(FIRST_KEY_INDEX) },
-                onSearchLeft = { focusInput() },
-                onKeyClick = { key -> onKeyClick(key) },
-                onKeyMove = { index, key -> onKeyMove(index, key) },
-            )
+            // 左列：按可用高度自适应。屏幕够高时缩放系数 = 1（完全等于原版 40dp/8dp）；
+            // 只有上半区高度不足 328dp 时，才整体等比缩小（density 整棵子树生效，文字依旧清晰），
+            // 保证 6 行键盘 + 输入行永远完整，不会被下半区盖住。
+            BoxWithConstraints {
+                val scale = if (maxHeight < KEYBOARD_NATURAL_HEIGHT) maxHeight / KEYBOARD_NATURAL_HEIGHT else 1f
+                val base = LocalDensity.current
+                CompositionLocalProvider(
+                    LocalDensity provides Density(base.density * scale, base.fontScale),
+                ) {
+                    KeyboardSection(
+                        field = field,
+                        inputRequester = inputRequester,
+                        searchRequester = searchRequester,
+                        keyRequesters = keyRequesters,
+                        onInputDown = { focusKeyboard(FIRST_KEY_INDEX) },
+                        onSearch = { confirmSearch() },
+                        onSearchDown = { focusKeyboard(FIRST_KEY_INDEX) },
+                        onSearchLeft = { focusInput() },
+                        onKeyClick = { key -> onKeyClick(key) },
+                        onKeyMove = { index, key -> onKeyMove(index, key) },
+                    )
+                }
+            }
 
             Spacer(modifier = Modifier.width(LEFT_COLUMN_MARGIN_END))
 
@@ -1563,6 +1595,8 @@ private val INPUT_PADDING_H = 12.dp
 
 // 左列内容自然高度 = 输入行 40 + 8(activity_search.xml L61 marginTop) + 6×40 + 5×8 = 328dp，
 // 宽度 = 7×40 + 6×8 = 328dp；两者都由内容撑出（wrapContentWidth），不再写死、不再 fillMaxHeight。
+// 上半区可用高度不足这个值时，按 maxHeight / 该值 等比缩小整棵键盘子树（见 HeroSearchScreen）。
+private val KEYBOARD_NATURAL_HEIGHT = INPUT_HEIGHT + KEY_SPACING + KEY_SIZE * 6 + KEY_SPACING * 5
 
 // 键盘键：40dp / 16sp / 4dp 圆角（adapter_keyboard_text.xml）。
 private val KEY_SHAPE = RoundedCornerShape(4.dp)
