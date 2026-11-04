@@ -8,9 +8,11 @@ import android.os.Bundle
 import android.view.KeyEvent
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -34,14 +36,15 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.darkColorScheme
@@ -57,7 +60,6 @@ import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -102,26 +104,26 @@ import kotlinx.coroutines.launch
 /**
  * HeroUI（Compose）搜索页。
  *
- * 版式基准 = 原版截图 + `ref_docs/activity_search.xml`：**上下两层，不做左右分栏**。
+ * 版式基准 = 原版截图 + `ref_docs/activity_search.xml`：**左右分栏，一屏直排**。
  * ```
- * Column(fillMaxSize + padding(start/end=24dp, top=24dp))       // L2-11
- *   ├─ Row(fillMaxWidth + height(324dp))                          // L12-16：上半区（内容定高）
- *   │    ├─ KeyboardSection(width=328dp)                          // L17-65：输入行 36 + 8 + 键盘 280
- *   │    └─ RightContentSection(weight=1f, fillMaxHeight)         // L66-143：历史贴顶 / 建议贴底
- *   ├─ Spacer(12dp)                                               // L151 marginTop
- *   └─ if (hasInput) ResultSection(fillMaxWidth + weight(1f))     // L145-207：下半区
- *        ├─ LazyRow(height=36dp, contentPadding=24dp)             // 站点 Tab
- *        └─ Box(height=215dp) → LazyRow(fillMaxSize)              // 海报行，整条完整可见
+ * Row(fillMaxSize + padding(start/end=24dp, top=24dp))            // 唯一根节点，无整体滚动
+ *   ├─ KeyboardSection(width=328dp)                                // L17-65：输入行 40 + 8 + 键盘 280 = 328
+ *   └─ RightContentColumn(weight(1f) + fillMaxHeight)              // L66-207
+ *        └─ verticalScroll(rememberScrollState())                  // 对应原版 NestedScrollView 兜底
+ *             ├─ 历史区块
+ *             ├─ 建议 / 热搜区块
+ *             ├─ 站点筛选 Tab（LazyRow 36dp, contentPadding 24dp）
+ *             └─ 海报行（LazyRow, HeroPosterCard 120×214dp）
  * ```
  *
  * 三条硬约束（历史 bug 的根因所在）：
- * 1. 根节点只有 [Column]；上半区高度 = 键盘内容高度 [TOP_SECTION_HEIGHT]（324dp，720dp 屏上不到半屏），
- *    下半区 `weight(1f)` 拿满剩余高度，两者顺序排列，**物理上不可能互相覆盖**。
- * 2. 上半区 `Row` 额外 `clipToBounds()`；左列**不做 verticalScroll**（TV 端滚动会丢遥控器焦点）。
- *    键盘 6 行按键完整撑开，末排（WXYZ / 3456789）底边与右侧「热搜 / 建议」底边严格对齐。
+ * 1. 根节点只有 [Row]；左列键盘**不在**滚动容器里、宽度写死 328dp、高度由内容锁死 328dp
+ *    （[TOP_SECTION_HEIGHT]），右列内容再怎么长都挤不动它。
+ * 2. 整页唯一滚动 = 右列 `verticalScroll`；720dp 屏上右列内容约 460dp < 可视 696dp，
+ *    **默认不滚动就一屏放得下**，滚动只是极端字体缩放/超多胶囊时的保险。
  * 3. 键盘用 `Column + Row` 手摆，绝不用 LazyGrid：键 `size(40.dp)`、间距 **8dp**（逆向
  *    `SpaceItemDecoration(7, 8)`），7 列 = 7×40 + 6×8 = 328dp，任何分辨率下都不会被拉伸。
- *    720dp 屏总预算：24 + 324 + 12 + (36 + 12 + 215) = 623dp ≤ 720dp（余 97dp）。
+ *    站点 Tab 与海报行是同一列里的两个顺序子节点（中间 12dp），物理上不可能重叠。
  *
  * 键盘第一行与 `ref_docs/xd1.java` L27 一致：`(占位, <, >, ⌫, 键盘, 房子, A)`，之后 B-Z、0-9，
  * 共 42 格 = 6 行 × 7 列，最右列正是 A / H / O / V / 2 / 9（与 `topbar_search_page.png` 一致）。
@@ -200,6 +202,9 @@ private fun HeroSearchScreen(
 
     val siteState = rememberLazyListState()
     val posterState = rememberLazyListState()
+    // 右列兜底滚动（对应原版 activity_search.xml L66-73 的 NestedScrollView）。
+    // 只在内容超过可视高度时才会真正滚动；720dp 屏上默认静止。
+    val rightScroll = rememberScrollState()
 
     // 焦点回到输入框/键盘 = 离开结果区，清掉标记，避免之后清空输入时把焦点从键盘抢走。
     fun focusInput() {
@@ -391,9 +396,9 @@ private fun HeroSearchScreen(
     }
 
     // ------------------------------------------------------------------
-    // 骨架 1：上下结构。根节点只有 Column，没有 Box 叠加。
+    // 骨架 1：左右分栏。根节点只有 Row + 根级 padding：没有整体滚动、没有 Box 叠加。
     // ------------------------------------------------------------------
-    Column(
+    Row(
         modifier = Modifier
             .fillMaxSize()
             .background(
@@ -405,86 +410,70 @@ private fun HeroSearchScreen(
             )
             .padding(start = ROOT_PADDING_H, end = ROOT_PADDING_H, top = ROOT_PADDING_TOP),
     ) {
-        // 上半区：高度由键盘自身内容决定（输入行 36 + 8 + 6×40 + 5×8 = 324dp），
-        // 只占屏幕约 45%，绝不吃 weight、绝不会被下半区挤压。
-        // 右侧历史/建议 fillMaxHeight + SpaceBetween 贴着同一条底线 → 末排按键与「建议」底边对齐。
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(TOP_SECTION_HEIGHT)
-                .clipToBounds(),
-        ) {
-            KeyboardSection(
-                field = field,
-                inputRequester = inputRequester,
-                searchRequester = searchRequester,
-                keyRequesters = keyRequesters,
-                onInputDown = { focusKeyboard(FIRST_KEY_INDEX) },
-                onSearch = { confirmSearch() },
-                onSearchDown = { focusKeyboard(FIRST_KEY_INDEX) },
-                onSearchLeft = { focusInput() },
-                onKeyFocused = { index -> lastKeyIndex = index },
-                onKeyClick = { key -> onKeyClick(key) },
-                onKeyMove = { index, key -> onKeyMove(index, key) },
-            )
+        // 左列：宽固定 328dp，高由内容锁死 = 输入行 40 + 8 + 6×40 + 5×8 = 328dp。
+        // 不参与 Row 的高度分配、不会被右列内容挤压，也绝不滚动（TV 端滚动必丢遥控器焦点）。
+        KeyboardSection(
+            field = field,
+            inputRequester = inputRequester,
+            searchRequester = searchRequester,
+            keyRequesters = keyRequesters,
+            onInputDown = { focusKeyboard(FIRST_KEY_INDEX) },
+            onSearch = { confirmSearch() },
+            onSearchDown = { focusKeyboard(FIRST_KEY_INDEX) },
+            onSearchLeft = { focusInput() },
+            onKeyFocused = { index -> lastKeyIndex = index },
+            onKeyClick = { key -> onKeyClick(key) },
+            onKeyMove = { index, key -> onKeyMove(index, key) },
+        )
 
-            Spacer(modifier = Modifier.width(LEFT_COLUMN_MARGIN_END))
+        Spacer(modifier = Modifier.width(LEFT_COLUMN_MARGIN_END))
 
-            RightContentSection(
-                history = history,
-                words = words,
-                wordTitle = wordTitle,
-                hasInput = hasInput,
-                historyRequesters = historyRequesters,
-                wordRequesters = wordRequesters,
-                rightFirstRequester = rightFirstRequester,
-                onWordClick = { text ->
-                    setKeyword(text)
-                    recordHistory(text)
-                },
-                onLeftEdge = { focusKeyboard(lastKeyIndex) },
-                onDownToResults = { focusSite(0) },
-            )
-        }
-
-        Spacer(modifier = Modifier.height(RESULT_SECTION_TOP_GAP))
-
-        // 下半区：weight(1f) 吃掉上半区之外的全部高度（720dp 屏上约 360dp），
-        // 内部固定 36dp Tab 行 + 12dp 间隔 + 215dp 海报带 = 263dp，整条海报永远完整可见。
-        if (hasInput) {
-            ResultSection(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(1f),
-                siteState = siteState,
-                posterState = posterState,
-                selectedSite = selectedSite,
-                siteRequesters = siteRequesters,
-                posterRegistry = posterRegistry,
-                onSiteFocused = { index ->
-                    focusedSite = index
-                    resultsFocused = true
-                },
-                onSiteConfirm = { index ->
-                    selectedSite = index
-                    focusedSite = index
-                },
-                onSiteUp = { focusRightFirstChip() },
-                onSiteDown = { focusPoster(0) },
-                onSiteLeft = { index -> focusSite(index - 1) },
-                onSiteRight = { index -> focusSite(index + 1) },
-                onPosterFocused = { resultsFocused = true },
-                onPosterOpen = { title ->
-                    recordHistory(keyword)
-                    onOpenDetail(title)
-                },
-                onPosterUp = { focusSite(focusedSite) },
-                onPosterLeft = { index -> if (index > 0) focusPoster(index - 1) },
-                onPosterRight = { index ->
-                    if (index < HERO_RESULTS.lastIndex) focusPoster(index + 1)
-                },
-            )
-        }
+        // 右列：weight(1f) + fillMaxHeight + verticalScroll（对应原版 NestedScrollView 的兜底），
+        // 自上而下：历史 → 建议/热搜 → 站点 Tab → 海报行。
+        // 720dp 一屏本来就放得下，滚动只是极端字体缩放/超多胶囊时的保险。
+        RightContentColumn(
+            scroll = rightScroll,
+            history = history,
+            words = words,
+            wordTitle = wordTitle,
+            hasInput = hasInput,
+            historyRequesters = historyRequesters,
+            wordRequesters = wordRequesters,
+            rightFirstRequester = rightFirstRequester,
+            siteState = siteState,
+            posterState = posterState,
+            selectedSite = selectedSite,
+            siteRequesters = siteRequesters,
+            posterRegistry = posterRegistry,
+            onWordClick = { text ->
+                setKeyword(text)
+                recordHistory(text)
+            },
+            onLeftEdge = { focusKeyboard(lastKeyIndex) },
+            onDownToResults = { focusSite(0) },
+            onSiteFocused = { index ->
+                focusedSite = index
+                resultsFocused = true
+            },
+            onSiteConfirm = { index ->
+                selectedSite = index
+                focusedSite = index
+            },
+            onSiteUp = { focusRightFirstChip() },
+            onSiteDown = { focusPoster(0) },
+            onSiteLeft = { index -> focusSite(index - 1) },
+            onSiteRight = { index -> focusSite(index + 1) },
+            onPosterFocused = { resultsFocused = true },
+            onPosterOpen = { title ->
+                recordHistory(keyword)
+                onOpenDetail(title)
+            },
+            onPosterUp = { focusSite(focusedSite) },
+            onPosterLeft = { index -> if (index > 0) focusPoster(index - 1) },
+            onPosterRight = { index ->
+                if (index < HERO_RESULTS.lastIndex) focusPoster(index + 1)
+            },
+        )
     }
 }
 
@@ -504,9 +493,9 @@ private fun HeroSearchScreen(
  *   宽度是 7×40dp + 6×8dp = 328dp 算出来的；
  * - 与输入框行的间距：**8dp**（`activity_search.xml` L61 `android:layout_marginTop="8dp"`）。
  *
- * 高度不写死：`wrapContentHeight()` 由 6 行按键撑开（6×40 + 5×8 = 280dp），
- * 加输入框行 36dp 与 8dp 间隔 = 324dp = [TOP_SECTION_HEIGHT]；父级 `Row` 用的就是这个高度，
- * 所以最后一排（WXYZ / 3456789）绝不会被裁，且与右侧「热搜 / 建议」底边齐平。
+ * 高度由内容锁死：6 行按键（6×40 + 5×8 = 280dp）+ 输入行 40dp + 8dp 间隔 = **328dp**（[TOP_SECTION_HEIGHT]）。
+ * 外面套的是根级 `Row`（左右分栏），左列不参与任何高度分配、也不是滚动容器，
+ * 所以最后一排（WXYZ / 3456789）在任何情况下都完整显示，永远不会被右列内容挤动。
  */
 @Composable
 private fun KeyboardSection(
@@ -525,12 +514,12 @@ private fun KeyboardSection(
     Column(
         modifier = Modifier
             .width(LEFT_COLUMN_WIDTH)
-            // 高度不写死：不再 fillMaxHeight，由 6 行按键自然撑开，
-            // 最后一排不会被父级的固定高度压掉。
-            .wrapContentHeight(),
+            // 兜底最小高度 = 328dp：即使某个子节点测出更小，左列也保持整块高度。
+            // 只给下限、不给固定值，字体放大时内容可以自然变高，6 行永远不会被裁。
+            .heightIn(min = TOP_SECTION_HEIGHT),
         verticalArrangement = Arrangement.spacedBy(KEY_SPACING),
     ) {
-        // 输入框行：mic 36dp + 12dp + 只读输入框(weight 1f) + 12dp + 搜索 36dp（整行 36dp）
+        // 输入框行：mic 36dp + 12dp + 只读输入框(weight 1f) + 12dp + 搜索 40dp（整行 40dp）
         Row(verticalAlignment = Alignment.CenterVertically) {
             HeroGlyphIcon(glyph = HeroGlyph.Mic, modifier = Modifier.size(MIC_SIZE))
             Spacer(modifier = Modifier.width(MIC_MARGIN_END))
@@ -574,13 +563,14 @@ private fun KeyboardSection(
 }
 
 /**
- * 单个按键：**严格 40 × 40dp**（`adapter_keyboard_text.xml` L10），4dp 圆角、16sp 白字。
+ * 单个按键：**严格 40 × 40dp**（`adapter_keyboard_text.xml` L10），4dp 圆角（`shape_keyboard_normal.xml`）、16sp 白字。
  *
- * 焦点反馈（本版重点）：
- * - 常态 `0x33FFFFFF`（半透明白），焦点 **纯红 `0xFFFF0000`**，方向键在键盘内移动时一定看得见；
- * - 蓝色/白色描边都不加在底色上：红底之外只叠 1.5dp 白描边，保证纯红仍是最强信号；
+ * 焦点反馈（TV 端核心）：
+ * - 常态 `0x33FFFFFF`（半透明白）；**焦点纯红 `0xFFFF0000`**（[KEY_BG_FOCUSED] / HeroAccentColor）、文字纯白；
+ * - 背景色用 `animateColorAsState` 做 90ms 过渡，遥控器连按时红底跟着焦点"滑"过去，不闪不跳；
  * - `collectIsFocusedAsState()` 是主信号，`onFocusChanged` 只做兜底（极端机型上交互源可能不派发），
- *   两者取或，绝不会出现「焦点移动了但没有背景」。
+ *   两者取或，绝不会出现「焦点到了但按键还是灰的」。
+ * - 只挂一个焦点节点（`clickable` 自带 focusable），再叠 `focusable()` 会分裂焦点、红底会丢。
  */
 @Composable
 private fun KeyboardKey(
@@ -594,13 +584,18 @@ private fun KeyboardKey(
     val isFocused by interaction.collectIsFocusedAsState()
     var focusFlag by remember { mutableStateOf(false) }
     val focused = isFocused || focusFlag
-    val bgColor = if (focused) KEY_BG_FOCUSED else KEY_BG_NORMAL
+    // 红底跟随焦点：90ms 线性过渡，够快（TV 不能拖）又不会硬切闪屏。
+    val bgColor by animateColorAsState(
+        targetValue = if (focused) KEY_BG_FOCUSED else KEY_BG_NORMAL,
+        animationSpec = tween(durationMillis = KEY_FOCUS_FADE_MS),
+        label = "keyFocusBg",
+    )
 
     Box(
         modifier = Modifier
             .size(KEY_SIZE)                       // 40dp 写死，任何区域都不会被拉伸
-            .clip(KEY_SHAPE)                      // 4dp
-            .background(bgColor, KEY_SHAPE)       // 红底焦点
+            .clip(KEY_SHAPE)                      // 4dp 圆角
+            .background(bgColor, KEY_SHAPE)       // 焦点 = 纯红底
             .focusRequester(requester)
             .onFocusChanged {
                 focusFlag = it.isFocused
@@ -626,6 +621,7 @@ private fun KeyboardKey(
         when (key) {
             is HeroKey.Text -> Text(
                 text = key.value,
+                // 两种态都是纯白：红底白字、灰底白字，对比度都够。
                 color = Color.White,
                 fontSize = KEY_TEXT_SP.sp,
                 maxLines = 1,
@@ -664,7 +660,7 @@ private fun HeroKeyPlaceholder() {
  *
  * - 文字 24sp、字距 0.02（`activity_search.xml` L37/L53），hint 白（L39）；
  * - 焦点态 2dp 红框（`selector_tmdb_input.xml` 的 focused 态 + `topbar_search_page.png`）；
- * - 高度压到 36dp（与 mic 同高，原版 24sp 文字放得下），圆角 13dp。
+ * - 高度 40dp（= 键盘键高，和 mic / 放大镜横向一条线），圆角 13dp。
  */
 @Composable
 private fun HeroSearchInput(
@@ -737,7 +733,7 @@ private fun HeroSearchInput(
     }
 }
 
-/** 放大镜按钮：36dp 圆（与输入框、mic 同高，压缩上半区），配色复用键盘键两态。 */
+/** 放大镜按钮：40dp 圆（与输入框/键盘键同高），配色复用键盘键两态。 */
 @Composable
 private fun HeroSearchSubmit(
     requester: FocusRequester,
@@ -790,15 +786,22 @@ private fun HeroSearchSubmit(
 // ---------------------------------------------------------------------------
 
 /**
- * 右列：历史 + 热搜（无输入）/ 建议（有输入）。
+ * 右列（内容区）：`weight(1f) + fillMaxHeight + verticalScroll` —— 对应原版
+ * `activity_search.xml` L66-73 的 `NestedScrollView`（`clipToPadding=false`、`overScrollMode=never`）。
  *
- * 自己是 `RowScope` 扩展，所以 `weight(1f)` 是合法的。
- * `fillMaxHeight()` + `Arrangement.SpaceBetween`：整列高度 = 上半区高度（[TOP_SECTION_HEIGHT]），
- * 「历史」贴顶、最后一块（热搜 / 建议）贴底 → **它的底边和键盘最后一排按键的底边在同一条水平线**。
- * 因此这里不能再挂 `verticalScroll`（滚动后底边会漂移，对齐就失效了）。
+ * 一列之内自上而下顺序排列，**绝不重叠**：
+ * ```
+ * a. 历史区块                     HeroWordSection("历史")
+ * b. 建议 / 热搜区块               HeroWordSection("建议" | "热搜")
+ * c. 站点筛选 Tab（36dp LazyRow）  contentPadding start/end = 24dp
+ * d. 海报行（LazyRow）             HeroPosterCard 自带 120×214dp，不写死高度
+ * ```
+ * 整页只有这一处垂直滚动：内容超长时往下滑就能看到海报，没超长时 720dp 一屏完美展示。
+ * 左列键盘不在这个滚动容器里，因此永远不会被右列内容挤动。
  */
 @Composable
-private fun RowScope.RightContentSection(
+private fun RowScope.RightContentColumn(
+    scroll: ScrollState,
     history: List<String>,
     words: List<String>,
     wordTitle: String,
@@ -806,16 +809,33 @@ private fun RowScope.RightContentSection(
     historyRequesters: List<FocusRequester>,
     wordRequesters: List<FocusRequester>,
     rightFirstRequester: FocusRequester,
+    siteState: LazyListState,
+    posterState: LazyListState,
+    selectedSite: Int,
+    siteRequesters: List<FocusRequester>,
+    posterRegistry: HeroPosterViewRegistry,
     onWordClick: (String) -> Unit,
     onLeftEdge: () -> Unit,
     onDownToResults: () -> Unit,
+    onSiteFocused: (Int) -> Unit,
+    onSiteConfirm: (Int) -> Unit,
+    onSiteUp: () -> Unit,
+    onSiteDown: () -> Unit,
+    onSiteLeft: (Int) -> Unit,
+    onSiteRight: (Int) -> Unit,
+    onPosterFocused: () -> Unit,
+    onPosterOpen: (String) -> Unit,
+    onPosterUp: (Int) -> Unit,
+    onPosterLeft: (Int) -> Unit,
+    onPosterRight: (Int) -> Unit,
 ) {
     Column(
         modifier = Modifier
             .weight(1f)
-            .fillMaxHeight(),
-        verticalArrangement = Arrangement.SpaceBetween,
+            .fillMaxHeight()
+            .verticalScroll(scroll),
     ) {
+        // a. 历史
         HeroWordSection(
             title = TITLE_HISTORY,
             words = history,
@@ -828,7 +848,10 @@ private fun RowScope.RightContentSection(
             onLeftEdge = onLeftEdge,
             onDownToResults = onDownToResults,
         )
+
+        // b. 建议（有输入）/ 热搜（无输入）
         if (words.isNotEmpty()) {
+            Spacer(modifier = Modifier.height(RIGHT_SECTION_GAP))
             HeroWordSection(
                 title = wordTitle,
                 words = words,
@@ -839,6 +862,30 @@ private fun RowScope.RightContentSection(
                 onWordClick = onWordClick,
                 onLeftEdge = onLeftEdge,
                 onDownToResults = onDownToResults,
+            )
+        }
+
+        // c + d. 站点 Tab + 海报行（有输入才出现；没输入时整块不占位，和原版 visibility=gone 一致）
+        if (hasInput) {
+            Spacer(modifier = Modifier.height(RESULT_SECTION_TOP_GAP))
+            ResultSection(
+                modifier = Modifier.fillMaxWidth(),
+                siteState = siteState,
+                posterState = posterState,
+                selectedSite = selectedSite,
+                siteRequesters = siteRequesters,
+                posterRegistry = posterRegistry,
+                onSiteFocused = onSiteFocused,
+                onSiteConfirm = onSiteConfirm,
+                onSiteUp = onSiteUp,
+                onSiteDown = onSiteDown,
+                onSiteLeft = onSiteLeft,
+                onSiteRight = onSiteRight,
+                onPosterFocused = onPosterFocused,
+                onPosterOpen = onPosterOpen,
+                onPosterUp = onPosterUp,
+                onPosterLeft = onPosterLeft,
+                onPosterRight = onPosterRight,
             )
         }
     }
@@ -995,9 +1042,11 @@ private fun HeroWordChip(
 // ---------------------------------------------------------------------------
 
 /**
- * 结果区（下半区）：`fillMaxWidth + weight(1f)`，占满上半区之外的全部高度
- * （720dp 屏约 360dp），内部内容固定 36dp Tab 行 + 12dp 间隔 + 215dp 海报带 = 263dp，
- * 所以整条海报永远完整显示，不会被裁掉一截。
+ * 结果区（右列里的 c + d 段）：`fillMaxWidth`，高度完全由内容决定
+ * （36dp Tab 行 + 12dp 间隔 + 海报卡自带 214dp），**既不写死高度、也不 fillMaxSize**，
+ * 所以在垂直滚动容器里既不会被裁掉一截，也不会撑出无穷高度约束。
+ *
+ * 站点 Tab 与海报行是同一列里的两个顺序子节点（中间 12dp Spacer），**物理上不可能重叠**。
  *
  * 两条 LazyRow 的 `contentPadding` 取 [RESULT_CONTENT_PADDING] = 24dp：
  * 站点 Tab 与海报行各自再让出 24dp 呼吸空间，第一个「全部」不会贴着屏幕边缘，
@@ -1059,64 +1108,59 @@ private fun ResultSection(
 
         Spacer(modifier = Modifier.height(SITE_POSTER_GAP))
 
-        // 海报行：高度锁死 215dp（activity_search.xml L167）。
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(POSTER_AREA_HEIGHT),
+        // 海报行：**不写死高度**，高度由 HeroPosterCard 自己的 onMeasure（120×214dp）决定，
+        // 因此任何密度/字体缩放下都不会被切掉一截；横向滚动由 LazyRow 负责。
+        LazyRow(
+            state = posterState,
+            modifier = Modifier.fillMaxWidth(),
+            contentPadding = PaddingValues(
+                start = RESULT_CONTENT_PADDING,
+                end = RESULT_CONTENT_PADDING,
+            ),
+            horizontalArrangement = Arrangement.spacedBy(POSTER_ITEM_SPACING),
         ) {
-            LazyRow(
-                state = posterState,
-                modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(
-                    start = RESULT_CONTENT_PADDING,
-                    end = RESULT_CONTENT_PADDING,
-                ),
-                horizontalArrangement = Arrangement.spacedBy(POSTER_ITEM_SPACING),
-            ) {
-                itemsIndexed(items = HERO_RESULTS) { index, item ->
-                    // 【红线】HeroPosterCard 自己 onMeasure 死锁 120×214dp，
-                    // 这里绝不加 Modifier.width()/size()，直接放进去。
-                    AndroidView(
-                        factory = { context ->
-                            HeroPosterCard(context).also { card -> posterRegistry.bind(index, card) }
-                        },
-                        update = { card ->
-                            // 只在值变化时写，避免每次重组都触发 HeroPosterCard 内部的图片重载。
-                            if (card.title != item.title) card.title = item.title
-                            if (card.topStartTag != item.topTag) card.topStartTag = item.topTag
-                            if (card.bottomStartTag != item.bottomTag) card.bottomStartTag = item.bottomTag
-                            if (card.imageUrl != item.imageUrl) card.imageUrl = item.imageUrl
+            itemsIndexed(items = HERO_RESULTS) { index, item ->
+                // 【红线】HeroPosterCard 自己 onMeasure 死锁 120×214dp，
+                // 这里绝不加 Modifier.width()/size()，直接放进去。
+                AndroidView(
+                    factory = { context ->
+                        HeroPosterCard(context).also { card -> posterRegistry.bind(index, card) }
+                    },
+                    update = { card ->
+                        // 只在值变化时写，避免每次重组都触发 HeroPosterCard 内部的图片重载。
+                        if (card.title != item.title) card.title = item.title
+                        if (card.topStartTag != item.topTag) card.topStartTag = item.topTag
+                        if (card.bottomStartTag != item.bottomTag) card.bottomStartTag = item.bottomTag
+                        if (card.imageUrl != item.imageUrl) card.imageUrl = item.imageUrl
 
-                            card.setOnFocusChangeListener { _, hasFocus ->
-                                if (hasFocus) onPosterFocused()
-                            }
-                            card.setOnClickListener { onPosterOpen(item.title) }
-                            card.setOnKeyListener { _, keyCode, event ->
-                                if (event.action != KeyEvent.ACTION_DOWN) return@setOnKeyListener false
-                                when (keyCode) {
-                                    KeyEvent.KEYCODE_DPAD_LEFT -> {
-                                        onPosterLeft(index)
-                                        true
-                                    }
-
-                                    KeyEvent.KEYCODE_DPAD_RIGHT -> {
-                                        onPosterRight(index)
-                                        true
-                                    }
-
-                                    KeyEvent.KEYCODE_DPAD_UP -> {
-                                        onPosterUp(index)
-                                        true
-                                    }
-
-                                    else -> false
+                        card.setOnFocusChangeListener { _, hasFocus ->
+                            if (hasFocus) onPosterFocused()
+                        }
+                        card.setOnClickListener { onPosterOpen(item.title) }
+                        card.setOnKeyListener { _, keyCode, event ->
+                            if (event.action != KeyEvent.ACTION_DOWN) return@setOnKeyListener false
+                            when (keyCode) {
+                                KeyEvent.KEYCODE_DPAD_LEFT -> {
+                                    onPosterLeft(index)
+                                    true
                                 }
+
+                                KeyEvent.KEYCODE_DPAD_RIGHT -> {
+                                    onPosterRight(index)
+                                    true
+                                }
+
+                                KeyEvent.KEYCODE_DPAD_UP -> {
+                                    onPosterUp(index)
+                                    true
+                                }
+
+                                else -> false
                             }
-                        },
-                        onRelease = { card -> posterRegistry.unbind(index, card) },
-                    )
-                }
+                        }
+                    },
+                    onRelease = { card -> posterRegistry.unbind(index, card) },
+                )
             }
         }
     }
@@ -1521,30 +1565,31 @@ private val KEY_SPACING = 8.dp
 private val LEFT_COLUMN_WIDTH = 328.dp
 private val LEFT_COLUMN_MARGIN_END = 24.dp          // activity_search.xml L21
 
-// 输入框行：mic 36dp + 间距 12dp；搜索按钮与输入框同高 36dp（压缩上半区高度）；图标 24dp。
+// 输入框行：mic 36dp（图标本体 24dp）+ 间距 12dp；搜索按钮与输入框同高 40dp，与键盘键对齐。
 private val MIC_SIZE = 36.dp
 private val MIC_MARGIN_END = 12.dp
-private val SEARCH_BUTTON_SIZE = 36.dp
+private val SEARCH_BUTTON_SIZE = 40.dp
 private val SEARCH_BUTTON_MARGIN_START = 12.dp
 private val KEY_ICON_SIZE = 24.dp
 
-// 输入框：24sp、字距 0.02（L37/L53）；红框 2dp、圆角 13dp；高度压到 36dp 与 mic 对齐。
+// 输入框：24sp、字距 0.02（L37/L53）；红框 2dp、圆角 13dp；高度 40dp（= 键盘键高，横向一条线）。
 private const val INPUT_TEXT_SP = 24f
 private const val INPUT_LETTER_SPACING = 0.02f
-private val INPUT_HEIGHT = 36.dp
+private val INPUT_HEIGHT = 40.dp
 private val INPUT_STROKE = 2.dp
 private val INPUT_SHAPE = RoundedCornerShape(13.dp)
 private val INPUT_PADDING_H = 12.dp
 
-// 上半区总高 = 输入行 36 + 8(activity_search.xml L61 的 marginTop) + 6×40 + 5×8 = 324dp。
-// 720dp 屏上 24 + 324 = 348dp ≈ 48%，不超过半屏；下半区 weight(1f) 拿满剩下的 372dp。
+// 左列键盘块总高 = 输入行 40 + 8(activity_search.xml L61 的 marginTop) + 6×40 + 5×8 = 328dp。
+// 与宽度 328dp 相等 → 整块是 328×328 的方阵，720dp 屏上只占 46%。
 private val TOP_SECTION_HEIGHT = INPUT_HEIGHT + KEY_SPACING + KEY_SIZE * 6 + KEY_SPACING * 5
 
 // 键盘键：40dp / 16sp / 4dp 圆角（adapter_keyboard_text.xml）。
 private val KEY_SHAPE = RoundedCornerShape(4.dp)
 private const val KEY_TEXT_SP = 16f
 private val KEY_BG_NORMAL = Color(0x33FFFFFF)
-private val KEY_BG_FOCUSED = Color(0xFFFF0000)
+private val KEY_BG_FOCUSED = Color(0xFFFF0000)      // HeroAccentColor：焦点红底
+private const val KEY_FOCUS_FADE_MS = 90            // 红底跟随焦点的过渡时长（TV 要快）
 
 // 焦点红（键盘红底、胶囊/Tab 描边共用）。
 private val FOCUS_RED = Color(0xFFFF0000)
@@ -1579,9 +1624,9 @@ private val SITE_ITEM_SPACING = 12.dp
 private val SITE_POSTER_GAP = 12.dp
 private val RESULT_CONTENT_PADDING = 24.dp          // 站点 Tab / 海报行统一 24dp 呼吸空间，第一个「全部」不再贴边
 private val RESULT_SECTION_TOP_GAP = 12.dp         // activity_search.xml L151
+private val RIGHT_SECTION_GAP = 16.dp              // 「历史」与「建议 / 热搜」之间的紧凑间隔
 
-// 海报行：215dp（activity_search.xml L167）+ 12dp 间距。
-private val POSTER_AREA_HEIGHT = 215.dp
+// 海报行：横向 LazyRow，高度由 HeroPosterCard 的 120×214dp onMeasure 决定（不写死），卡间距 12dp。
 private val POSTER_ITEM_SPACING = 12.dp
 private const val POSTER_SCROLL_ANCHOR = 4
 
