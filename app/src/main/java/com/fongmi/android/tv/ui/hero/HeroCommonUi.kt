@@ -26,6 +26,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.input.key.Key
@@ -41,9 +42,24 @@ import androidx.compose.ui.unit.sp
 import com.fongmi.android.tv.R
 
 // ---------------------------------------------------------------------------
-// 全局主题色：首页顶栏下划线 / Tab 选中底 / 海报焦点边框 / 弹窗焦点底统一使用这一个红。
+// 全局主题色，分两支：
+//
+// 1. [HeroAccentColor]：**描边 / 下划线 / 小竖条**用纯红 #FF0000
+//    （与海报卡 2dp 焦点框、选集格 2dp 焦点框同色）。
+// 2. [HeroFocusBrush]：**实心红块**（分类 Tab、搜索胶囊、站点 Tab、播放线路、分组按钮）
+//    统一用搜索页那支三段横向渐变 #E50914 → #F44336 → 玫瑰粉，
+//    即原版 `shape_item_round_focused` 的色标（@color/red → @color/red_500）。
+//
+// 以后新增任何「实心焦点块」都直接用 [HeroFocusBrush]，不要再写纯红 solid。
 // ---------------------------------------------------------------------------
 internal val HeroAccentColor = Color(0xFFFF0000)
+
+/** 实心焦点块专用渐变：左深红 → 中红 → 右侧玫瑰粉，横向铺满被填充的控件。 */
+internal val HeroFocusBrush: Brush = Brush.horizontalGradient(
+    0.0f to Color(0xFFE50914),   // @color/red
+    0.55f to Color(0xFFF44336),  // @color/red_500
+    1.0f to Color(0xFFFF7A85),   // 玫瑰粉端：原版焦点块右端明显更浅
+)
 
 // ---------------------------------------------------------------------------
 // 统一弹窗外壳（ref_docs/dialog_source.xml）：深色半透明 #E6000000 + 16dp 圆角 + 18dp 内边距。

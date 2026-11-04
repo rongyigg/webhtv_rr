@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  换源弹窗（ChangeSourceDialog）站点标签的「失焦但仍选中」态 —— 《焦点总结》规则 ②。
+
+  焦点落到下方结果卡片时，当前站点的标签不再实心变红，而是留一圈 2dp 红框 +
+  透明底，这样「下方这批结果属于哪个站点」一眼可见（对应需求图 2）。
+  焦点移回标签栏时恢复实心渐变（shape_source_site_chip_focused），
+  焦点移到小房子（离开本模块）时红框也要消失（规则 ③），
+  由 ChangeSourceDialog 通过 View.isActivated 控制本 drawable 的启用。
+
+  inset / corners / padding 与 focused 版保持完全一致，两种状态下标签尺寸不跳。
+-->
+<inset xmlns:android="http://schemas.android.com/apk/res/android"
+    android:insetTop="2dp"
+    android:insetBottom="2dp">
+    <shape android:shape="rectangle">
+        <stroke
+            android:width="2dp"
+            android:color="@color/red" />
+        <corners android:radius="28dp" />
+        <padding
+            android:left="6dp"
+            android:right="6dp" />
+    </shape>
+</inset>

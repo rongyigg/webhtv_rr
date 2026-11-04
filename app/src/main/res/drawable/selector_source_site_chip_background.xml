@@ -1,15 +1,24 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  换源弹窗（ChangeSourceDialog）站点标签的三种状态：
-  focused  → 红底白字胶囊（shape_source_site_chip_focused，#E50914）
-  selected → 当前站点（shape_source_chip_round_activated，透明底）
-  normal   → 透明底
-  侧边栏（SourceSidebar）不用本文件，它走 selector_source_site_item_background（白底黑字）。
+  换源弹窗（ChangeSourceDialog）站点标签的三态背景：
+
+  focused    → 红渐变色块 + 白字（shape_source_site_chip_focused）
+  activated  → 失焦但仍是当前站点、且焦点在下半区：红框 + 透明底（shape_source_site_chip_selected）
+  selected   → 当前站点但焦点已离开模块：透明（沿用常态，规则 ③ 不保留红框）
+  normal     → 透明
+
+  为什么用 state_activated 而不是 state_selected：
+  `selected` 只表达「当前站点」，与焦点位置无关；`activated` 由
+  ChangeSourceDialog 在焦点进出结果区时动态置位，正好对应规则 ②③ 的分界。
+  状态顺序即优先级：focused > activated > selected > normal。
 -->
 <selector xmlns:android="http://schemas.android.com/apk/res/android">
     <item
         android:state_focused="true"
         android:drawable="@drawable/shape_source_site_chip_focused" />
+    <item
+        android:state_activated="true"
+        android:drawable="@drawable/shape_source_site_chip_selected" />
     <item
         android:state_selected="true"
         android:drawable="@drawable/shape_source_chip_round_activated" />

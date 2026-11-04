@@ -1,17 +1,27 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  换源弹窗（ChangeSourceDialog）站点标签的焦点态：红底（@color/red = #E50914）白字胶囊。
-  与常态 `shape_source_chip_round_normal` 保持同一套 padding（左右各 6dp），
-  避免获得焦点时文字位置发生跳动；上下各 inset 2dp，让胶囊在 26dp 的标签行里不贴边。
+  换源弹窗（ChangeSourceDialog）站点标签的焦点态：红渐变色块 + 白字。
+
+  色标与 Compose 侧 HeroCommonUi.HeroFocusBrush 完全一致（全站实心焦点块统一这一支渐变）：
+    #E50914（@color/red）→ #F44336（@color/red_500）→ #FF7A85（玫瑰粉端）
+  angle=0 = 从左到右，对应 Compose 的 Brush.horizontalGradient。
+
+  与常态 `shape_source_chip_round_normal` 保持同一套 padding（左右各 6dp）；
+  不用渐变的固有尺寸撑高标签，所以上下各 inset 2dp，让渐变块落在 26dp 的标签高度内。
 -->
 <inset xmlns:android="http://schemas.android.com/apk/res/android"
     android:insetTop="2dp"
     android:insetBottom="2dp">
     <shape android:shape="rectangle">
-        <solid android:color="@color/red"/>
-        <corners android:radius="28dp"/>
+        <gradient
+            android:angle="0"
+            android:centerColor="@color/red_500"
+            android:endColor="#FFFF7A85"
+            android:startColor="@color/red"
+            android:type="linear" />
+        <corners android:radius="28dp" />
         <padding
             android:left="6dp"
-            android:right="6dp"/>
+            android:right="6dp" />
     </shape>
 </inset>

@@ -105,6 +105,7 @@ import coil3.request.ImageRequest
 import com.fongmi.android.tv.R
 import com.fongmi.android.tv.setting.Setting
 import com.fongmi.android.tv.ui.hero.HERO_SOURCE_ENTRIES
+import com.fongmi.android.tv.ui.hero.HeroFocusBrush
 import com.fongmi.android.tv.ui.hero.HeroImageLoader
 import com.fongmi.android.tv.ui.hero.HeroPosterCard
 import com.fongmi.android.tv.ui.hero.SourceSidebar
@@ -1116,7 +1117,7 @@ private fun HeroWordChip(
             // 焦点态 = **红色渐变色块**（左深右浅：#E50914 → #F44336 → 玫瑰粉），
             // 整块实心变红、无描边 —— 与原版截图里「开心锤锤」的焦点样式一致。
             .background(
-                brush = if (focused) CHIP_FOCUS_BRUSH else SolidColor(CHIP_BG_NORMAL),
+                brush = if (focused) HeroFocusBrush else SolidColor(CHIP_BG_NORMAL),
                 shape = CHIP_SHAPE,
             )
             .onFocusChanged { focusFlag = it.isFocused }
@@ -1353,9 +1354,9 @@ private fun HeroSiteTab(
             .height(SITE_TAB_HEIGHT)
             .focusRequester(requester)
             .clip(SITE_TAB_SHAPE)
-            // 焦点态 = 红色渐变色块，和胶囊共用同一支 CHIP_FOCUS_BRUSH，全页焦点色一致。
+            // 焦点态 = 红色渐变色块，和胶囊共用同一支 HeroFocusBrush，全页焦点色一致。
             .background(
-                brush = if (focused) CHIP_FOCUS_BRUSH else SolidColor(CHIP_BG_NORMAL),
+                brush = if (focused) HeroFocusBrush else SolidColor(CHIP_BG_NORMAL),
                 shape = SITE_TAB_SHAPE,
             )
             // 第 2 态：只有「失焦 + 选中 + 焦点仍在结果区」才挂红框。
@@ -1825,21 +1826,8 @@ private val RESULT_BAND_HEIGHT = RESULT_SECTION_TOP_GAP + SITE_ROW_HEIGHT + SITE
 // 红色：@color/red = #e50914（shape_red_bar.xml L4）。
 private val ACCENT_RED = Color(0xFFE50914)
 
-// 焦点渐变的中间色标：@color/red_500 = #F44336，与项目里 shape_detail_item_focused /
-// shape_detail_play_focused（angle=315）同色，保证全站焦点色一致。
-private val RED_500 = Color(0xFFF44336)
-
-// 焦点渐变的浅色端：原版截图里「开心锤锤」这个焦点块右端明显透粉，
-// 不是纯 #F44336，所以补一个偏玫瑰色的末端色标。
-private val RED_300 = Color(0xFFFF7A85)
-
-// 胶囊焦点块：**左深右浅的红色横向渐变**，对齐原版截图（#E50914 → #F44336 → 玫瑰粉），
-// 整块实心变红，四周无描边。
-private val CHIP_FOCUS_BRUSH = Brush.horizontalGradient(
-    0.0f to ACCENT_RED,
-    0.55f to RED_500,
-    1.0f to RED_300,
-)
+// 焦点红块统一用全局 [HeroFocusBrush]（HeroCommonUi）：#E50914 → #F44336 → 玫瑰粉，
+// 与首页分类 Tab、播放线路、换源弹窗站点标签共用同一支渐变，不再各自维护一份色标。
 
 // 输入上限 19 字（CustomKeyboard.onTextClick L33）；历史最多 9 条。
 private const val KEYWORD_MAX_LENGTH = 19

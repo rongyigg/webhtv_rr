@@ -88,6 +88,7 @@ import com.fongmi.android.tv.ui.hero.HERO_SOURCE_RESULT_TOTAL
 import com.fongmi.android.tv.ui.hero.HERO_SOURCE_SITES
 import com.fongmi.android.tv.ui.hero.HeroAccentColor
 import com.fongmi.android.tv.ui.hero.HeroDialogShell
+import com.fongmi.android.tv.ui.hero.HeroFocusBrush
 import com.fongmi.android.tv.ui.hero.HeroImageLoader
 import com.fongmi.android.tv.ui.hero.HeroSectionTitle
 import kotlinx.coroutines.Dispatchers
@@ -752,7 +753,7 @@ private fun HeroDetailActionRow(
 /**
  * 单颗按钮：高 36dp、字号 13sp、图标在左文字在右。
  *
- * 焦点态按需求取 [HeroAccentColor] 纯红底 + 纯白文字/图标；
+ * 焦点态按需求取 [HeroFocusBrush] 红渐变色块 + 纯白文字/图标（实心块全局统一渐变）；
  * 常态沿用原版 `shape_detail_item_normal` 的 `white_10`（`#1AFFFFFF`）底 + 4dp 圆角。
  *
  * 方向键：←/→ 在按钮间移动，↓ 进入演职员行，↑ 已到内容区顶部、直接消费。
@@ -799,7 +800,14 @@ private fun HeroDetailActionButton(
                 }
             }
             .clip(DETAIL_ACTION_SHAPE)
-            .background(if (isFocused) HeroAccentColor else DETAIL_ACTION_IDLE_BACKGROUND)
+            // 焦点态 = 全局红渐变色块（原先是纯红 solid，现统一到 [HeroFocusBrush]）。
+            .then(
+                if (isFocused) {
+                    Modifier.background(HeroFocusBrush, DETAIL_ACTION_SHAPE)
+                } else {
+                    Modifier.background(DETAIL_ACTION_IDLE_BACKGROUND, DETAIL_ACTION_SHAPE)
+                },
+            )
             .clickable(interactionSource = interaction, indication = null, onClick = onConfirm)
             .padding(horizontal = DETAIL_ACTION_H_PADDING),
         verticalAlignment = Alignment.CenterVertically,
@@ -896,6 +904,10 @@ private fun HeroPlayDialog(
     var playingNumber by remember { mutableIntStateOf(initialNumber) }
     var selectedFlag by remember { mutableIntStateOf(0) }
     var focusedFlag by remember { mutableIntStateOf(0) }
+    // 焦点是否还在「线路 / 控制栏 / 选集网格」的下半区。
+    // 只在线路栏上时为 false；一旦进入控制栏或网格就为 true ——
+    // 此时当前线路、当前分组都要留下红框（《焦点总结》规则 ②），让用户始终知道在放哪条线路、哪一组。
+    var contentFocused by remember { mutableStateOf(false) }
     /** 控制栏下标：0 = 列数、1 = 排序、2 起为分组按钮。 */
     var focusedControl by remember { mutableIntStateOf(CONTROL_COLUMNS) }
 
@@ -1129,8 +1141,13 @@ private fun HeroPlayDialog(
                         HeroFlagChip(
                             label = label,
                             selected = index == selectedFlag,
+                            moduleFocused = contentFocused,
                             requester = flagRequesters[index],
-                            onFocused = { focusedFlag = index },
+                            // 焦点回到线路栏 = 暂时离开下半区：红框收起，只留当前项的焦点块。
+                            onFocused = {
+                                focusedFlag = index
+                                contentFocused = false
+                            },
                             onConfirm = { selectedFlag = index },
                             // 线路栏 ↑ 上方只有不可聚焦的分区标题，直接消费。
                             onMoveUp = { },
@@ -1153,8 +1170,12 @@ private fun HeroPlayDialog(
                     Spacer(modifier = Modifier.width(DIALOG_CONTROL_GAP))
                     HeroToggleButton(
                         label = if (fewColumns) "少列" else "多列",
+                        moduleFocused = contentFocused,
                         requester = columnsRequester,
-                        onFocused = { focusedControl = CONTROL_COLUMNS },
+                        onFocused = {
+                            focusedControl = CONTROL_COLUMNS
+                            contentFocused = true
+                        },
                         onConfirm = { toggleColumns() },
                         onMoveUp = { focusFlag(focusedFlag) },
                         onMoveDown = { enterGrid() },
@@ -1164,8 +1185,12 @@ private fun HeroPlayDialog(
                     Spacer(modifier = Modifier.width(DIALOG_CONTROL_GAP))
                     HeroToggleButton(
                         label = if (descending) "倒序" else "正序",
+                        moduleFocused = contentFocused,
                         requester = sortRequester,
-                        onFocused = { focusedControl = CONTROL_SORT },
+                        onFocused = {
+                            focusedControl = CONTROL_SORT
+                            contentFocused = true
+                        },
                         onConfirm = { toggleSort() },
                         onMoveUp = { focusFlag(focusedFlag) },
                         onMoveDown = { enterGrid() },
@@ -1189,8 +1214,12 @@ private fun HeroPlayDialog(
                             HeroToggleButton(
                                 label = "$start-$end",
                                 selected = index == page,
+                                moduleFocused = contentFocused,
                                 requester = groupRequesters[index],
-                                onFocused = { focusedControl = controlIndex },
+                                onFocused = {
+                                    focusedControl = controlIndex
+                                    contentFocused = true
+                                },
                                 onConfirm = { selectPage(index) },
                                 onMoveUp = { focusFlag(focusedFlag) },
                                 onMoveDown = { enterGrid() },
@@ -1225,6 +1254,8 @@ private fun HeroPlayDialog(
                                 onFocused = {
                                     anchorCell = index
                                     anchorNumber = episode.number
+                                    // 焦点进网格：线路 / 分组保持红框（规则 ②）。
+                                    contentFocused = true
                                 },
                                 onConfirm = {
                                     playingNumber = episode.number
@@ -1247,12 +1278,17 @@ private fun HeroPlayDialog(
 
 /**
  * 播放线路项：32dp 高 / 14sp（`ref_docs/adapter_v2_site.xml` 的 39dp 按需求压到 32dp）。
- * 常态深灰底白字，选中略亮（记住当前线路），焦点红底白字。
+ *
+ * 三态（《焦点总结》）：
+ * - 聚焦 → [HeroFocusBrush] 红渐变色块 + 白字；
+ * - 失焦但仍是当前线路、且焦点在下半区 → 红框描边 + 弱底（规则 ②）；
+ * - 其余 → 常态深灰底白字（规则 ③）。
  */
 @Composable
 private fun HeroFlagChip(
     label: String,
     selected: Boolean,
+    moduleFocused: Boolean,
     requester: FocusRequester,
     onFocused: () -> Unit,
     onConfirm: () -> Unit,
@@ -1263,6 +1299,7 @@ private fun HeroFlagChip(
 ) {
     val interaction = remember { MutableInteractionSource() }
     val isFocused by interaction.collectIsFocusedAsState()
+    val selectedRing = selected && !isFocused && moduleFocused
 
     Box(
         modifier = Modifier
@@ -1296,11 +1333,22 @@ private fun HeroFlagChip(
                 }
             }
             .clip(DIALOG_FLAG_SHAPE)
-            .background(
-                when {
-                    isFocused -> HeroAccentColor
-                    selected -> DIALOG_FLAG_SELECTED_BG
-                    else -> DIALOG_FLAG_IDLE_BG
+            // 底色只表达「是否是当前线路」：当前线路弱亮，其余深灰。
+            // 焦点态下面再盖一层不透明红渐变，完全盖住这个底色。
+            .background(if (selected) DIALOG_FLAG_SELECTED_BG else DIALOG_FLAG_IDLE_BG)
+            // 焦点态用全局红渐变整块填充（实心块统一色）。
+            .then(
+                if (isFocused) {
+                    Modifier.background(HeroFocusBrush, DIALOG_FLAG_SHAPE)
+                } else {
+                    Modifier
+                },
+            )
+            .then(
+                if (selectedRing) {
+                    Modifier.border(DIALOG_FLAG_RING_STROKE, HeroAccentColor, DIALOG_FLAG_SHAPE)
+                } else {
+                    Modifier
                 },
             )
             .clickable(interactionSource = interaction, indication = null, onClick = onConfirm)
@@ -1319,7 +1367,9 @@ private fun HeroFlagChip(
 
 /**
  * 控制栏按钮：32dp 高 / 14sp（列数、排序、分组三处共用）。
- * 常态深灰底白字，`selected` 略亮（当前分组），焦点红底白字。
+ *
+ * 与线路按钮同一套三态：聚焦 → 红渐变色块；失焦但仍选中且焦点在下半区 → 红框；
+ * 其余 → 深灰底白字（规则 ②③）。
  */
 @Composable
 private fun HeroToggleButton(
@@ -1332,9 +1382,11 @@ private fun HeroToggleButton(
     onMoveLeft: () -> Unit,
     onMoveRight: () -> Unit,
     selected: Boolean = false,
+    moduleFocused: Boolean = false,
 ) {
     val interaction = remember { MutableInteractionSource() }
     val isFocused by interaction.collectIsFocusedAsState()
+    val selectedRing = selected && !isFocused && moduleFocused
 
     Box(
         modifier = Modifier
@@ -1368,11 +1420,19 @@ private fun HeroToggleButton(
                 }
             }
             .clip(DIALOG_TOGGLE_SHAPE)
-            .background(
-                when {
-                    isFocused -> HeroAccentColor
-                    selected -> DIALOG_TOGGLE_SELECTED_BG
-                    else -> DIALOG_TOGGLE_IDLE_BG
+            .background(if (selected) DIALOG_TOGGLE_SELECTED_BG else DIALOG_TOGGLE_IDLE_BG)
+            .then(
+                if (isFocused) {
+                    Modifier.background(HeroFocusBrush, DIALOG_TOGGLE_SHAPE)
+                } else {
+                    Modifier
+                },
+            )
+            .then(
+                if (selectedRing) {
+                    Modifier.border(DIALOG_TOGGLE_RING_STROKE, HeroAccentColor, DIALOG_TOGGLE_SHAPE)
+                } else {
+                    Modifier
                 },
             )
             .clickable(interactionSource = interaction, indication = null, onClick = onConfirm)
@@ -1688,6 +1748,8 @@ private val DIALOG_FLAG_SHAPE = RoundedCornerShape(4.dp)
 private const val DIALOG_FLAG_SP = 14f
 private val DIALOG_FLAG_IDLE_BG = Color(0x1AFFFFFF)
 private val DIALOG_FLAG_SELECTED_BG = Color(0x33FFFFFF)
+// 规则 ②：失焦但仍选中时补的 1.5dp 红框，宽度与首页分类 Tab / 搜索页胶囊一致。
+private val DIALOG_FLAG_RING_STROKE = 1.5.dp
 
 // 控制栏按钮（列数 / 排序 / 分组）：32dp 高 / 14sp；深灰底白字，焦点红底白字
 private val DIALOG_TOGGLE_HEIGHT = 32.dp
@@ -1696,6 +1758,7 @@ private val DIALOG_TOGGLE_SHAPE = RoundedCornerShape(4.dp)
 private const val DIALOG_TOGGLE_SP = 14f
 private val DIALOG_TOGGLE_IDLE_BG = Color(0x1AFFFFFF)
 private val DIALOG_TOGGLE_SELECTED_BG = Color(0x33FFFFFF)
+private val DIALOG_TOGGLE_RING_STROKE = 1.5.dp
 
 /** 单行控制栏下标：0 = 列数、1 = 排序、2 起为分组按钮。 */
 private const val CONTROL_COLUMNS = 0

@@ -91,6 +91,7 @@ import com.fongmi.android.tv.R
 import com.fongmi.android.tv.api.SiteApi
 import com.fongmi.android.tv.ui.hero.HERO_SOURCE_ENTRIES
 import com.fongmi.android.tv.ui.hero.HeroAccentColor
+import com.fongmi.android.tv.ui.hero.HeroFocusBrush
 import com.fongmi.android.tv.ui.hero.HeroHomeLogoButton
 import com.fongmi.android.tv.ui.hero.HeroImageLoader
 import com.fongmi.android.tv.ui.hero.SourceSidebar
@@ -222,13 +223,19 @@ private fun HeroHomeScreen(onOpenDetail: (String) -> Unit) {
     // 焦点态由每个 Tab 自己用 onFocusChanged 局部管理，不落到这个全局状态里。
     var selectedTabIndex by remember { mutableIntStateOf(-1) }
     var focusedPosterIndex by remember { mutableIntStateOf(0) }
+    // 焦点是否还在「Tab 栏 + 海报区」这一模块里。
+    // 《焦点总结》第 ②③ 条的分界线：只有还在模块内，选中的 Tab 才挂红框；
+    // 一旦 ↑ 回顶栏，选中态整体休眠，不留任何红框。
+    var moduleFocused by remember { mutableStateOf(false) }
 
     // 换分类时用同一批假数据做轮转，视觉上列表确实换了，但不需要第二套资源。
     val posters = remember(selectedTabIndex) { postersForTab(selectedTabIndex.coerceAtLeast(0)) }
     val heroPoster = posters.getOrElse(focusedPosterIndex) { posters[0] }
 
     // 任意一排 → 顶栏：默认落在最左侧的第一项（小房子），不记忆上次位置。
+    // 同时清掉「模块内」标记：选中的分类 Tab 立刻退成无红框、无红底（规则 ③）。
     fun focusTopBar() {
+        moduleFocused = false
         requestFocus(topBarRequesters, 0)
     }
 
@@ -330,8 +337,13 @@ private fun HeroHomeScreen(onOpenDetail: (String) -> Unit) {
                 requesters = tabRequesters,
                 // -1 = 尚未明确选择任何分类 → 所有 Tab 都不涂红（只有焦点态才红）。
                 selectedIndex = selectedTabIndex,
+                // 焦点还在模块内：让「选中但失焦」的 Tab 挂红框（规则 ②）。
+                moduleFocused = moduleFocused,
                 // 焦点只记录“上次停留位置”，不改变分类，也不改变选中态。
-                onFocused = { index -> rememberedTabIndex = index },
+                onFocused = { index ->
+                    rememberedTabIndex = index
+                    moduleFocused = true
+                },
                 // 确定键才是「明确被选中」：只有这里会切换分类（红底随之转移）。
                 onConfirm = { index ->
                     rememberedTabIndex = index
@@ -347,7 +359,12 @@ private fun HeroHomeScreen(onOpenDetail: (String) -> Unit) {
                 posters = posters,
                 state = posterState,
                 requesters = posterRequesters,
-                onFocused = { index -> focusedPosterIndex = index },
+                onFocused = { index ->
+                    focusedPosterIndex = index
+                    // 焦点进了卡片：选中的分类 Tab 从实心红块退成红框（规则 ②），
+                    // 两张卡与 Tab 的焦点指示同时可见，用户始终知道自己在看哪个分类。
+                    moduleFocused = true
+                },
                 // 卡片确定键：不再直接起播，改为拉起详情页（剧本名一并传过去）。
                 onClick = onOpenDetail,
                 // 海报行 ↑ 回 Tab 栏：落到记忆中的 Tab。
@@ -666,11 +683,11 @@ private fun HeroInfoArea(poster: HeroPoster) {
  * - 左右 padding 24dp（L138-139）、`paddingBottom=2dp`（L130）、`layout_marginBottom=12dp`（L137）。
  *
  * 胶囊样式严格对照 `ref_docs/adapter_type.xml` 的 `selector_item_round`，三态严格分离：
- * - focused（无论是否选中）：HeroAccentColor 纯红底 + 纯白字。
- * - 无焦点 + selected：HeroAccentColor 纯红底 + 纯白字。**selected 只由确定键产生**，
- *   焦点经过某个 Tab（包括左右键移动）不会把它置为 selected；
+ * - focused（无论是否选中）：[HeroFocusBrush] 红渐变色块 + 纯白字；
+ * - 失焦但 selected、且焦点还在 Tab/海报模块内：**红框描边 + 透明底**（规则 ②）；
+ * - 焦点离开模块（↑ 回顶栏）或从未选中：`Color.Transparent` 全透明底 + 60% 白字（规则 ③）。
+ *   **selected 只由确定键产生**，焦点经过某个 Tab（包括左右键移动）不会把它置为 selected；
  *   用户还没按过确定键时 `selectedIndex = -1`，此时整排都没有红底。
- * - 无焦点 + 未选中：`Color.Transparent` 全透明底（绝不能出现红块 / 灰块）+ 60% 白字。
  * - 形状为胶囊（[HERO_TAB_SHAPE]，13dp 圆角，高度 26dp 时刚好半圆）。
  * 背景不做颜色动画，避免过渡帧出现半透明色块。
  * 左右键不交给系统焦点搜索，而是显式 [focusTab]，这样横向滚动与选中态永远同步。
@@ -680,6 +697,7 @@ private fun HeroTabBar(
     state: LazyListState,
     requesters: List<FocusRequester>,
     selectedIndex: Int,
+    moduleFocused: Boolean,
     onFocused: (Int) -> Unit,
     onConfirm: (Int) -> Unit,
     onMoveUp: () -> Unit,
@@ -708,6 +726,7 @@ private fun HeroTabBar(
                 HeroTabChip(
                     label = label,
                     selected = index == selectedIndex,
+                    moduleFocused = moduleFocused,
                     requester = requesters[index],
                     onFocused = { onFocused(index) },
                     onConfirm = { onConfirm(index) },
@@ -725,6 +744,7 @@ private fun HeroTabBar(
 private fun HeroTabChip(
     label: String,
     selected: Boolean,
+    moduleFocused: Boolean,
     requester: FocusRequester,
     onFocused: () -> Unit,
     onConfirm: () -> Unit,
@@ -734,19 +754,14 @@ private fun HeroTabChip(
     onMoveRight: () -> Unit,
 ) {
     var focused by remember { mutableStateOf(false) }
-    // 背景三态，用 when 显式列出（不留任何隐式默认分支）：
-    //   1. isFocused  → HeroAccentColor 红底
-    //   2. isSelected → HeroAccentColor 红底（只有确定键能置位；焦点经过不会改它）
-    //   3. 其余       → Color.Transparent（完全透明，绝不能有红块 / 灰块）
-    val bgColor = when {
-        focused -> HeroAccentColor
-        selected -> HeroAccentColor
-        else -> Color.Transparent
-    }
-    val chipTextColor = when {
-        focused || selected -> Color.White
-        else -> HERO_TAB_IDLE_TEXT
-    }
+    // 背景三态，两种情况在 modifier 里分开叠加（不留任何隐式默认分支）：
+    //   1. isFocused  → HeroFocusBrush 红渐变色块（实心块统一渐变，不再用纯红）
+    //   2. selected 且焦点还在 Tab/海报模块内 → 红色描边 + 透明底（规则 ②）
+    //   3. 其余（含焦点回顶栏）→ Color.Transparent，绝不能有红块 / 灰块（规则 ③）
+    // selected 只由确定键产生；焦点经过不会改它。
+    val selectedRing = selected && !focused && moduleFocused
+    // 当前分类即使只剩红框，文字也用纯白，和焦点态保持同一层级。
+    val chipTextColor = if (focused || (selected && moduleFocused)) Color.White else HERO_TAB_IDLE_TEXT
     val interaction = remember { MutableInteractionSource() }
 
     Box(
@@ -788,7 +803,22 @@ private fun HeroTabChip(
             // 高度锁死 26dp + 13dp 圆角 = 完美半圆胶囊；左右 12dp、上下 0dp。
             .height(HERO_TAB_HEIGHT)
             .clip(HERO_TAB_SHAPE)
-            .background(bgColor, HERO_TAB_SHAPE)
+            // 焦点态才铺红，而且是全局渐变；失焦后一律透明（规则 ②③ 的差别只体现在描边上）。
+            .then(
+                if (focused) {
+                    Modifier.background(HeroFocusBrush, HERO_TAB_SHAPE)
+                } else {
+                    Modifier
+                },
+            )
+            // 规则 ②：失焦但仍是当前分类、焦点还在模块内 → 红框。
+            .then(
+                if (selectedRing) {
+                    Modifier.border(HERO_TAB_RING_STROKE, HeroAccentColor, HERO_TAB_SHAPE)
+                } else {
+                    Modifier
+                },
+            )
             .padding(horizontal = HERO_TAB_H_PADDING, vertical = HERO_TAB_V_PADDING),
         contentAlignment = Alignment.Center,
     ) {
@@ -1121,6 +1151,8 @@ private val HERO_TAB_SHAPE = RoundedCornerShape(13.dp) // 13dp = 高度的一半
 // 未选中且未聚焦的 Tab 只用文字区分：背景恒为 Color.Transparent（直接在 HeroTabChip 里写死，
 // 不再保留背景色常量，避免以后被误用成灰色），文字用 60% 白。
 private val HERO_TAB_IDLE_TEXT = Color.White.copy(alpha = 0.6f)
+// 规则 ②：失焦但仍选中时，改成「透明底 + 1.5dp 红框」，框宽与搜索页胶囊的选中框保持一致。
+private val HERO_TAB_RING_STROKE = 1.5.dp
 
 // ---------------------------------------------------------------------------
 // 海报区 posterArea（L142-191）+ 卡片 adapter_vod_rect（L24-27、L45-57）
@@ -1155,9 +1187,11 @@ private val POSTER_SHAPE = RoundedCornerShape(8.dp)
 private val POSTER_PLACEHOLDER = Color(0xFF161616)
 
 // ---------------------------------------------------------------------------
-// 全局主题色：顶栏下划线、Tab 选中底、海报焦点边框统一使用这一个红。
+// 全局主题色统一在 HeroCommonUi 定义：
+// - HeroAccentColor（#FF0000）：顶栏下划线、海报焦点边框、Tab 选中红框；
+// - HeroFocusBrush（#E50914 → #F44336 → 玫瑰粉）：所有**实心红块**（分类 Tab 焦点态）。
+// 本文件不再重复声明颜色常量。
 // ---------------------------------------------------------------------------
-private val HeroAccentColor = Color(0xFFFF0000)
 
 // 第二排（Tab 胶囊）专用字号：第一排已独立到 [TOP_BAR_SP] = 16sp，形成视觉层级。
 private const val HERO_LABEL_SP = 13f

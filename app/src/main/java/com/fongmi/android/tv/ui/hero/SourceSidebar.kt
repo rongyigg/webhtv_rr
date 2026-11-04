@@ -31,7 +31,9 @@ internal enum class SourceSidebarMode {
  * 全局接口源侧边栏（View 体系，独立 Dialog 窗口）。
  *
  * 结构与尺寸照搬 `ref_docs/dialog_search_site.xml`（顶部「全选 / 全不选」）与
- * `ref_docs/adapter_site.xml`（40dp 行高、18sp 文字、24dp 勾选圈）。
+ * `ref_docs/adapter_site.xml`（40dp 行高、24dp 勾选圈）；
+ * 文字按需求改为 **13sp（= 首页分类 Tab 的 HERO_LABEL_SP）并整行居中**，
+ * 不再沿用原版 18sp 的左对齐 —— 侧边栏是窄条竖排，居中后长短源名不会参差不齐。
  *
  * 颜色按需求固定：
  * - 行 focused → 白底（`shape_source_site_item_focused`，取自 ref_docs：inset 8dp/4dp + 28dp 圆角）+ 黑字；

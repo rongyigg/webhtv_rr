@@ -2,7 +2,9 @@
 <!--
   接口源侧边栏列表行（单列 / 多选共用同一套行布局）。
 
-  尺寸取自 ref_docs/adapter_site.xml：40dp 行高、18sp 文字、24dp 勾选圈（marginStart 12dp）。
+  尺寸取自 ref_docs/adapter_site.xml：40dp 行高、24dp 勾选圈（marginStart 12dp）；
+  文字按需求改为 **13sp（与首页分类 Tab 的 HERO_LABEL_SP 一致）且整行居中**，
+  不再沿用原版 18sp 的左对齐 —— 侧边栏是窄条竖排，居中后长短源名不会参差不齐。
 
   **根节点就是可聚焦的行本体**：原版是「外层容器 + 内层 @id/item」两层，
   adapter 通过 itemView 设置 isSelected / 焦点，若背景和 focusable 在内层，
@@ -16,7 +18,7 @@
 -->
 <androidx.appcompat.widget.LinearLayoutCompat xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/item"
-    android:gravity="center_vertical"
+    android:gravity="center"
     android:orientation="horizontal"
     android:background="@drawable/selector_source_site_item_background"
     android:focusable="true"
@@ -26,7 +28,7 @@
     android:paddingStart="8dp"
     android:paddingEnd="8dp">
     <com.google.android.material.textview.MaterialTextView
-        android:textSize="18sp"
+        android:textSize="13sp"
         android:textColor="@color/selector_source_site_item_text"
         android:ellipsize="marquee"
         android:gravity="center"

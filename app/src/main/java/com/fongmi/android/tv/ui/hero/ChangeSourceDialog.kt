@@ -8,6 +8,7 @@ import android.os.Bundle
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
+import android.view.ViewTreeObserver
 import android.view.WindowManager
 import android.widget.FrameLayout
 import android.widget.TextView
@@ -28,7 +29,9 @@ import kotlin.math.roundToInt
  * - 结果栏横向间距 16dp（f23 `recycler.setHorizontalSpacing(dp(16))`）。
  *
  * 站点标签用 `adapter_source_site`，焦点态用 `selector_source_site_chip_background`：
- * **focused → 红底 #E50914 白字胶囊**，normal / selected → 透明底白字。
+ * **focused → 红渐变色块 + 白字**（与搜索页胶囊、首页分类 Tab 同一支渐变），
+ * **失焦但仍是当前站点、且焦点在下方结果区 → 2dp 红框 + 透明底**（《焦点总结》规则 ②），
+ * **焦点离开结果区（回到小房子 / 标签栏）→ 透明底**（规则 ③）。
  * （侧边栏的行用的是另一套：白底黑字，见 [SourceSidebar]。）
  *
  * 结果卡**只允许**用全局唯一组件 [HeroPosterCard]（120dp × 214dp、四角 8dp 全圆、
@@ -55,6 +58,19 @@ internal class ChangeSourceDialog private constructor(
 
     private var selectedSite: Int = currentSite.coerceIn(0, (sites.size - 1).coerceAtLeast(0))
 
+    /**
+     * 焦点是否停在下方结果区。
+     *
+     * 《焦点总结》规则 ②③ 的分界线：还在结果区 → 当前站点标签留红框（知道这批结果属于哪个站点）；
+     * 焦点回到小房子或站点栏 → 红框收起，不留多余的红色干扰。
+     */
+    private var contentFocused = false
+
+    /** 全局焦点监听：View 体系里判断「焦点是否在结果 RecyclerView 内」最可靠的方式。 */
+    private val focusListener = ViewTreeObserver.OnGlobalFocusChangeListener { _, newFocus ->
+        setContentFocused(newFocus != null && isDescendantOf(resultRecycler, newFocus))
+    }
+
     /** 全部结果（不过滤）与当前展示结果。多选侧边栏的勾选只影响后者。 */
     private var visibleResults: List<HeroSourceResult> = results
 
@@ -77,8 +93,16 @@ internal class ChangeSourceDialog private constructor(
         setOnDismissListener { onClosed() }
     }
 
+    override fun onStop() {
+        window?.decorView?.viewTreeObserver?.removeOnGlobalFocusChangeListener(focusListener)
+        super.onStop()
+    }
+
     override fun onStart() {
         super.onStart()
+        // 焦点进出结果区时同步站点标签的红框（规则 ②③）。
+        // 与 onStop 的移除成对，保证弹窗被复用/重新显示时监听不会丢也不会重复添加。
+        window?.decorView?.viewTreeObserver?.addOnGlobalFocusChangeListener(focusListener)
         // 默认焦点落在当前站点标签；必须等 ViewHolder 布局完成再请求，
         // 否则焦点会停在 RecyclerView 上，标签的 focused 红底就不会出现。
         siteRecycler.post {
@@ -170,8 +194,37 @@ internal class ChangeSourceDialog private constructor(
     private fun selectSite(position: Int) {
         if (position == selectedSite) return
         selectedSite = position
+        syncSiteActivation()
         resultRecycler.adapter?.notifyDataSetChanged()
         recycleState()
+    }
+
+    /** 当前焦点是否还在下方结果区。只在状态真的变化时刷新标签背景，避免无谓重绘。 */
+    private fun setContentFocused(value: Boolean) {
+        if (contentFocused == value) return
+        contentFocused = value
+        syncSiteActivation()
+    }
+
+    /**
+     * 把 `isActivated` 打到「当前站点且焦点在结果区」的那一个标签上。
+     * drawable 的 `state_activated` 项据此显示红框（shape_source_site_chip_selected）。
+     */
+    private fun syncSiteActivation() {
+        for (index in 0 until siteRecycler.childCount) {
+            val child = siteRecycler.getChildAt(index)
+            val position = siteRecycler.getChildAdapterPosition(child)
+            child.isActivated = contentFocused && position == selectedSite
+        }
+    }
+
+    private fun isDescendantOf(parent: View, child: View): Boolean {
+        var current: View? = child
+        while (current != null) {
+            if (current === parent) return true
+            current = current.parent as? View
+        }
+        return false
     }
 
     /**
@@ -229,6 +282,8 @@ internal class ChangeSourceDialog private constructor(
         override fun onBindViewHolder(holder: Holder, position: Int) {
             holder.name.text = sites[position]
             holder.itemView.isSelected = position == selectedSite
+            // 规则 ②：当前站点 + 焦点在结果区 → 红框（drawable 的 state_activated 分支）。
+            holder.itemView.isActivated = contentFocused && position == selectedSite
             // 第一个站点标签向左回到小房子；其余在站点栏内滚动。
             holder.itemView.nextFocusLeftId = if (position == 0) R.id.homeBtn else View.NO_ID
             holder.itemView.setOnClickListener { selectSite(holder.bindingAdapterPosition) }
