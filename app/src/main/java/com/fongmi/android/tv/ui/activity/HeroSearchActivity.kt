@@ -30,12 +30,12 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.wrapContentHeight
+import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -108,7 +108,7 @@ import kotlinx.coroutines.launch
  * ```
  * Column(fillMaxSize + padding(top=24dp))                          // 唯一根节点，无横向 padding、无整体滚动
  *   ├─ Row(fillMaxWidth + weight(1f))                                // L12-16：上半区
- *   │    ├─ KeyboardSection(start=24 + width=328 + verticalScroll)   // L17-65：输入行 40 + 8 + 键盘 280
+ *   │    ├─ KeyboardSection(start=24 + wrapContentWidth)              // L17-65：输入行 40 + 8 + 键盘 280
  *   │    └─ RightContentColumn(weight(1f) + end=24 + verticalScroll) // L66-143：历史 + 热搜 / 建议
  *   └─ if (hasInput) ResultSection(fillMaxWidth + wrapContentHeight + padding(top=12dp))
  *        ├─ LazyRow(height=32dp, contentPadding(24, 24), 间距 8dp)     // L152-161：站点 Tab
@@ -124,8 +124,8 @@ import kotlinx.coroutines.launch
  *    Compose 的 LazyRow 按自身外框裁剪，只有它的滚动区够宽，第一项「全部」在焦点放大
  *    1.08 时才不会被切边 —— 这正是原版 `clipChildren=false + clipToPadding=false` 的等价写法。
  * 2. **上下半区彻底分离**：上半区 `weight(1f)`、下半区 `wrapContentHeight()`（绝不给 weight），
- *    两者顺序排列，物理上不可能互相覆盖。键盘与右列各带一层 `verticalScroll` 兜底，
- *    小屏/超大字体时内容仍可完整滚到，1080P 下两层滚动静止不动。
+ *    两者顺序排列，物理上不可能互相覆盖。左列**只按内容自适应**（`wrapContentWidth`、无
+ *    `fillMaxHeight`、无滚动），高度恒为 328dp，绝不抢空间；右列内容超长时才在自身 `verticalScroll` 里滚。
  * 3. 海报区高度由**外层 `Box(height=215dp)`** 决定（原版 FrameLayout 就是这么写的），
  *    卡片自身 `onMeasure` 是 120×214dp，215 = 214 + 1dp 余量；`AndroidView` 里不加任何尺寸 Modifier。
  *
@@ -425,8 +425,8 @@ private fun HeroSearchScreen(
                 .fillMaxWidth()
                 .weight(1f),
         ) {
-            // 左列：宽度 328dp（7×40 + 6×8），左边 24dp 由 KeyboardSection 自己补；
-            // 高度 = fillMaxHeight + verticalScroll 兜底，1080P 下滚动静止。
+            // 左列：完全自适应（wrapContentWidth），宽 328dp / 高 328dp 都由内容撑出；
+            // 24dp 左边距由 KeyboardSection 自己补，不写死宽度、不 fillMaxHeight、不滚动。
             KeyboardSection(
                 field = field,
                 inputRequester = inputRequester,
@@ -522,14 +522,14 @@ private fun HeroSearchScreen(
  *   宽度是 7×40dp + 6×8dp = 328dp 算出来的；
  * - 与输入框行的间距：**8dp**（`activity_search.xml` L61 `android:layout_marginTop="8dp"`）。
  *
- * 高度：【容错】`fillMaxHeight + verticalScroll(rememberScrollState())`。
- * 1080P 屏上半区高度 > 328dp，滚动容器内容不超出视口，**实际静止不动**；
- * 只有小屏或超大字体把内容顶出视口时，焦点下移才会把下一行带进可视区，绝不遮挡。
+ * 尺寸：
+ * - 宽高都由内容自然撑出：`wrapContentWidth()`，**不写死宽度、不 fillMaxHeight、不加滚动**；
+ *   最宽的子项是 6 行键盘 7×40 + 6×8 = 328dp，输入框行是 36 + 12 + 200 + 12 + 40 = 300dp；
+ * - 容器：`wrap_content`（`activity_search.xml` L59-60），原版本来就没有固定宽度；
+ * - 高度 = 输入行 40 + 8 + 6×40 + 5×8 = 328dp，贴在上半区顶部；上半区 `weight(1f)` 只会比它更高。
  *
- * 横向：【标准 1】外层根节点不再加 start/end padding，24dp 左边距由这里自己让出。
- * 顺序必须是 `padding(start = 24dp).width(328dp)`（padding 在外、width 在内）：
- * 这样**内容**恒为 7×40 + 6×8 = 328dp，整列占 24 + 328 = 352dp；
- * 若反过来写 `width(328dp).padding(start = 24dp)`，内容只剩 304dp，最右列（2/9）会被挤掉。
+ * 横向：外层根节点不再加 start/end padding，24dp 左边距由这里自己让出
+ * （`padding(start = 24dp)` 在 `wrapContentWidth()` 外层，内容宽度不受影响）。
  */
 @Composable
 private fun KeyboardSection(
@@ -547,14 +547,13 @@ private fun KeyboardSection(
     Column(
         modifier = Modifier
             .padding(start = ROOT_PADDING_H)
-            .width(LEFT_COLUMN_WIDTH)
-            .fillMaxHeight()
-            // 【容错】小屏/超大字体时内容超过视口，遥控器往下按焦点会自动把该行带进可视区；
-            // 大屏（1080P）下 328dp 内容小于视口，这一层滚动静止，不会产生任何位移。
-            .verticalScroll(rememberScrollState()),
+            // 宽度完全由内容撑开：最宽的是键盘 7×40 + 6×8 = 328dp，绝不写死、绝不拉伸。
+            .wrapContentWidth(),
         verticalArrangement = Arrangement.spacedBy(KEY_SPACING),
     ) {
-        // 输入框行：mic 36dp + 12dp + 只读输入框(weight 1f) + 12dp + 搜索 40dp（整行 40dp）
+        // 输入框行：mic 36dp + 12dp + 输入框 200dp + 12dp + 搜索 40dp，整行高 40dp。
+        // 输入框写死 200dp、**不使用 weight(1f)**：左列已是 wrapContentWidth，
+        // 加权子项会把整行撑到父级最大宽度，左列就会被拉成整屏宽、按键显得粗大。
         Row(verticalAlignment = Alignment.CenterVertically) {
             HeroGlyphIcon(glyph = HeroGlyph.Mic, modifier = Modifier.size(MIC_SIZE))
             Spacer(modifier = Modifier.width(MIC_MARGIN_END))
@@ -562,7 +561,7 @@ private fun KeyboardSection(
                 requester = inputRequester,
                 value = field,
                 onMoveDown = onInputDown,
-                modifier = Modifier.weight(1f),
+                modifier = Modifier.width(INPUT_WIDTH),
             )
             Spacer(modifier = Modifier.width(SEARCH_BUTTON_MARGIN_START))
             HeroSearchSubmit(
@@ -704,7 +703,7 @@ private fun HeroSearchInput(
 
     Box(
         modifier = modifier
-            .heightIn(min = INPUT_HEIGHT)
+            .height(INPUT_HEIGHT)                 // 高度锁定 40dp，不随字体/父级拉伸
             .clip(INPUT_SHAPE)
             .background(Color.Transparent, INPUT_SHAPE)
             .border(
@@ -897,8 +896,7 @@ private fun HeroSectionTitle(title: String) {
 }
 
 /**
- * 历史 / 热搜 / 建议区：`FlowRow`，胶囊 16sp、内边距 14dp×8dp、28dp 圆角、外边距 6dp
- * （`adapter_search_word.xml` L3/L12 + `shape_item_round_*.xml`）。
+ * 历史 / 热搜 / 建议区：`FlowRow`，胶囊 16sp、内边距 12dp×6dp、12dp 圆角、外边距 6dp。
  * 整体左移 6dp 抵消首尾外边距，对应 XML 的 `layout_marginStart="-6dp"`。
  */
 @OptIn(ExperimentalLayoutApi::class)
@@ -1542,15 +1540,15 @@ private val ROOT_PADDING_TOP = 24.dp
 // 键盘（逐条对应逆向数据，不是估值）：
 //   键 40dp × 40dp   adapter_keyboard_text.xml L5-6 / adapter_keyboard_icon.xml L7-8
 //   间距 8dp        CustomKeyboard.java L25 `new SpaceItemDecoration(7, 8)`（SpaceItemDecoration L22 dp2px）
-//   容器 wrap_content activity_search.xml L59-60，原版无固定宽度；宽度 = 7×40 + 6×8 = 328dp
+//   容器 wrap_content activity_search.xml L59-60 → 左列用 wrapContentWidth()，宽度由 7×40 + 6×8 = 328dp 自然撑出
 private val KEY_SIZE = 40.dp
 private val KEY_SPACING = 8.dp
-private val LEFT_COLUMN_WIDTH = 328.dp
 private val LEFT_COLUMN_MARGIN_END = 24.dp          // activity_search.xml L21
 
-// 输入框行：mic 36dp（图标本体 24dp）+ 间距 12dp；搜索按钮与输入框同高 40dp，与键盘键对齐。
+// 输入框行：mic 36dp（图标本体 24dp）+ 间距 12dp；输入框固定 200dp、不拉伸；搜索按钮 40dp。
 private val MIC_SIZE = 36.dp
 private val MIC_MARGIN_END = 12.dp
+private val INPUT_WIDTH = 200.dp
 private val SEARCH_BUTTON_SIZE = 40.dp
 private val SEARCH_BUTTON_MARGIN_START = 12.dp
 private val KEY_ICON_SIZE = 24.dp
@@ -1563,8 +1561,8 @@ private val INPUT_STROKE = 2.dp
 private val INPUT_SHAPE = RoundedCornerShape(13.dp)
 private val INPUT_PADDING_H = 12.dp
 
-// 左列键盘内容自然高度 = 输入行 40 + 8(activity_search.xml L61 marginTop) + 6×40 + 5×8 = 328dp。
-// 宽度同为 328dp，整块是 328×328 的方阵；容器再套 fillMaxHeight + verticalScroll 兜底。
+// 左列内容自然高度 = 输入行 40 + 8(activity_search.xml L61 marginTop) + 6×40 + 5×8 = 328dp，
+// 宽度 = 7×40 + 6×8 = 328dp；两者都由内容撑出（wrapContentWidth），不再写死、不再 fillMaxHeight。
 
 // 键盘键：40dp / 16sp / 4dp 圆角（adapter_keyboard_text.xml）。
 private val KEY_SHAPE = RoundedCornerShape(4.dp)
@@ -1584,12 +1582,12 @@ private val SECTION_BAR_MARGIN_END = 10.dp
 private val SECTION_BAR_SHAPE = RoundedCornerShape(2.dp)
 private val SECTION_TITLE_BOTTOM_GAP = 8.dp
 
-// 胶囊：16sp、14dp×8dp 内边距、28dp 圆角、6dp 外边距（adapter_search_word.xml + shape_item_round_*）。
+// 胶囊：16sp、12dp×6dp 内边距、12dp 圆角、6dp 外边距（缩小内边距，避免视觉拥挤）。
 private const val CHIP_TEXT_SP = 16f
-private val CHIP_PADDING_H = 14.dp
-private val CHIP_PADDING_V = 8.dp
+private val CHIP_PADDING_H = 12.dp
+private val CHIP_PADDING_V = 6.dp
 private val CHIP_MARGIN = 6.dp
-private val CHIP_SHAPE = RoundedCornerShape(percent = 50)
+private val CHIP_SHAPE = RoundedCornerShape(12.dp)
 private val CHIP_STROKE = 1.5.dp
 private val CHIP_BG_NORMAL = Color(0x33000000)      // black_20（半透明，不是纯黑）
 private val CHIP_BG_FOCUSED = Color(0x66000000)     // black_40 + 红描边
