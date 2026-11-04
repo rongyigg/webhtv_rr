@@ -111,9 +111,10 @@ import kotlinx.coroutines.launch
  *
  * 版式基准 = 原版截图 + `ref_docs/activity_search.xml`：**上下弹性布局，一屏直排**。
  * ```
- * Column(fillMaxSize + padding(top=24dp))                          // 唯一根节点，无横向 padding、无整体滚动
+ * BoxWithConstraints(fillMaxSize)                                   // 只用来量一次视口高度
+ * └─ Column(fillMaxSize + padding(top=24dp))                        // 唯一布局根，无横向 padding、无整体滚动
  *   ├─ Row(fillMaxWidth + weight(1f))                                // L12-16：上半区
- *   │    ├─ KeyboardSection(start=24 + wrapContentWidth)              // L17-65：输入行 40 + 8 + 键盘 280
+ *   │    ├─ KeyboardSection(start=24 + wrapContentWidth + 等比缩放)    // L17-65：输入行 40 + 8 + 键盘 280
  *   │    └─ RightContentColumn(weight(1f) + end=24 + verticalScroll) // L66-143：历史 + 热搜 / 建议
  *   └─ if (hasInput) ResultSection(fillMaxWidth + wrapContentHeight + padding(top=12dp))
  *        ├─ LazyRow(height=32dp, contentPadding(24, 24), 间距 8dp)     // L152-161：站点 Tab
@@ -124,15 +125,19 @@ import kotlinx.coroutines.launch
  * ```
  *
  * 三条硬约束：
- * 1. **根节点没有横向 padding**。24dp 左边距由键盘自己 `padding(start=24dp)` 让出，
- *    右列自己 `padding(end=24dp)`，两条 `LazyRow` 用 `contentPadding(24, 24)`。
+ * 1. **根节点没有横向 padding**。24dp 左边距由键盘前面的一个 `Spacer(24dp)` 让出
+ *    （且必须在缩放子树之外，缩放后才对得齐），右列自己 `padding(end=24dp)`，
+ *    两条 `LazyRow` 用 `contentPadding(24, 24)`。
  *    Compose 的 LazyRow 按自身外框裁剪，只有它的滚动区够宽，第一项「全部」在焦点放大
  *    1.08 时才不会被切边 —— 这正是原版 `clipChildren=false + clipToPadding=false` 的等价写法。
  * 2. **上下半区彻底分离**：上半区 `weight(1f)`、下半区 `wrapContentHeight()`（绝不给 weight），
  *    两者顺序排列，物理上不可能互相覆盖。左列**只按内容自适应**（`wrapContentWidth`、无
- *    `fillMaxHeight`、无滚动），高度恒为 328dp，绝不抢空间；右列内容超长时才在自身 `verticalScroll` 里滚。
+ *    `fillMaxHeight`、无滚动），右列内容超长时才在自身 `verticalScroll` 里滚。
  * 3. 海报区高度由**外层 `Box(height=215dp)`** 决定（原版 FrameLayout 就是这么写的），
  *    卡片自身 `onMeasure` 是 120×214dp，215 = 214 + 1dp 余量；`AndroidView` 里不加任何尺寸 Modifier。
+ *
+ * 键盘尺寸恒定：缩放系数按「结果区存在」这一最坏情形一次性算出
+ * （`(视口高 - 24 - 267) / 328`），**与 `hasInput` 无关**，所以清空输入不会让键盘突然变大。
  *
  * 键盘第一行与 `ref_docs/xd1.java` L27 一致：`(占位, <, >, ⌫, 键盘, 房子, A)`，之后 B-Z、0-9，
  * 共 42 格 = 6 行 × 7 列，最右列正是 A / H / O / V / 2 / 9（与 `topbar_search_page.png` 一致）。
@@ -141,9 +146,10 @@ import kotlinx.coroutines.launch
  * - 输入框 ↓ / 放大镜 ↓ → 键盘第一行；键盘内四向移动由 [FocusRequester] 精确控制；
  * - **键盘最右列按 → 不消费、返回 false**，交给 Compose 原生 2D 焦点搜索，
  *   按几何位置自动落到右侧「同一排」的第一个胶囊；
+ * - **键盘最后一行按 ↓** → 有结果区时按所在列落到站点 Tab，无结果区时交还原生搜索；
  * - **胶囊按 ← 同样不消费**，由原生 2D 搜索把焦点交还键盘最右列；
- * - 胶囊 ↓ → 站点 Tab；Tab ↓ → 首张海报；海报 ←→ 行内移动、↑ → 站点 Tab；
- *   确定键 → [HeroDetailActivity.start]。
+ * - 胶囊 ↓ → 同列的下一个区块（历史 → 建议/热搜）→ 站点 Tab；Tab ↓ → 首张海报；
+ *   海报 ←→ 行内移动、↑ → 站点 Tab；确定键 → [HeroDetailActivity.start]。
  */
 class HeroSearchActivity : ComponentActivity() {
 
@@ -401,8 +407,20 @@ private fun HeroSearchScreen(
             }
 
             Key.DirectionDown -> {
-                if (row < KEY_ROWS - 1) requestFocus(keyRequesters, index + KEY_COLUMNS)
-                true
+                when {
+                    row < KEY_ROWS - 1 -> {
+                        requestFocus(keyRequesters, index + KEY_COLUMNS)
+                        true
+                    }
+                    // 最后一行（3–9）继续下按：有结果区就按「所在列」落到站点 Tab
+                    // （Tab 不足 7 个时收敛到最后一项），没有结果区就放行给原生 2D 搜索。
+                    hasInput -> {
+                        focusSite(column.coerceAtMost(HERO_SITE_TABS.lastIndex))
+                        true
+                    }
+
+                    else -> false
+                }
             }
 
             else -> false
@@ -426,36 +444,54 @@ private fun HeroSearchScreen(
 
     // ------------------------------------------------------------------
     // 骨架 1：上下结构。根节点只有 Column：没有 Box 叠加、没有整体滚动。
+    //
+    // 外面这层 BoxWithConstraints 只干一件事：量出视口高度，算出键盘的**恒定**缩放系数。
+    //   上半区可用高度 = 视口高 - 顶部 24dp - 结果区固定 267dp
+    // 注意式子里没有 hasInput —— 有结果、没结果都按同一基准缩放，
+    // 所以键盘尺寸恒定，不会再出现「清空输入键盘变大、一搜索键盘变小」的跳变。
     // ------------------------------------------------------------------
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(
-                Brush.verticalGradient(
-                    0.0f to Color(0xFF0B1119),
-                    0.55f to Color(0xFF101823),
-                    1.0f to Color.Black,
-                ),
-            )
-            // 【标准 1】外层不放 start/end padding：横向的 24dp 缓冲区交给各子节点自己处理
-            // （键盘自己补 start，两条 LazyRow 用 contentPadding 补两端），
-            // 这样 LazyRow 的滚动区就是整屏宽度，第一项（「全部」）左右都有 24dp 可裁缓冲。
-            .padding(top = ROOT_PADDING_TOP),
-    ) {
-        // 上半区：weight(1f) 吃掉下半区固定高度之外的全部空间（720dp 屏约 420dp）。
-        Row(
+    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+        val keyboardBaseDensity = LocalDensity.current
+        // 是否让出下半区只影响「空出来多少空白」，不影响键盘大小：永远用最坏情形做基准。
+        // 下界取 0 而不是「可读性下限」：宁可极小，也绝不允许键盘高度超过上半区而盖住海报。
+        val keyboardBandHeight = maxHeight - ROOT_PADDING_TOP - RESULT_BAND_HEIGHT
+        val keyboardScale = (keyboardBandHeight / KEYBOARD_NATURAL_HEIGHT).coerceIn(0f, 1f)
+
+        Column(
             modifier = Modifier
-                .fillMaxWidth()
-                .weight(1f),
+                .fillMaxSize()
+                .background(
+                    Brush.verticalGradient(
+                        0.0f to Color(0xFF0B1119),
+                        0.55f to Color(0xFF101823),
+                        1.0f to Color.Black,
+                    ),
+                )
+                // 【标准 1】外层不放 start/end padding：横向的 24dp 缓冲区交给各子节点自己处理
+                // （键盘自己补 start，两条 LazyRow 用 contentPadding 补两端），
+                // 这样 LazyRow 的滚动区就是整屏宽度，第一项（「全部」）左右都有 24dp 可裁缓冲。
+                .padding(top = ROOT_PADDING_TOP),
         ) {
-            // 左列：按可用高度自适应。屏幕够高时缩放系数 = 1（完全等于原版 40dp/8dp）；
-            // 只有上半区高度不足 328dp 时，才整体等比缩小（density 整棵子树生效，文字依旧清晰），
-            // 保证 6 行键盘 + 输入行永远完整，不会被下半区盖住。
-            BoxWithConstraints {
-                val scale = if (maxHeight < KEYBOARD_NATURAL_HEIGHT) maxHeight / KEYBOARD_NATURAL_HEIGHT else 1f
-                val base = LocalDensity.current
+            // 上半区：weight(1f) 吃掉下半区固定高度之外的全部空间。
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f),
+            ) {
+                // 左列 24dp 左边距：放在缩放子树**外面**，缩放时才有和两条 LazyRow 一致的 24dp。
+                Spacer(modifier = Modifier.width(ROOT_PADDING_H))
+
+                // 左列：按 keyboardScale 等比缩放。
+                //   keyboardScale == 1f → 完全等于原版「键 40dp、间距 8dp」，一个像素都不动；
+                //   视口不够高        → 整棵键盘子树按比例缩小，6 行 + 输入行永远完整，绝不压到下半区。
+                // 走 LocalDensity 而不是 graphicsLayer：文字按新密度重新排版，不会发虚；
+                // 只作用于键盘子树，右侧胶囊与海报卡（HeroPosterCard 按 Activity density 自绘
+                // 120×214dp）完全不受影响。
                 CompositionLocalProvider(
-                    LocalDensity provides Density(base.density * scale, base.fontScale),
+                    LocalDensity provides Density(
+                        keyboardBaseDensity.density * keyboardScale,
+                        keyboardBaseDensity.fontScale,
+                    ),
                 ) {
                     KeyboardSection(
                         field = field,
@@ -470,70 +506,70 @@ private fun HeroSearchScreen(
                         onKeyMove = { index, key -> onKeyMove(index, key) },
                     )
                 }
+
+                Spacer(modifier = Modifier.width(LEFT_COLUMN_MARGIN_END))
+
+                // 右列：历史 / 热搜（无输入）或 建议（有输入）。
+                // 右端 24dp 对应 activity_search.xml L11 paddingEnd="24dp"：外层已放开 padding，
+                // 这里自己补回来，否则最后一枚胶囊会贴死在屏幕右边缘。
+                RightContentColumn(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxHeight()
+                        .padding(end = ROOT_PADDING_H),
+                    scroll = rightScroll,
+                    history = history,
+                    words = words,
+                    wordTitle = wordTitle,
+                    hasInput = hasInput,
+                    historyRequesters = historyRequesters,
+                    wordRequesters = wordRequesters,
+                    rightFirstRequester = rightFirstRequester,
+                    onWordClick = { text ->
+                        setKeyword(text)
+                        recordHistory(text)
+                    },
+                    onDownToResults = { focusSite(0) },
+                )
             }
 
-            Spacer(modifier = Modifier.width(LEFT_COLUMN_MARGIN_END))
-
-            // 右列：历史 / 热搜（无输入）或 建议（有输入）。
-            // 右端 24dp 对应 activity_search.xml L11 paddingEnd="24dp"：外层已放开 padding，
-            // 这里自己补回来，否则最后一枚胶囊会贴死在屏幕右边缘。
-            RightContentColumn(
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxHeight()
-                    .padding(end = ROOT_PADDING_H),
-                scroll = rightScroll,
-                history = history,
-                words = words,
-                wordTitle = wordTitle,
-                hasInput = hasInput,
-                historyRequesters = historyRequesters,
-                wordRequesters = wordRequesters,
-                rightFirstRequester = rightFirstRequester,
-                onWordClick = { text ->
-                    setKeyword(text)
-                    recordHistory(text)
-                },
-                onDownToResults = { focusSite(0) },
-            )
-        }
-
-        // 下半区：【标准 3】独立 Column，只按内容量高（36dp Tab 行 + 12dp + 215dp 海报 Box），
-        // 不吃 weight、不 fillMaxSize，所以永远挤压不到上半区键盘。
-        if (hasInput) {
-            ResultSection(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .wrapContentHeight()
-                    .padding(top = RESULT_SECTION_TOP_GAP),
-                siteState = siteState,
-                posterState = posterState,
-                selectedSite = selectedSite,
-                siteRequesters = siteRequesters,
-                posterRegistry = posterRegistry,
-                onSiteFocused = { index ->
-                    focusedSite = index
-                    resultsFocused = true
-                },
-                onSiteConfirm = { index ->
-                    selectedSite = index
-                    focusedSite = index
-                },
-                onSiteUp = { focusRightFirstChip() },
-                onSiteDown = { focusPoster(0) },
-                onSiteLeft = { index -> focusSite(index - 1) },
-                onSiteRight = { index -> focusSite(index + 1) },
-                onPosterFocused = { resultsFocused = true },
-                onPosterOpen = { title ->
-                    recordHistory(keyword)
-                    onOpenDetail(title)
-                },
-                onPosterUp = { focusSite(focusedSite) },
-                onPosterLeft = { index -> if (index > 0) focusPoster(index - 1) },
-                onPosterRight = { index ->
-                    if (index < HERO_RESULTS.lastIndex) focusPoster(index + 1)
-                },
-            )
+            // 下半区：【标准 3】独立 Column，只按内容量高（12dp 间距 + 32dp Tab 行 + 8dp + 215dp 海报 Box），
+            // 不吃 weight、不 fillMaxSize，所以永远挤压不到上半区键盘。
+            if (hasInput) {
+                ResultSection(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .wrapContentHeight()
+                        .padding(top = RESULT_SECTION_TOP_GAP),
+                    siteState = siteState,
+                    posterState = posterState,
+                    selectedSite = selectedSite,
+                    siteRequesters = siteRequesters,
+                    posterRegistry = posterRegistry,
+                    onSiteFocused = { index ->
+                        focusedSite = index
+                        resultsFocused = true
+                    },
+                    onSiteConfirm = { index ->
+                        selectedSite = index
+                        focusedSite = index
+                    },
+                    onSiteUp = { focusRightFirstChip() },
+                    onSiteDown = { focusPoster(0) },
+                    onSiteLeft = { index -> focusSite(index - 1) },
+                    onSiteRight = { index -> focusSite(index + 1) },
+                    onPosterFocused = { resultsFocused = true },
+                    onPosterOpen = { title ->
+                        recordHistory(keyword)
+                        onOpenDetail(title)
+                    },
+                    onPosterUp = { focusSite(focusedSite) },
+                    onPosterLeft = { index -> if (index > 0) focusPoster(index - 1) },
+                    onPosterRight = { index ->
+                        if (index < HERO_RESULTS.lastIndex) focusPoster(index + 1)
+                    },
+                )
+            }
         }
     }
 }
@@ -560,8 +596,13 @@ private fun HeroSearchScreen(
  * - 容器：`wrap_content`（`activity_search.xml` L59-60），原版本来就没有固定宽度；
  * - 高度 = 输入行 40 + 8 + 6×40 + 5×8 = 328dp，贴在上半区顶部；上半区 `weight(1f)` 只会比它更高。
  *
- * 横向：外层根节点不再加 start/end padding，24dp 左边距由这里自己让出
- * （`padding(start = 24dp)` 在 `wrapContentWidth()` 外层，内容宽度不受影响）。
+ * 缩放：本函数内部一律写原版基准值（40dp / 8dp），**不感知缩放**。
+ * 需要适配矮视口时由调用方在外面套一层 `LocalDensity`（见 [HeroSearchScreen]），
+ * 于是这里所有 dp 会整体等比变化，而键间距、键宽比例保持原版一致。
+ *
+ * 横向：外层根节点不加 start/end padding，左列左边 24dp 由调用方在**缩放子树之外**
+ * 用一个 `Spacer(width = 24dp)` 让出，因此无论是否缩放，都与两条 `LazyRow` 的
+ * `contentPadding(start = 24dp)` 严格对齐。
  */
 @Composable
 private fun KeyboardSection(
@@ -577,10 +618,9 @@ private fun KeyboardSection(
     onKeyMove: (Int, Key) -> Boolean,
 ) {
     Column(
-        modifier = Modifier
-            .padding(start = ROOT_PADDING_H)
-            // 宽度完全由内容撑开：最宽的是键盘 7×40 + 6×8 = 328dp，绝不写死、绝不拉伸。
-            .wrapContentWidth(),
+        // 宽度完全由内容撑开（最宽的是键盘 7×40 + 6×8 = 328dp），绝不写死、绝不拉伸。
+        // 左边 24dp 由调用方的 Spacer 让出 —— 它必须在缩放子树外面，否则缩放后对不齐 Tab/海报。
+        modifier = Modifier.wrapContentWidth(),
         verticalArrangement = Arrangement.spacedBy(KEY_SPACING),
     ) {
         // 输入框行：mic 36dp + 12dp + 输入框 200dp + 12dp + 搜索 40dp，整行高 40dp。
@@ -879,6 +919,8 @@ private fun RightContentColumn(
             firstRowRequester = if (history.isNotEmpty()) rightFirstRequester else null,
             isFirstRowSection = history.isNotEmpty(),
             resultsVisible = hasInput,
+            // 历史 ↓ → 建议 / 热搜 同一位置（原生 2D 搜索跨区块时会失手）。
+            downRequesters = if (words.isNotEmpty()) wordRequesters else null,
             onWordClick = onWordClick,
             onDownToResults = onDownToResults,
         )
@@ -941,6 +983,8 @@ private fun HeroWordSection(
     firstRowRequester: FocusRequester?,
     isFirstRowSection: Boolean,
     resultsVisible: Boolean,
+    // 下一个区块（历史 → 建议/热搜）的 requester 列表：↓ 时按同一位置落点。
+    downRequesters: List<FocusRequester>? = null,
     onWordClick: (String) -> Unit,
     onDownToResults: () -> Unit,
 ) {
@@ -965,6 +1009,7 @@ private fun HeroWordSection(
                         requesters.getOrNull(index)
                     },
                     resultsVisible = resultsVisible,
+                    downRequester = downRequesters?.let { it.getOrNull(index) ?: it.firstOrNull() },
                     onDownToResults = onDownToResults,
                     onClick = { onWordClick(word) },
                     modifier = Modifier.padding(CHIP_MARGIN),
@@ -983,6 +1028,7 @@ private fun HeroWordChip(
     text: String,
     requester: FocusRequester?,
     resultsVisible: Boolean,
+    downRequester: FocusRequester? = null,
     onDownToResults: () -> Unit,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
@@ -1009,12 +1055,20 @@ private fun HeroWordChip(
 
                     // ←/→ 一律不拦截：交给 Compose 原生 2D 焦点搜索，
                     // 它会按几何位置自动把焦点交给键盘最右列（高度最接近的那一排）。
-                    // 只有 ↓ 需要显式交给站点 Tab（结果区存在时）。
-                    Key.DirectionDown -> if (resultsVisible) {
-                        onDownToResults()
-                        true
-                    } else {
-                        false
+                    // ↓ 的落点顺序：下一区块同一位置的胶囊（历史 → 建议/热搜）→ 站点 Tab。
+                    Key.DirectionDown -> when {
+                        downRequester != null -> {
+                            // 用与其他跨区交接同一个安全入口（未挂载时不抛异常）。
+                            requestFocus(downRequester)
+                            true
+                        }
+
+                        resultsVisible -> {
+                            onDownToResults()
+                            true
+                        }
+
+                        else -> false
                     }
 
                     else -> false
@@ -1649,6 +1703,11 @@ private val RIGHT_SECTION_GAP = 16.dp              // 「历史」与「建议 /
 private val POSTER_BOX_HEIGHT = 215.dp
 private val POSTER_ITEM_SPACING = 12.dp
 private const val POSTER_SCROLL_ANCHOR = 4
+
+// 下半区（结果区）固定占用的总高度 = 12(顶部间距) + 32(Tab 行) + 8(Tab/海报间距) + 215(海报) = 267dp。
+// 键盘缩放系数**永远按「结果区存在」这一最坏情形**计算，所以有无搜索结果时按键大小完全一致，
+// 不会出现「没结果时大、有结果时小」的跳变。
+private val RESULT_BAND_HEIGHT = RESULT_SECTION_TOP_GAP + SITE_ROW_HEIGHT + SITE_POSTER_GAP + POSTER_BOX_HEIGHT
 
 // 红色：@color/red = #e50914（shape_red_bar.xml L4）。
 private val ACCENT_RED = Color(0xFFE50914)
