@@ -89,11 +89,12 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import com.fongmi.android.tv.R
+import com.fongmi.android.tv.api.config.VodConfig
 import com.fongmi.android.tv.setting.Setting
+import com.fongmi.android.tv.setting.SiteBlockSetting
 import com.fongmi.android.tv.ui.hero.ACCENT_RED
 import com.fongmi.android.tv.ui.hero.FIRST_KEY_INDEX
 import com.fongmi.android.tv.ui.hero.HERO_KEYS
-import com.fongmi.android.tv.ui.hero.HERO_SOURCE_ENTRIES
 import com.fongmi.android.tv.ui.hero.HOUSE_KEY_INDEX
 import com.fongmi.android.tv.ui.hero.HeroFocusBrush
 import com.fongmi.android.tv.ui.hero.HeroImageLoader
@@ -101,6 +102,7 @@ import com.fongmi.android.tv.ui.hero.HeroKey
 import com.fongmi.android.tv.ui.hero.HeroKeyAction
 import com.fongmi.android.tv.ui.hero.HeroPosterCard
 import com.fongmi.android.tv.ui.hero.HeroPosterViewRegistry
+import com.fongmi.android.tv.ui.hero.HeroSourceEntry
 import com.fongmi.android.tv.ui.hero.INPUT_HEIGHT
 import com.fongmi.android.tv.ui.hero.KEY_COLUMNS
 import com.fongmi.android.tv.ui.hero.KEY_ROWS
@@ -364,11 +366,13 @@ private fun HeroSearchScreen(
      * 确定键 = 切换勾选（不关闭），返回键关闭后由 `onClosed` 把焦点交还房子键。
      */
     fun openSourceSidebar() {
+        // 真实接口源：隐藏源与用户屏蔽源由 SiteBlockSetting 过滤（与首页小房子、换源弹窗同一套）。
+        val sites = SiteBlockSetting.filter(VodConfig.get().getSites(), false)
         SourceSidebar.show(
             context = context,
-            entries = HERO_SOURCE_ENTRIES,
+            entries = HeroSourceEntry.of(sites),
             mode = SourceSidebarMode.Multi,
-            initialChecked = BooleanArray(HERO_SOURCE_ENTRIES.size) { true },
+            initialChecked = BooleanArray(sites.size) { true },
             onCheckedChanged = { },
             onSiteSelected = { },
             onClosed = {

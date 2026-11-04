@@ -87,19 +87,20 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import androidx.lifecycle.ViewModelProvider
 import coil3.compose.AsyncImage
 import com.fongmi.android.tv.R
 import com.fongmi.android.tv.api.SiteApi
+import com.fongmi.android.tv.api.config.VodConfig
+import com.fongmi.android.tv.model.SiteViewModel
 import com.fongmi.android.tv.setting.Setting
+import com.fongmi.android.tv.setting.SiteBlockSetting
 import com.fongmi.android.tv.ui.hero.ChangeSourceDialog
-import com.fongmi.android.tv.ui.hero.HERO_SOURCE_ENTRIES
-import com.fongmi.android.tv.ui.hero.HERO_SOURCE_RESULTS
-import com.fongmi.android.tv.ui.hero.HERO_SOURCE_RESULT_TOTAL
-import com.fongmi.android.tv.ui.hero.HERO_SOURCE_SITES
 import com.fongmi.android.tv.ui.hero.HeroAccentColor
 import com.fongmi.android.tv.ui.hero.HeroFocusBrush
 import com.fongmi.android.tv.ui.hero.HeroHomeLogoButton
 import com.fongmi.android.tv.ui.hero.HeroImageLoader
+import com.fongmi.android.tv.ui.hero.HeroSourceEntry
 import com.fongmi.android.tv.ui.hero.SourceSidebar
 import com.fongmi.android.tv.ui.hero.SourceSidebarMode
 import com.fongmi.android.tv.ui.hero.TmdbMatchDialog
@@ -163,10 +164,41 @@ class HeroHomeActivity : ComponentActivity() {
         }
         installDoubleBackToExit()
         HeroImageLoader.install()
+        // 换源弹窗（以及后续首页数据真实化）共用同一个 Activity 作用域的 SiteViewModel：
+        // 它构造函数里就建了两个单线程 executor，绝对不能按弹窗 / 按次 new（会泄漏线程）。
+        val siteViewModel = ViewModelProvider(this)[SiteViewModel::class.java]
         setContent {
             MaterialTheme(colorScheme = darkColorScheme()) {
-                HeroHomeScreen(onOpenDetail = { title -> HeroDetailActivity.start(this, title) })
+                HeroHomeScreen(
+                    siteViewModel = siteViewModel,
+                    onOpenDetail = { title -> HeroDetailActivity.start(this, title) },
+                    // 顶栏「设置」：SettingActivity 只存在于 leanback flavor，见 openSettings 的说明。
+                    onOpenSettings = { openSettings() },
+                )
             }
+        }
+    }
+
+    /**
+     * 顶栏「设置」。
+     *
+     * `SettingActivity` 只存在于 `app/src/leanback/`，而本文件在 `main` 源集、同时被
+     * mobile / leanback 两个 manifest 引用 —— `main` 在编译期看不到那个类，
+     * 直接写 `SettingActivity.start(this)` 会让 mobile 变体编译失败。
+     *
+     * 所以这里用类名反射调用它现成的 `public static void start(Activity)`：
+     * - leanback：正常打开设置页；
+     * - mobile：类不存在 → 走 onFailure 提示，不崩溃。
+     *
+     * 等设置页下沉到 `main` 源集后，删掉这段反射、改回直接调用即可。
+     */
+    private fun openSettings() {
+        runCatching {
+            Class.forName(SETTING_ACTIVITY_CLASS)
+                .getMethod("start", Activity::class.java)
+                .invoke(null, this)
+        }.onFailure {
+            Notify.show(SETTINGS_UNAVAILABLE_HINT)
         }
     }
 
@@ -221,11 +253,21 @@ class HeroHomeActivity : ComponentActivity() {
         // 双击返回键的确认窗口：2 秒内再按才退出。
         private const val EXIT_BACK_INTERVAL_MS = 2000L
         private const val EXIT_BACK_HINT = "再按一次返回键退出应用"
+
+        // 顶栏「设置」：SettingActivity 只存在于 leanback flavor，用类名反射调用（见 openSettings）。
+        private const val SETTING_ACTIVITY_CLASS = "com.fongmi.android.tv.ui.activity.SettingActivity"
+        private const val SETTINGS_UNAVAILABLE_HINT = "当前版本没有设置页"
     }
 }
 
 @Composable
-private fun HeroHomeScreen(onOpenDetail: (String) -> Unit) {
+private fun HeroHomeScreen(
+    // Activity 作用域的 SiteViewModel：换源弹窗的检索通道（`search` LiveData）由它提供。
+    siteViewModel: SiteViewModel,
+    onOpenDetail: (String) -> Unit,
+    // 顶栏「设置」：真正打开页面的逻辑在 HeroHomeActivity 里（需要按 flavor 反射），由调用方传 lambda。
+    onOpenSettings: () -> Unit,
+) {
     val posterState = rememberLazyListState()
     val tabState = rememberLazyListState()
     val scope = rememberCoroutineScope()
@@ -318,17 +360,33 @@ private fun HeroHomeScreen(onOpenDetail: (String) -> Unit) {
     // 长按卡片确定键 → 换源弹窗（View 体系独立 Dialog，见 [ChangeSourceDialog]，层级盖在首页之上）。
     // 打开期间用 [showSourceDialog] 占位，关闭后由下面的 LaunchedEffect 把焦点还给长按的那张卡。
     fun changeSource() {
+        // 关键词取当前这张卡的剧名：首页数据真实化之前它仍是 Mock 剧名，
+        // 但检索走的是**真实站点**，所以必须用「屏幕上正在显示的那部剧」。
+        val keyword = heroPoster.title
+        val currentSiteKey = VodConfig.get().getHome().key
+        // 候选源规则集中在 ChangeSourceDialog.candidates：
+        // isSearchable + isChangeable + 非隐藏 + 未被屏蔽 + 非当前源，最后按站点健康度排序，
+        // 与 TmdbDetailActivity 的换源完全一致。
+        val candidates = ChangeSourceDialog.candidates(currentSiteKey)
+        if (candidates.isEmpty()) {
+            Notify.show(context.getString(R.string.play_change_empty))
+            return
+        }
         pendingPosterFocus = focusedPosterIndex
         showSourceDialog = true
         ChangeSourceDialog.show(
             context = context,
-            sites = HERO_SOURCE_SITES,
-            currentSite = 0,
-            results = HERO_SOURCE_RESULTS,
-            total = HERO_SOURCE_RESULT_TOTAL,
-            // TODO(数据层对接)：结果卡确定键 = 用这条结果换源并刷新首页海报列表。
-            onSourceSelected = { result ->
-                Notify.show(context.getString(R.string.source_sidebar_switched, result.site))
+            // 必须复用 Activity 作用域的 ViewModel：它自带两个单线程 executor，不能按弹窗 new。
+            viewModel = siteViewModel,
+            sites = candidates,
+            keyword = keyword,
+            // 与 TmdbDetailActivity L11261 的换源检索一致：只搜 quick 源。
+            quick = true,
+            onSourceSelected = { vod, site ->
+                // vod 由 SiteApi.searchContent 盖过 site，两者是同一来源；这里两个都拿到，
+                // 下一步（详情页真实化）直接用它俩打开该源详情，不再按剧名二次搜索。
+                Notify.show(context.getString(R.string.source_sidebar_switched, "${site.displayName} · ${vod.name}"))
+                // TODO(下一单元)：HeroDetailActivity 支持 (vod, site) 入参后在这里直达该源详情页。
             },
             onClosed = { showSourceDialog = false },
         )
@@ -384,31 +442,38 @@ private fun HeroHomeScreen(onOpenDetail: (String) -> Unit) {
                 requesters = topBarRequesters,
                 onHomeConfirm = {
                     // 小房子确定键拉起全局接口源侧边栏（View Dialog），关闭后焦点回到小房子。
-                    SourceSidebar.show(
-                        context = context,
-                        entries = HERO_SOURCE_ENTRIES,
-                        mode = SourceSidebarMode.Single,
-                        // 单选模式：确定键直接切换当前接口源并关闭侧边栏。
-                        // TODO(数据层对接)：这里接真实的接口源切换；当前只做提示，证明回调已生效。
-                        onSiteSelected = { index ->
-                            Notify.show(
-                                context.getString(R.string.source_sidebar_switched, HERO_SOURCE_ENTRIES[index].label)
-                            )
-                        },
-                        onClosed = {
-                            scope.launch {
-                                withFrameNanos { }
-                                requestFocus(topBarRequesters, 0)
-                            }
-                        },
-                    )
+                    // 列出「全部可用源」：隐藏源与用户屏蔽源由 SiteBlockSetting.filter(…, false) 过滤。
+                    val homeSites = SiteBlockSetting.filter(VodConfig.get().getSites(), false)
+                    if (homeSites.isEmpty()) {
+                        Notify.show(context.getString(R.string.play_change_empty))
+                    } else {
+                        SourceSidebar.show(
+                            context = context,
+                            entries = HeroSourceEntry.of(homeSites),
+                            mode = SourceSidebarMode.Single,
+                            // 当前首页源在侧边栏里保持选中态，也是默认焦点（按 key 匹配，不用下标）。
+                            currentSiteKey = VodConfig.get().getHome().key,
+                            onSiteSelected = { site ->
+                                // TODO(下一单元·首页数据真实化)：VodConfig.get().setHome(site) 后再 homeContent()。
+                                Notify.show(context.getString(R.string.source_sidebar_switched, site.displayName))
+                            },
+                            onClosed = {
+                                scope.launch {
+                                    withFrameNanos { }
+                                    requestFocus(topBarRequesters, 0)
+                                }
+                            },
+                        )
+                    }
                 },
                 // 顶栏「历史」→ HeroUI 历史页（View 体系，复用 HeroPosterCard）。
-                // 这里在 HeroHomeScreen 作用域内，`context` 就是 L210 的 LocalContext.current。
+                // 这里在 HeroHomeScreen 作用域内，`context` 就是上面 LocalContext.current 拿到的那个。
                 onOpenHistory = { HeroHistoryActivity.start(context) },
                 // 顶栏「搜索」→ HeroSearchActivity（Compose 体系，纯 UI 结构 + 假数据）。
                 // 把首页当前这张大图一起带过去：搜索页用它做磨砂背景（同原版模糊首页大图的做法）。
                 onOpenSearch = { HeroSearchActivity.start(context, heroPoster.backdropUrl) },
+                // 顶栏「设置」→ SettingActivity（只存在于 leanback flavor，由 Activity 侧反射打开）。
+                onOpenSettings = onOpenSettings,
                 // 顶栏 ↓ 进入 Tab 栏：落到记忆中的 Tab，而不是与顶栏项横向对齐的那一个。
                 onMoveDown = { focusTab() },
             )
@@ -556,6 +621,8 @@ private fun HeroTopBar(
     onOpenHistory: () -> Unit,
     // 顶栏「搜索」→ HeroSearchActivity。同上，由调用方传入已捕获 context 的 lambda。
     onOpenSearch: () -> Unit,
+    // 顶栏「设置」→ SettingActivity（只在 leanback flavor）。同样由调用方捕获 Activity 后传入。
+    onOpenSettings: () -> Unit,
     onMoveDown: () -> Unit,
 ) {
     Row(
@@ -583,11 +650,12 @@ private fun HeroTopBar(
                     label = TOP_BAR_LABELS[index],
                     isHome = false,
                     requester = requesters[index],
-                    // 目前只有「历史」「搜索」接好了页面，其余项仍是占位（确定键无动作）。
+                    // 目前「历史」「搜索」「设置」已接好页面，其余项仍是占位（确定键无动作）。
                     onConfirm = {
                         when (TOP_BAR_LABELS[index]) {
                             TOP_BAR_HISTORY_LABEL -> onOpenHistory()
                             TOP_BAR_SEARCH_LABEL -> onOpenSearch()
+                            TOP_BAR_SETTINGS_LABEL -> onOpenSettings()
                         }
                     },
                     onMoveDown = onMoveDown,
@@ -1215,11 +1283,13 @@ private val HERO_POSTERS: List<HeroPoster> = listOf(
 private val TOP_BAR_LABELS = listOf("首页", "直播", "搜索", "历史", "收藏", "推送", "设置")
 
 // 顶栏里已接好页面的项：历史 → HeroHistoryActivity（View 体系 + HeroPosterCard）、
-// 搜索 → HeroSearchActivity（Compose 体系）。
-// 直播 / 收藏 / 推送 / 设置 等对应页面就绪后再按同一写法接。
+// 搜索 → HeroSearchActivity（Compose 体系）、设置 → SettingActivity（仅 leanback，见 openSettings）。
+// 直播 / 收藏 / 推送 等对应页面就绪后再按同一写法接。
 private const val TOP_BAR_HISTORY_LABEL = "历史"
 
 private const val TOP_BAR_SEARCH_LABEL = "搜索"
+
+private const val TOP_BAR_SETTINGS_LABEL = "设置"
 
 // 分类 Tab 顺序对照 ref_docs/home_ui.png 的胶囊分类条。
 private val HERO_TABS = listOf("推荐", "电影", "电视剧", "动漫", "综艺", "纪录片")

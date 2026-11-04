@@ -25,7 +25,7 @@ package com.fongmi.android.tv.ui.hero
 internal data class HeroHistoryItem(
     val id: String,
     val title: String,
-    /** 来源站点，用于卡片左上角标签，取值与 [HERO_SOURCE_SITES] 同一套。 */
+    /** 来源站点名（`Vod.getSiteName()` 的取值），用于卡片左上角标签。 */
     val site: String,
     /** 备注（如「更新至02集」）。历史页卡片默认不显示，保留给「继续观看」列表复用。 */
     val remark: String,

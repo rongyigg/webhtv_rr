@@ -80,17 +80,18 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import androidx.lifecycle.ViewModelProvider
 import coil3.compose.AsyncImage
 import com.fongmi.android.tv.R
+import com.fongmi.android.tv.api.config.VodConfig
+import com.fongmi.android.tv.model.SiteViewModel
 import com.fongmi.android.tv.ui.hero.ChangeSourceDialog
-import com.fongmi.android.tv.ui.hero.HERO_SOURCE_RESULTS
-import com.fongmi.android.tv.ui.hero.HERO_SOURCE_RESULT_TOTAL
-import com.fongmi.android.tv.ui.hero.HERO_SOURCE_SITES
 import com.fongmi.android.tv.ui.hero.HeroAccentColor
 import com.fongmi.android.tv.ui.hero.HeroDialogShell
 import com.fongmi.android.tv.ui.hero.HeroFocusBrush
 import com.fongmi.android.tv.ui.hero.HeroImageLoader
 import com.fongmi.android.tv.ui.hero.HeroSectionTitle
+import com.fongmi.android.tv.utils.Notify
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
@@ -140,9 +141,15 @@ class HeroDetailActivity : ComponentActivity() {
         HeroImageLoader.install()
         // 首页只传剧名过来，其余字段继续走假数据；剧名为空时回落到默认假数据。
         val title = intent.getStringExtra(EXTRA_TITLE).orEmpty().ifBlank { DEMO_DETAIL.title }
+        // 换源弹窗需要 Activity 作用域的 SiteViewModel（构造函数里就建了两个单线程 executor，
+        // 绝不能按弹窗 new）。详情页自己持有一份，和首页互不影响。
+        val siteViewModel = ViewModelProvider(this)[SiteViewModel::class.java]
         setContent {
             MaterialTheme(colorScheme = darkColorScheme()) {
-                HeroDetailScreen(detail = DEMO_DETAIL.copy(title = title))
+                HeroDetailScreen(
+                    detail = DEMO_DETAIL.copy(title = title),
+                    siteViewModel = siteViewModel,
+                )
             }
         }
     }
@@ -166,7 +173,7 @@ class HeroDetailActivity : ComponentActivity() {
 }
 
 @Composable
-private fun HeroDetailScreen(detail: HeroDetail) {
+private fun HeroDetailScreen(detail: HeroDetail, siteViewModel: SiteViewModel) {
     val context = LocalContext.current
     // 两组可聚焦区域：按钮组 + 演职员行。跨区移动全部显式 requestFocus，不依赖 2D 焦点搜索。
     val actionRequesters = remember { List(DETAIL_ACTIONS.size) { FocusRequester() } }
@@ -282,17 +289,34 @@ private fun HeroDetailScreen(detail: HeroDetail) {
                     when (index) {
                         DETAIL_ACTION_PLAY -> showPlayDialog = true
                         DETAIL_ACTION_CHANGE_SOURCE -> {
-                            pendingActionFocus = DETAIL_ACTION_CHANGE_SOURCE
-                            showSourceDialog = true
-                            // 换源弹窗改为 View 体系独立 Dialog；showSourceDialog 只用于关闭后的焦点交还。
-                            ChangeSourceDialog.show(
-                                context = context,
-                                sites = HERO_SOURCE_SITES,
-                                currentSite = 0,
-                                results = HERO_SOURCE_RESULTS,
-                                total = HERO_SOURCE_RESULT_TOTAL,
-                                onClosed = { showSourceDialog = false },
-                            )
+                            // 候选源规则与首页完全一致：
+                            // isSearchable + isChangeable + 非隐藏 + 未被屏蔽 + 非当前源，再按站点健康度排序。
+                            val candidates = ChangeSourceDialog.candidates(VodConfig.get().getHome().key)
+                            if (candidates.isEmpty()) {
+                                Notify.show(context.getString(R.string.play_change_empty))
+                            } else {
+                                pendingActionFocus = DETAIL_ACTION_CHANGE_SOURCE
+                                showSourceDialog = true
+                                // 换源弹窗改为 View 体系独立 Dialog；showSourceDialog 只用于关闭后的焦点交还。
+                                ChangeSourceDialog.show(
+                                    context = context,
+                                    viewModel = siteViewModel,
+                                    sites = candidates,
+                                    // 详情页当前只有剧名是真实值，用它做检索关键词。
+                                    keyword = detail.title,
+                                    // 与 TmdbDetailActivity 一致：只搜 quick 源。
+                                    quick = true,
+                                    onSourceSelected = { vod, site ->
+                                        Notify.show(
+                                            context.getString(
+                                                R.string.source_sidebar_switched,
+                                                "${site.displayName} · ${vod.name}",
+                                            ),
+                                        )
+                                    },
+                                    onClosed = { showSourceDialog = false },
+                                )
+                            }
                         }
                     }
                 },

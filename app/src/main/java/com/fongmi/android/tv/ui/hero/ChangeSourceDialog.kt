@@ -13,17 +13,26 @@ import android.view.ViewTreeObserver
 import android.view.WindowManager
 import android.widget.FrameLayout
 import android.widget.TextView
+import androidx.lifecycle.Observer
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.fongmi.android.tv.R
+import com.fongmi.android.tv.api.config.VodConfig
+import com.fongmi.android.tv.bean.Result
+import com.fongmi.android.tv.bean.Site
+import com.fongmi.android.tv.bean.Vod
+import com.fongmi.android.tv.model.SearchProgress
+import com.fongmi.android.tv.model.SiteViewModel
+import com.fongmi.android.tv.setting.SiteBlockSetting
+import com.fongmi.android.tv.setting.SiteHealthStore
 import kotlin.math.min
 import kotlin.math.roundToInt
 
 /**
  * 换源弹窗（View 体系，独立 Dialog，不使用任何 Compose 外壳）。
  *
- * 布局直接照搬 `ref_docs/dialog_source.xml`（原版 SourceDialog / f23），
- * 窗口尺寸与间距照搬 `ref_docs/f23.java`：
+ * ## 布局
+ * 直接照搬 `ref_docs/dialog_source.xml`（原版 SourceDialog / f23），窗口尺寸与间距照搬 `ref_docs/f23.java`：
  * - 窗口宽 = 屏幕宽 × 0.82（f23 `c0(0.82f)`）；
  * - 窗口高 = min(360dp, 屏幕高 dp × 0.65)（f23 `Math.min(360, Math.round(h / density * 0.65f))`）；
  * - 站点栏横向间距 12dp（f23 `siteRecycler.setHorizontalSpacing(dp(12))`）；
@@ -38,26 +47,39 @@ import kotlin.math.roundToInt
  * 结果卡**只允许**用全局唯一组件 [HeroPosterCard]（120dp × 214dp、四角 8dp 全圆、
  * 2dp 纯红 #FF0000 焦点框只包 120×180 海报、34dp 剧名栏），弹窗内部不再手写任何卡片尺寸。
  * 卡片内容映射照抄 `ref_docs/adapter_search.xml` / `ks2.java`：
- * `topStartTag` = `MM-dd | 来源`（13sp）、`bottomStartTag` = 备注（14sp）、`title` = 剧名（16sp）。
+ * `topStartTag` = `Vod.getSiteName()`（13sp）、`bottomStartTag` = `Vod.getRemarks()`（14sp）、
+ * `title` = `Vod.getName()`（16sp）。
  *
- * 多选联动：点弹窗内小房子 → [SourceSidebarMode.Multi]，勾选的站点会即时过滤下方结果，
- * 只有被勾选站点的结果才会展示。TODO(数据层对接)：换成真实检索条件。
+ * ## 数据（第二阶段：真实换源）
+ * - 候选源由 [candidates] 统一给出，规则与 `TmdbDetailActivity.isChangeSourceCandidate` 等价：
+ *   `isSearchable()` + `isChangeable()` + 非隐藏 + 未被用户屏蔽 + 不是当前源，最后按
+ *   [SiteHealthStore.sortSites] 的站点健康度排序。
+ * - 检索走 [SiteViewModel.searchContent] 的 **List 重载**（写 `search` LiveData），
+ *   **绝不能用** 4 参单源重载 —— 那个写的是 `result` LiveData，会和首页 `homeContent()` 抢同一条通道。
+ * - `quick = true`，与 `TmdbDetailActivity` L11261 的换源检索完全一致。
+ * - Tab 栏是**静态**的（= 传入的候选源），切到哪个才搜哪个；每个源的结果缓存在 [resultsBySite]，
+ *   来回切 Tab 不会重复请求。侧边栏里没勾的源**根本不发请求**。
+ * - 结果里每条 [Vod] 都已由 `SiteApi.searchContent` 盖过 `setSite(site)`，
+ *   所以确定键回传的 `(vod, site)` 是同一来源，不需要再按剧名二次搜索。
  *
- * 组件内零数据层写入；站点切换后的检索与结果卡写库由调用方实现。
- * 海报只在 [HeroPosterCard.imageUrl] 非空时才由组件用 Glide 加载（Mock 阶段恒为空，走渐变占位）。
- * TODO(数据层对接)：站点切换刷新、结果卡确定键写库、海报地址。
+ * ## 生命周期
+ * `SiteViewModel` 由 Activity 作用域持有（构造函数里就建了两个单线程 executor，绝不能按弹窗 new）。
+ * 弹窗只在 [onStart] 挂 `observeForever`、[onStop] 摘掉并 [SiteViewModel.stopSearch]，
+ * 关闭即取消在途请求。
  */
 internal class ChangeSourceDialog private constructor(
     context: Context,
-    private val sites: List<String>,
-    currentSite: Int,
-    private val results: List<HeroSourceResult>,
-    private val total: Int,
-    private val onSourceSelected: (HeroSourceResult) -> Unit,
+    private val viewModel: SiteViewModel,
+    /** 候选源（已过滤 + 已按健康度排序）：既是站点栏，也是侧边栏的全量条目。 */
+    private val sites: List<Site>,
+    private val keyword: String,
+    private val quick: Boolean,
+    private val onSourceSelected: (Vod, Site) -> Unit,
     private val onClosed: () -> Unit,
 ) : Dialog(context, R.style.SourceDialogTheme) {
 
-    private var selectedSite: Int = currentSite.coerceIn(0, (sites.size - 1).coerceAtLeast(0))
+    /** 当前站点栏下标。Tab 是静态的，所以它同时就是 [sites] 的下标。 */
+    private var selectedSite: Int = 0
 
     /**
      * 焦点是否停在下方结果区。
@@ -72,16 +94,47 @@ internal class ChangeSourceDialog private constructor(
         setContentFocused(newFocus != null && isDescendantOf(resultRecycler, newFocus))
     }
 
-    /** 全部结果（不过滤）与当前展示结果。多选侧边栏的勾选只影响后者。 */
-    private var visibleResults: List<HeroSourceResult> = results
+    /** 当前展示的结果。永远只属于 [selectedSite] 这一个源。 */
+    private var visibleResults: List<Vod> = emptyList()
 
-    /** 多选侧边栏的勾选快照，关闭再打开时保持上次状态。 */
-    private var checkedFlags: BooleanArray = HERO_SOURCE_INITIAL_CHECKED.copyOf()
+    /** 是否有请求在途（决定进度条 / 空态 / 列表三选一）。 */
+    private var searching = false
+
+    /** 侧边栏勾选快照，关闭再打开时保持上次状态；默认全选。 */
+    private var checkedFlags: BooleanArray = BooleanArray(sites.size) { true }
+
+    /** 允许发起检索的源 key 集合：侧边栏没勾的源连请求都不发。 */
+    private var enabledSiteKeys: Set<String> = sites.map { it.key }.toSet()
+
+    /**
+     * 每个源搜到过的结果（含空结果），避免来回切 Tab 时重复请求。
+     *
+     * 用 `containsKey` 而不是单独的 `searchedSites` 集合：`searchContent(List)` 每次都会先
+     * `stopSearchLocked()` 取消上一轮在途请求，被取消的源不会有任何回调，
+     * 只有「结果已经落到这里」才算真的搜过。
+     */
+    private val resultsBySite = LinkedHashMap<String, List<Vod>>()
+
+    /**
+     * 当前在途请求属于哪个源；`null` = 没有在途请求。
+     *
+     * `observeForever` 会**立刻重放**上一次搜索的旧值，所以它同时是旧值闸门：
+     * 回调里一律 `pendingSiteKey ?: return`，只有我们自己发起的那一轮才被接受。
+     */
+    private var pendingSiteKey: String? = null
+
+    private val searchObserver = Observer<Result> { result -> onSearchResult(result) }
+
+    private val progressObserver = Observer<SearchProgress> { progress -> onSearchProgress(progress) }
 
     private lateinit var homeBtn: FrameLayout
     private lateinit var siteRecycler: RecyclerView
     private lateinit var resultRecycler: RecyclerView
     private lateinit var empty: TextView
+    private lateinit var progress: View
+    private lateinit var resultCount: TextView
+    private lateinit var siteAdapter: SiteAdapter
+    private lateinit var resultAdapter: ResultAdapter
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -94,22 +147,33 @@ internal class ChangeSourceDialog private constructor(
         setOnDismissListener { onClosed() }
     }
 
-    override fun onStop() {
-        window?.decorView?.viewTreeObserver?.removeOnGlobalFocusChangeListener(focusListener)
-        super.onStop()
-    }
-
     override fun onStart() {
         super.onStart()
         // 焦点进出结果区时同步站点标签的红框（规则 ②③）。
         // 与 onStop 的移除成对，保证弹窗被复用/重新显示时监听不会丢也不会重复添加。
         window?.decorView?.viewTreeObserver?.addOnGlobalFocusChangeListener(focusListener)
+        // 先清在途标记，再挂观察者：observeForever 的首次重放必须被 pendingSiteKey 拦掉。
+        pendingSiteKey = null
+        viewModel.search.observeForever(searchObserver)
+        viewModel.searchProgress.observeForever(progressObserver)
         // 默认焦点落在当前站点标签；必须等 ViewHolder 布局完成再请求，
         // 否则焦点会停在 RecyclerView 上，标签的 focused 红底就不会出现。
         siteRecycler.post {
             siteRecycler.scrollToPosition(selectedSite)
             focusSite(selectedSite)
         }
+        // 打开即搜第一个候选源（Tab 是静态的，所以「切到哪个才搜哪个」的第一个就是它）。
+        refreshCurrent()
+    }
+
+    override fun onStop() {
+        window?.decorView?.viewTreeObserver?.removeOnGlobalFocusChangeListener(focusListener)
+        viewModel.search.removeObserver(searchObserver)
+        viewModel.searchProgress.removeObserver(progressObserver)
+        pendingSiteKey = null
+        // 关闭弹窗就取消在途检索：蜘蛛实现可能忽略中断，stopSearch 至少让旧一轮结果不再回到 UI。
+        viewModel.stopSearch()
+        super.onStop()
     }
 
     /** 布局可能尚未完成，重试几次保证焦点落在标签上。 */
@@ -154,13 +218,7 @@ internal class ChangeSourceDialog private constructor(
 
     private fun bindHeader() {
         findViewById<TextView>(R.id.badge).setText(R.string.play_change)
-        updateCount()
-    }
-
-    /** 顶部统计：未过滤时沿用外部传入的总数，过滤后显示实际命中数。 */
-    private fun updateCount() {
-        val count = if (visibleResults.size == results.size) total else visibleResults.size
-        findViewById<TextView>(R.id.resultCount).text = context.getString(R.string.play_change_count, count)
+        resultCount = findViewById(R.id.resultCount)
     }
 
     private fun bindHome() {
@@ -174,33 +232,136 @@ internal class ChangeSourceDialog private constructor(
         siteRecycler.itemAnimator = null
         siteRecycler.descendantFocusability = ViewGroup.FOCUS_AFTER_DESCENDANTS
         siteRecycler.addItemDecoration(SpacingDecoration(dp(SITE_SPACING_DP)))
-        siteRecycler.adapter = SiteAdapter()
+        siteAdapter = SiteAdapter()
+        siteRecycler.adapter = siteAdapter
     }
 
     private fun bindResultList() {
         resultRecycler = findViewById(R.id.recycler)
         empty = findViewById(R.id.empty)
+        progress = findViewById(R.id.progress)
+        // 复用现成字符串（「暂无可换源」），不新增 strings.xml 条目；
+        // 要改成「该站点暂无结果」只需在这里换一个资源 id。
+        empty.setText(R.string.play_change_empty)
         resultRecycler.layoutManager = LinearLayoutManager(context, RecyclerView.HORIZONTAL, false)
         resultRecycler.itemAnimator = null
         resultRecycler.descendantFocusability = ViewGroup.FOCUS_AFTER_DESCENDANTS
         resultRecycler.addItemDecoration(SpacingDecoration(dp(RESULT_SPACING_DP)))
-        resultRecycler.adapter = ResultAdapter()
-        recycleState()
+        resultAdapter = ResultAdapter()
+        resultRecycler.adapter = resultAdapter
+        render()
     }
 
-    private fun recycleState() {
+    /**
+     * 进度条 / 空态 / 结果列表三选一，并把数量写回头部。
+     *
+     * 三者的可见性只由 [searching] 与 [visibleResults] 决定，任何数据变化都只改这两个字段再调本方法，
+     * 避免「隐藏了列表但忘了收空态」这类状态残留。
+     */
+    private fun render() {
+        resultAdapter.notifyDataSetChanged()
         val hasResult = visibleResults.isNotEmpty()
-        findViewById<View>(R.id.progress).visibility = View.GONE
-        resultRecycler.visibility = if (hasResult) View.VISIBLE else View.GONE
-        empty.visibility = if (hasResult) View.GONE else View.VISIBLE
+        progress.visibility = if (searching) View.VISIBLE else View.GONE
+        resultRecycler.visibility = if (!searching && hasResult) View.VISIBLE else View.GONE
+        empty.visibility = if (!searching && !hasResult) View.VISIBLE else View.GONE
+        resultCount.visibility = if (searching) View.INVISIBLE else View.VISIBLE
+        resultCount.text = context.getString(R.string.play_change_count, visibleResults.size)
     }
 
+    private fun currentSite(): Site? = sites.getOrNull(selectedSite)
+
+    /** 站点栏确定键 / 点击：切到该源并保证它有结果（没搜过就补搜）。 */
     private fun selectSite(position: Int) {
         if (position == selectedSite) return
         selectedSite = position
-        syncSiteActivation()
-        resultRecycler.adapter?.notifyDataSetChanged()
-        recycleState()
+        siteAdapter.notifyDataSetChanged()
+        refreshCurrent()
+    }
+
+    /**
+     * 让「当前选中的站点」与 UI 保持一致：
+     * - 该源被侧边栏取消勾选 → 不发请求，直接空态；
+     * - 该源已有结果 → 直接渲染缓存；
+     * - 该源正在搜 → 保持进度条；
+     * - 其余情况 → 发起检索。
+     */
+    private fun refreshCurrent() {
+        val site = currentSite() ?: return
+        val key = site.key
+        when {
+            keyword.isBlank() -> {
+                pendingSiteKey = null
+                searching = false
+                visibleResults = emptyList()
+                render()
+            }
+
+            key !in enabledSiteKeys -> {
+                pendingSiteKey = null
+                searching = false
+                viewModel.stopSearch()
+                visibleResults = emptyList()
+                render()
+            }
+
+            pendingSiteKey == key -> Unit
+
+            resultsBySite.containsKey(key) -> {
+                searching = false
+                visibleResults = resultsBySite[key].orEmpty()
+                render()
+            }
+
+            else -> startSearch(site)
+        }
+    }
+
+    /** 只搜一个源：走 List 重载（写 `search`），和首页 `homeContent()` 的 `result` 通道互不干扰。 */
+    private fun startSearch(site: Site) {
+        pendingSiteKey = site.key
+        searching = true
+        visibleResults = emptyList()
+        render()
+        viewModel.searchContent(listOf(site), keyword, quick)
+    }
+
+    /**
+     * `search` LiveData 回调：**一个源一条结果**。
+     *
+     * 结果里的每条 [Vod] 已由 `SiteApi.searchContent` 盖过 `setSite(site)`，不需要再补。
+     */
+    private fun onSearchResult(result: Result?) {
+        val siteKey = pendingSiteKey ?: return
+        val items = result?.list.orEmpty()
+        if (items.isNotEmpty()) {
+            val merged = resultsBySite.getOrElse(siteKey) { emptyList() } + items
+            resultsBySite[siteKey] = merged.distinctBy { it.id }
+        } else if (!resultsBySite.containsKey(siteKey)) {
+            resultsBySite[siteKey] = emptyList()
+        }
+        if (siteKey == currentSite()?.key) {
+            visibleResults = resultsBySite[siteKey].orEmpty()
+            render()
+        }
+    }
+
+    /**
+     * `searchProgress` LiveData 回调：只认 [pendingSiteKey] 那一轮，`finished()` 时才收尾。
+     *
+     * `total == 0` 表示所有源都被 `quick` 过滤掉（`Site.isQuickSearch() == false`），
+     * 这种情况不会有任何结果回调，必须在这里手动结束，否则进度条会一直转。
+     */
+    private fun onSearchProgress(progress: SearchProgress?) {
+        if (progress == null || !progress.finished()) return
+        val siteKey = pendingSiteKey ?: return
+        pendingSiteKey = null
+        searching = false
+        // 搜完但没有结果（含失败 / 被 quick 过滤）也记一条空结果，避免每次切回这个 Tab 都重搜。
+        if (!resultsBySite.containsKey(siteKey)) resultsBySite[siteKey] = emptyList()
+        if (siteKey == currentSite()?.key) {
+            visibleResults = resultsBySite[siteKey].orEmpty()
+            render()
+        }
     }
 
     /** 当前焦点是否还在下方结果区。只在状态真的变化时刷新标签背景，避免无谓重绘。 */
@@ -233,12 +394,14 @@ internal class ChangeSourceDialog private constructor(
 
     /**
      * 弹窗内小房子：拉起多选侧边栏（层级盖在换源弹窗之上，后创建的窗口在上层）。
-     * 勾选结果即时过滤下方结果：只有被勾选站点的结果才会展示。
+     *
+     * 条目用**全量候选源**（[sites]）：取消勾选的源仍然留在侧边栏里，才能再勾回来。
+     * 勾选结果只限定「允许发请求的源」，不改变站点栏的静态 Tab。
      */
     private fun openSidebar() {
         SourceSidebar.show(
             context = context,
-            entries = HERO_SOURCE_ENTRIES,
+            entries = HeroSourceEntry.of(sites),
             mode = SourceSidebarMode.Multi,
             initialChecked = checkedFlags,
             onCheckedChanged = { applySiteFilter(it) },
@@ -246,17 +409,14 @@ internal class ChangeSourceDialog private constructor(
         )
     }
 
-    /** 多选联动（Mock）：勾选的站点名与 [HeroSourceResult.site] 求交集后刷新列表。 */
+    /** 多选联动：勾选集合 → 允许检索的源集合，然后让当前站点重新对账（该补搜就补搜）。 */
     private fun applySiteFilter(flags: BooleanArray) {
         checkedFlags = flags.copyOf()
-        val allowed = HERO_SOURCE_ENTRIES
-            .filterIndexed { index, _ -> index < checkedFlags.size && checkedFlags[index] }
-            .map { it.site }
+        enabledSiteKeys = sites
+            .filterIndexed { index, _ -> flags.getOrElse(index) { false } }
+            .map { it.key }
             .toSet()
-        visibleResults = results.filter { it.site in allowed }
-        resultRecycler.adapter?.notifyDataSetChanged()
-        recycleState()
-        updateCount()
+        refreshCurrent()
     }
 
     private fun dp(value: Int): Int = (value * context.resources.displayMetrics.density).roundToInt()
@@ -284,7 +444,8 @@ internal class ChangeSourceDialog private constructor(
         override fun getItemCount(): Int = sites.size
 
         override fun onBindViewHolder(holder: Holder, position: Int) {
-            holder.name.text = sites[position]
+            // 显示名走 Site.getDisplayName()：尊重用户在站点管理里的改名。
+            holder.name.text = sites[position].displayName
             holder.itemView.isSelected = position == selectedSite
             // 规则 ②：当前站点 + 焦点在结果区 → 红框（drawable 的 state_activated 分支）。
             holder.itemView.isActivated = contentFocused && position == selectedSite
@@ -314,19 +475,23 @@ internal class ChangeSourceDialog private constructor(
         override fun getItemCount(): Int = visibleResults.size
 
         override fun onBindViewHolder(holder: Holder, position: Int) {
-            val result = visibleResults[position]
+            val vod = visibleResults[position]
             // 字段与逆向 adapter_search.xml / ks2.java 一一对应：
             // title          → 16sp 剧名（ks2 L74 `setText(vod.getName())`）
             // bottomStartTag → 14sp 备注（ks2 L78-79 `setText(vod.getRemarks())`）
             // topStartTag    → 13sp 左上角标签（ks2 L77 `setText(vod.getSiteName())`），
-            //                  本工程按需求显示「日期 | 来源」，日期截短成 MM-dd（如 `10-28 | 豆瓣`），
+            //                  本工程按需求只显示来源，不再拼日期；
             //                  组件内 maxWidth 110dp（< 海报 120dp）+ 单行省略，永远不越出海报。
-            holder.card.title = result.name
-            holder.card.imageUrl = result.poster
-            holder.card.topStartTag = "${shortDate(result.date)} | ${result.site}"
-            holder.card.bottomStartTag = result.remark
+            holder.card.title = vod.name
+            holder.card.imageUrl = vod.pic
+            holder.card.topStartTag = vod.siteName
+            holder.card.bottomStartTag = vod.remarks
             holder.card.setOnClickListener {
-                onSourceSelected(result)
+                // 用 getOrNull 而不是闭包里的 position：结果列表可能已被新的搜索替换。
+                val item = visibleResults.getOrNull(position) ?: return@setOnClickListener
+                // vod 已由 SiteApi 盖过 site；万一第三方蜘蛛自己丢了 site，退回当前 Tab 的源。
+                val site = item.site ?: currentSite() ?: return@setOnClickListener
+                onSourceSelected(item, site)
                 dismiss()
             }
             // 卡片按 ↑ 必须回到**当前选中的站点标签**（《焦点总结》规则 ④的同一条思路）。
@@ -344,12 +509,6 @@ internal class ChangeSourceDialog private constructor(
         }
 
         inner class Holder(val card: HeroPosterCard) : RecyclerView.ViewHolder(card)
-
-        /** `2026-10-28` → `10-28`；不是三段日期（如已经是 `10-28`）就原样返回。 */
-        private fun shortDate(date: String): String {
-            val parts = date.split('-')
-            return if (parts.size == 3) "${parts[1]}-${parts[2]}" else date
-        }
     }
 
     companion object {
@@ -392,25 +551,55 @@ internal class ChangeSourceDialog private constructor(
         private const val FOCUS_RETRY_DELAY_MS = 50L
 
         /**
+         * 换源候选源：**与 `TmdbDetailActivity.isChangeSourceCandidate`（L11654）等价的规则**。
+         *
+         * 1. [SiteBlockSetting.filter]`(sites, false)` 先去掉隐藏源（`isHide`）和用户屏蔽源；
+         * 2. `isSearchable()` —— 该源支持搜索，否则换源检索永远拿不到结果；
+         * 3. `isChangeable()` —— 站点允许被换源（部分源明确禁止）；
+         * 4. 排除 key 为空的坏配置；
+         * 5. 排除 [currentSiteKey]（当前正在看的源）与 [excludedSiteKeys]（本次会话已知坏源）；
+         * 6. 最后交给 [SiteHealthStore.sortSites]，按站点健康度排序（关闭健康度排序时原序返回）。
+         *
+         * @param currentSiteKey 当前源 key（`Site.getKey()`），空串表示不排除任何源。
+         * @param excludedSiteKeys 额外排除的源 key（例如本次会话里请求失败过的源）。
+         */
+        fun candidates(
+            currentSiteKey: String,
+            excludedSiteKeys: Set<String> = emptySet(),
+        ): List<Site> {
+            val items = ArrayList<Site>()
+            for (site in SiteBlockSetting.filter(VodConfig.get().getSites(), false)) {
+                if (site.isEmpty || !site.isSearchable || !site.isChangeable) continue
+                val key = site.key
+                if (key.isEmpty() || key == currentSiteKey || key in excludedSiteKeys) continue
+                items.add(site)
+            }
+            SiteHealthStore.sortSites(items)
+            return items
+        }
+
+        /**
          * 打开换源弹窗。
          *
-         * @param sites 站点栏标签，顺序即显示顺序。
-         * @param currentSite 当前站点下标，越界时收敛到 0。
-         * @param results 换源结果卡片。
-         * @param total 顶部统计数字（与卡片数量解耦）；默认等于结果数量。
-         * @param onSourceSelected 结果卡片确定键回调。
-         * @param onClosed 关闭回调，调用方在这里把焦点交还给详情页「换源」按钮。
+         * @param viewModel Activity 作用域的 [SiteViewModel]（**必须复用**，不能在这里 new）。
+         * @param sites 候选源，直接用 [candidates] 的返回值；顺序即站点栏顺序。
+         * @param keyword 检索关键词（首页当前这张卡的剧名）。
+         * @param quick 是否只搜 quick 源；与 `TmdbDetailActivity` 一致传 `true`。
+         * @param onSourceSelected 结果卡片确定键回调，回传**真实 `(Vod, Site)`**。
+         * @param onClosed 关闭回调，调用方在这里把焦点交还给首页卡片。
          */
         fun show(
             context: Context,
-            sites: List<String>,
-            currentSite: Int,
-            results: List<HeroSourceResult>,
-            total: Int = results.size,
-            onSourceSelected: (HeroSourceResult) -> Unit = {},
+            viewModel: SiteViewModel,
+            sites: List<Site>,
+            keyword: String,
+            quick: Boolean = true,
+            onSourceSelected: (Vod, Site) -> Unit = { _, _ -> },
             onClosed: () -> Unit = {},
         ): ChangeSourceDialog {
-            val dialog = ChangeSourceDialog(context, sites, currentSite, results, total, onSourceSelected, onClosed)
+            val dialog = ChangeSourceDialog(
+                context, viewModel, sites, keyword, quick, onSourceSelected, onClosed,
+            )
             dialog.show()
             return dialog
         }

@@ -14,13 +14,14 @@ import android.widget.TextView
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.fongmi.android.tv.R
+import com.fongmi.android.tv.bean.Site
 
 /**
  * 侧边栏的两种使用场景。
  *
  * - [Single]：首页小房子呼出。不显示勾选圈与「全选 / 全不选」，确定键 = 切到该接口源并关闭。
  * - [Multi]：换源弹窗内小房子呼出。显示勾选圈与「全选 / 全不选」，
- *   确定键 = 勾选 / 取消勾选（不关闭），勾选结果交给调用方过滤搜索结果。
+ *   确定键 = 勾选 / 取消勾选（不关闭），勾选结果交给调用方限定**允许搜索**的源。
  */
 internal enum class SourceSidebarMode {
     Single,
@@ -44,8 +45,8 @@ internal enum class SourceSidebarMode {
  * 行布局的 `@id/item` 就是根节点，因此 `ViewHolder.itemView` 与画背景的 View 是同一个，
  * `isSelected` / 焦点态一定作用在可见的背景上（旧版是「外层容器 + 内层 item」两层，状态打在外层，永远不显示）。
  *
- * 交互：
- * - [SourceSidebarMode.Single]：确定键 → `onSiteSelected(index)` 并关闭；
+ * 数据来自 [HeroSourceEntry]，条目里装的是**真实 [Site]**：
+ * - [SourceSidebarMode.Single]：确定键 → `onSiteSelected(site)` 并关闭；
  * - [SourceSidebarMode.Multi]：确定键 → 切换该条勾选，`onCheckedChanged` 返回快照，不关闭。
  * - 两种模式都是返回键关闭，`onClosed` 里由调用方把焦点交还给打开它的按钮。
  *
@@ -56,13 +57,23 @@ internal class SourceSidebar private constructor(
     private val entries: List<HeroSourceEntry>,
     private val mode: SourceSidebarMode,
     initialChecked: BooleanArray,
-    private val currentIndex: Int,
+    private val currentSiteKey: String,
     private val onCheckedChanged: (BooleanArray) -> Unit,
-    private val onSiteSelected: (Int) -> Unit,
+    private val onSiteSelected: (Site) -> Unit,
     private val onClosed: () -> Unit,
 ) : Dialog(context, R.style.SourceDialogTheme) {
 
     private val checked = BooleanArray(entries.size)
+
+    /**
+     * 单选模式下「当前接口源」的下标。
+     *
+     * 用 key 而不是下标传进来：真实站点列表会随配置导入 / 屏蔽 / 排序变化，
+     * 下标在两次读取之间并不可靠，key 才是稳定标识（与 `Vod.getSiteKey()` 同一套）。
+     * 找不到（例如当前源已被隐藏）时退回第 0 条。
+     */
+    private val currentIndex: Int
+        get() = entries.indexOfFirst { it.key == currentSiteKey }.coerceAtLeast(0)
 
     private lateinit var list: RecyclerView
     private lateinit var selectAll: View
@@ -153,7 +164,7 @@ internal class SourceSidebar private constructor(
         if (isMulti) {
             toggle(position)
         } else {
-            onSiteSelected(position)
+            onSiteSelected(entries[position].site)
             dismiss()
         }
     }
@@ -220,12 +231,13 @@ internal class SourceSidebar private constructor(
         /**
          * 打开全局接口源侧边栏。
          *
-         * @param entries 侧边栏条目，顺序即显示顺序。
+         * @param entries 侧边栏条目（内部持有真实 [Site]），顺序即显示顺序。
          * @param mode 单选（首页小房子）或多选（换源弹窗内小房子）。
          * @param initialChecked 多选模式的初始勾选状态，长度不足时其余按未选中处理。
-         * @param currentIndex 单选模式下当前接口源的下标，同时是该模式下的默认焦点。
-         * @param onCheckedChanged 多选模式勾选变更回调，返回快照数组。
-         * @param onSiteSelected 单选模式确定键回调，返回所选下标。
+         * @param currentSiteKey 单选模式下当前接口源的 key（`Site.getKey()`），
+         *   既是选中态来源也是该模式下的默认焦点；找不到时退回第 0 条。
+         * @param onCheckedChanged 多选模式勾选变更回调，返回快照数组（下标对应 [entries]）。
+         * @param onSiteSelected 单选模式确定键回调，回传**真实 [Site] 对象**。
          * @param onClosed 关闭回调，调用方在这里把焦点交还给打开它的按钮。
          */
         fun show(
@@ -233,13 +245,13 @@ internal class SourceSidebar private constructor(
             entries: List<HeroSourceEntry>,
             mode: SourceSidebarMode,
             initialChecked: BooleanArray = BooleanArray(entries.size),
-            currentIndex: Int = 0,
+            currentSiteKey: String = "",
             onCheckedChanged: (BooleanArray) -> Unit = {},
-            onSiteSelected: (Int) -> Unit = {},
+            onSiteSelected: (Site) -> Unit = {},
             onClosed: () -> Unit = {},
         ): SourceSidebar {
             val dialog = SourceSidebar(
-                context, entries, mode, initialChecked, currentIndex,
+                context, entries, mode, initialChecked, currentSiteKey,
                 onCheckedChanged, onSiteSelected, onClosed,
             )
             dialog.show()
