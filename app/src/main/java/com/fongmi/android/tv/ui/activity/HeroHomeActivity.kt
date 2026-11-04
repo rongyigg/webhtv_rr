@@ -90,7 +90,11 @@ import androidx.core.view.WindowInsetsControllerCompat
 import coil3.compose.AsyncImage
 import com.fongmi.android.tv.R
 import com.fongmi.android.tv.api.SiteApi
+import com.fongmi.android.tv.ui.hero.ChangeSourceDialog
 import com.fongmi.android.tv.ui.hero.HERO_SOURCE_ENTRIES
+import com.fongmi.android.tv.ui.hero.HERO_SOURCE_RESULTS
+import com.fongmi.android.tv.ui.hero.HERO_SOURCE_RESULT_TOTAL
+import com.fongmi.android.tv.ui.hero.HERO_SOURCE_SITES
 import com.fongmi.android.tv.ui.hero.HeroAccentColor
 import com.fongmi.android.tv.ui.hero.HeroFocusBrush
 import com.fongmi.android.tv.ui.hero.HeroHomeLogoButton
@@ -228,8 +232,9 @@ private fun HeroHomeScreen(onOpenDetail: (String) -> Unit) {
     // 《焦点总结》第 ②③ 条的分界线：只有还在模块内，选中的 Tab 才挂红框；
     // 一旦 ↑ 回顶栏，选中态整体休眠，不留任何红框。
     var moduleFocused by remember { mutableStateOf(false) }
-    // 长按卡片呼出的搜索弹窗：null = 未打开；非空 = 要预填进搜索框的关键字。
-    var searchQuery by remember { mutableStateOf<String?>(null) }
+    // 换源弹窗（View Dialog）打开状态 + 关闭后要还焦点的那张卡（-1 = 没有待处理）。
+    var showSourceDialog by remember { mutableStateOf(false) }
+    var pendingPosterFocus by remember { mutableIntStateOf(-1) }
 
     // 换分类时用同一批假数据做轮转，视觉上列表确实换了，但不需要第二套资源。
     val posters = remember(selectedTabIndex) { postersForTab(selectedTabIndex.coerceAtLeast(0)) }
@@ -281,6 +286,38 @@ private fun HeroHomeScreen(onOpenDetail: (String) -> Unit) {
         val target = fromIndex + delta
         if (target !in posters.indices) return
         focusPoster(target)
+    }
+
+    // 长按卡片确定键 → 换源弹窗（View 体系独立 Dialog，见 [ChangeSourceDialog]，层级盖在首页之上）。
+    // 打开期间用 [showSourceDialog] 占位，关闭后由下面的 LaunchedEffect 把焦点还给长按的那张卡。
+    fun changeSource() {
+        pendingPosterFocus = focusedPosterIndex
+        showSourceDialog = true
+        ChangeSourceDialog.show(
+            context = context,
+            sites = HERO_SOURCE_SITES,
+            currentSite = 0,
+            results = HERO_SOURCE_RESULTS,
+            total = HERO_SOURCE_RESULT_TOTAL,
+            // TODO(数据层对接)：结果卡确定键 = 用这条结果换源并刷新首页海报列表。
+            onSourceSelected = { result ->
+                Notify.show(context.getString(R.string.source_sidebar_switched, result.site))
+            },
+            onClosed = { showSourceDialog = false },
+        )
+    }
+
+    // 换源弹窗关闭后再抢焦点：Dialog 消失时首页窗口要过一帧才重新拿到焦点，
+    // 单次 requestFocus 常落空（与详情页同一套处理），所以重试几帧。
+    LaunchedEffect(showSourceDialog) {
+        if (showSourceDialog) return@LaunchedEffect
+        val target = pendingPosterFocus
+        pendingPosterFocus = -1
+        if (target < 0) return@LaunchedEffect
+        repeat(5) {
+            if (requestFocus(posterRequesters, target)) return@LaunchedEffect
+            withFrameNanos { }
+        }
     }
 
     // 启动时焦点落在“小房子”；侧边栏关闭后的焦点由 onClosed 回调交还。
@@ -373,29 +410,13 @@ private fun HeroHomeScreen(onOpenDetail: (String) -> Unit) {
                 },
                 // 卡片确定键：不再直接起播，改为拉起详情页（剧本名一并传过去）。
                 onClick = onOpenDetail,
-                // 卡片长按确定键：以弹窗形式呼出搜索页，并带上这张卡的剧名。
-                onLongClick = { title -> searchQuery = title },
+                // 卡片长按确定键：呼出换源弹窗（见 changeSource）。
+                onLongPress = { changeSource() },
                 // 海报行 ↑ 回 Tab 栏：落到**当前选中的分类**（见 focusTab 的注释）。
                 onMoveUp = { focusTab() },
                 onMoveDown = { },
                 onMoveLeft = { index -> focusPosterHorizontal(index, -1) },
                 onMoveRight = { index -> focusPosterHorizontal(index, 1) },
-            )
-        }
-        // 长按卡片呼出的搜索弹窗：整页 UI 复用 HeroSearchActivity 的 HeroSearchScreen，
-        // 只是换成 Dialog 窗口盖在首页上，关闭后焦点自动回到首页。
-        searchQuery?.let { query ->
-            HeroSearchDialog(
-                backdropUrl = heroPoster.backdropUrl,
-                initialKeyword = query,
-                onOpenDetail = onOpenDetail,
-                onDismiss = {
-                    searchQuery = null
-                    scope.launch {
-                        withFrameNanos { }
-                        requestFocus(posterRequesters, focusedPosterIndex)
-                    }
-                },
             )
         }
     }
@@ -875,7 +896,7 @@ private fun PosterArea(
     requesters: List<FocusRequester>,
     onFocused: (Int) -> Unit,
     onClick: (String) -> Unit,
-    onLongClick: (String) -> Unit,
+    onLongPress: () -> Unit,
     onMoveUp: (Int) -> Unit,
     onMoveDown: (Int) -> Unit,
     onMoveLeft: (Int) -> Unit,
@@ -896,8 +917,8 @@ private fun PosterArea(
                 requester = requesters[index],
                 onFocused = { onFocused(index) },
                 onClick = { onClick(poster.title) },
-                // 长按确定键 = 用这张卡的剧名呼出搜索弹窗。
-                onLongClick = { onLongClick(poster.title) },
+                // 长按确定键 = 呼出换源弹窗（与这张卡具体是哪部剧无关，换的是接口源）。
+                onLongPress = { onLongPress() },
                 // 把“从哪一张发起”带回上层：滚动锚点与左右边界都在上层统一处理。
                 onMoveUp = { onMoveUp(index) },
                 onMoveDown = { onMoveDown(index) },
@@ -927,7 +948,7 @@ private fun PosterCard(
     requester: FocusRequester,
     onFocused: () -> Unit,
     onClick: () -> Unit,
-    onLongClick: () -> Unit,
+    onLongPress: () -> Unit,
     onMoveUp: () -> Unit,
     onMoveDown: () -> Unit,
     onMoveLeft: () -> Unit,
@@ -972,7 +993,7 @@ private fun PosterCard(
             }
             .onPreviewKeyEvent { event ->
                 // 确定键 / 回车完全由卡片接管（见下方 when 的前两个分支），
-                // 这样「短按 = 单击、长按 ≥ 500ms = 呼出搜索弹窗」才不会和 clickable 冲突。
+                // 这样「短按 = 进详情、长按 ≥ 500ms = 呼出换源弹窗」才不会和 clickable 冲突。
                 when (event.key) {
                     Key.DirectionCenter, Key.Enter -> {
                         if (event.type == KeyEventType.KeyDown) {
@@ -980,7 +1001,7 @@ private fun PosterCard(
                         } else {
                             val held = if (pressAt == 0L) 0L else System.currentTimeMillis() - pressAt
                             pressAt = 0L
-                            if (held >= POSTER_LONG_PRESS_MS) onLongClick() else onClick()
+                            if (held >= POSTER_LONG_PRESS_MS) onLongPress() else onClick()
                         }
                         return@onPreviewKeyEvent true
                     }

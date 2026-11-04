@@ -100,8 +100,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -222,63 +220,16 @@ class HeroSearchActivity : ComponentActivity() {
     }
 }
 
-/**
- * 搜索弹窗（首页卡片长按确定键呼出）。
- *
- * 内容与全屏搜索页**完全同一份** [HeroSearchScreen]：同一个键盘、同一套三态焦点、
- * 同一个多选侧边栏，只是把它装进一个 Dialog 窗口里盖在首页上（92% × 92%、16dp 圆角）。
- * 这样「弹窗」和「全屏页」不会各写一套慢慢漂移 —— 以后改搜索页，弹窗自动跟着变。
- *
- * 关闭走 `onDismissRequest`（返回键），调用方负责把焦点还给首页卡片。
- */
 @Composable
-internal fun HeroSearchDialog(
-    backdropUrl: String?,
-    initialKeyword: String,
-    onOpenDetail: (String) -> Unit,
-    onDismiss: () -> Unit,
-) {
-    Dialog(
-        onDismissRequest = onDismiss,
-        properties = DialogProperties(
-            dismissOnBackPress = true,
-            dismissOnClickOutside = false,
-            // 关掉平台默认宽度，才由下面的 fillMaxWidth(fraction) 决定弹窗大小。
-            usePlatformDefaultWidth = false,
-        ),
-    ) {
-        Box(
-            modifier = Modifier
-                .fillMaxWidth(SEARCH_DIALOG_WIDTH_FRACTION)
-                .fillMaxHeight(SEARCH_DIALOG_HEIGHT_FRACTION)
-                .clip(SEARCH_DIALOG_SHAPE)
-                .background(Color.Black),
-        ) {
-            MaterialTheme(colorScheme = darkColorScheme()) {
-                HeroSearchScreen(
-                    backdropUrl = backdropUrl,
-                    onOpenDetail = onOpenDetail,
-                    initialKeyword = initialKeyword,
-                )
-            }
-        }
-    }
-}
-
-@Composable
-internal fun HeroSearchScreen(
+private fun HeroSearchScreen(
     backdropUrl: String?,
     onOpenDetail: (String) -> Unit,
-    initialKeyword: String = "",
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
     // 输入内容用 TextFieldValue 维护：readOnly 只吃自己的虚拟键盘，光标由键盘 < / > 驱动。
-    // [initialKeyword]：首页卡片长按呼出时把剧名带进来，光标直接落到末尾，接着打字即可。
-    var field by remember {
-        mutableStateOf(TextFieldValue(initialKeyword, TextRange(initialKeyword.length)))
-    }
+    var field by remember { mutableStateOf(TextFieldValue("")) }
     var history by remember { mutableStateOf(HERO_HISTORY.toList()) }
     var selectedSite by remember { mutableIntStateOf(0) }
     var focusedSite by remember { mutableIntStateOf(0) }
@@ -1789,11 +1740,6 @@ private const val BACKDROP_SAMPLE_HEIGHT = 90
 // 模糊半径（单位 = 采样图上的像素）。8 × (1920/160 ≈ 12) ≈ 屏幕上 96px 的模糊，符合图2 的观感。
 private const val BACKDROP_BLUR_RADIUS = 8
 private val BACKDROP_SCRIM = Color(0x99000000)      // 60% 黑：压住背景细节，只留氛围色块
-
-// 搜索弹窗（首页长按卡片呼出）的窗口占比与圆角：留出四周边距，看得出是「盖在上面的一层」。
-private const val SEARCH_DIALOG_WIDTH_FRACTION = 0.92f
-private const val SEARCH_DIALOG_HEIGHT_FRACTION = 0.92f
-private val SEARCH_DIALOG_SHAPE = RoundedCornerShape(16.dp)
 private val BACKDROP_BOTTOM_FADE = Brush.verticalGradient(
     0.0f to Color.Transparent,
     0.55f to Color.Black.copy(alpha = 0.35f),
