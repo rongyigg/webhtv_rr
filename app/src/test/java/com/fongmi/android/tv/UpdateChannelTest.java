@@ -48,8 +48,12 @@ public class UpdateChannelTest {
                 workflow.contains("UPDATE_CHANNEL_TAG: update-channel"));
         assertTrue("Future deadline regressions must block a release",
                 workflow.contains("--tests 'com.fongmi.android.tv.UpdaterFutureTest'"));
-        assertTrue("Both update channels must remain visible in mobile and TV release builds",
-                workflow.contains("--tests 'com.fongmi.android.tv.ui.dialog.UpdateDialogChannelVisibilityTest'"));
+        // 本仓库只发布 Android TV：流水线必须只跑 leanback 变体，不能再把 mobile 变体
+        // （以及只存在于 src/testMobile 的 UpdateDialogChannelVisibilityTest 等用例）拉回构建图。
+        assertFalse("The release pipeline must not run the mobile unit-test task",
+                workflow.contains(":app:testMobileArmeabi_v7aDebugUnitTest"));
+        assertFalse("The release pipeline must not assemble the mobile variant",
+                workflow.contains(":app:assembleMobileArmeabi_v7aRelease"));
         assertTrue("TV release builds must verify that update actions stay inside the dialog window",
                 workflow.contains(":app:testLeanbackArmeabi_v7aDebugUnitTest")
                         && workflow.contains("--tests 'com.fongmi.android.tv.ui.dialog.UpdateDialogLayoutTest'"));
@@ -90,10 +94,10 @@ public class UpdateChannelTest {
         // 不再绑定具体命令行字符串，避免以后换实现时又因为匹配不到而误报。
         assertTrue("Release publication must go through the retrying release action",
                 releaseStep.contains("uses: softprops/action-gh-release"));
-        assertTrue("A retry must re-upload every APK and manifest for the resolved tag",
+        assertTrue("A retry must re-upload every TV APK and manifest for the resolved tag",
                 releaseStep.contains("tag_name: ${{ steps.meta.outputs.tag }}")
-                        && releaseStep.contains("dist/*.apk")
-                        && releaseStep.contains("dist/*.json"));
+                        && releaseStep.contains("dist/*leanback*.apk")
+                        && releaseStep.contains("dist/*leanback*.json"));
         assertTrue("A partially published release must fail loudly instead of being skipped",
                 releaseStep.contains("fail_on_unmatched_files: true"));
     }

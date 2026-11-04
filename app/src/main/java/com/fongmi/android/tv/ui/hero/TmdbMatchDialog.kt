@@ -20,6 +20,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -34,10 +35,12 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -68,7 +71,8 @@ import kotlinx.coroutines.launch
  *    2dp 纯红焦点框只包 120×180 海报、34dp 剧名栏）。`AndroidView` 里**绝不加任何尺寸 Modifier**，
  *    容器高度直接取 [HeroPosterCard.CARD_HEIGHT_DP]，否则会把 34dp 剧名栏裁掉。
  * 2. **键盘不复制第二份**：直接复用 `ui/hero/HeroKeyboard.kt` 的 [KeyboardSection]
- *    （输入框行 + 6 行 × 7 列键位），左列宽度由键盘自然撑到 328dp，不写死原版的 217dp。
+ *    （输入框行 + 6 行 × 7 列键位），再在弹窗内部用 `CompositionLocalProvider(LocalDensity)`
+ *    把整棵键盘子树等比缩到原版左列的 217dp 宽（[TMDB_KEYBOARD_SCALE]），不改共享组件的常量。
  * 3. **第一段零网络**：结果全部来自 [TMDB_MOCK_RESULTS]，放大镜按钮只按关键字过滤这份假数据。
  *    TODO(第二段)：`TmdbApi.searchMulti(keyword)` 真实请求 + Gson 解析 + API Key 输入。
  *
@@ -275,19 +279,34 @@ internal fun TmdbMatchDialog(
             Spacer(modifier = Modifier.height(TMDB_HEADER_GAP))
 
             Row(modifier = Modifier.fillMaxWidth()) {
-                // ---- 左列：复用搜索页键盘（输入框行 + 6×7 键位），宽度由键盘撑到 328dp ----
-                KeyboardSection(
-                    field = field,
-                    inputRequester = inputRequester,
-                    searchRequester = searchRequester,
-                    keyRequesters = keyRequesters,
-                    onInputDown = { focusKeyboard(FIRST_KEY_INDEX) },
-                    onSearch = { applyFilter() },
-                    onSearchDown = { focusKeyboard(FIRST_KEY_INDEX) },
-                    onSearchLeft = { focusInput() },
-                    onKeyClick = { key -> onKeyClick(key) },
-                    onKeyMove = { index, key -> onKeyMove(index, key) },
-                )
+                // ---- 左列：复用搜索页键盘（输入框行 + 6×7 键位）----
+                // 原版 dialog_tmdb_match.xml L50-99 的左列只有 217dp 宽，而复用的 [KeyboardSection]
+                // 是搜索页基准（7×40 + 6×8 = 328dp）。这里用 LocalDensity 把**整棵键盘子树**
+                // 等比缩到 217/328 ≈ 0.66（键 40dp→26.4dp、间距 8dp→5.3dp、字号 16sp→10.6sp），
+                // 与搜索页共用同一份实现，**不改 HeroKeyboard.kt 里的任何常量**。
+                // 缩放只改变 dp/sp 的换算，焦点逻辑（FocusRequester / onPreviewKeyEvent）完全不受影响。
+                val baseDensity = LocalDensity.current
+                CompositionLocalProvider(
+                    LocalDensity provides Density(
+                        density = baseDensity.density * TMDB_KEYBOARD_SCALE,
+                        fontScale = baseDensity.fontScale,
+                    ),
+                ) {
+                    Column {
+                        KeyboardSection(
+                            field = field,
+                            inputRequester = inputRequester,
+                            searchRequester = searchRequester,
+                            keyRequesters = keyRequesters,
+                            onInputDown = { focusKeyboard(FIRST_KEY_INDEX) },
+                            onSearch = { applyFilter() },
+                            onSearchDown = { focusKeyboard(FIRST_KEY_INDEX) },
+                            onSearchLeft = { focusInput() },
+                            onKeyClick = { key -> onKeyClick(key) },
+                            onKeyMove = { index, key -> onKeyMove(index, key) },
+                        )
+                    }
+                }
 
                 // ---- 右列：结果标题 + 结果卡横向列表 ----
                 Column(
@@ -452,6 +471,15 @@ private const val TMDB_MEDIA_TV = "tv"
 
 /** 弹窗宽度 = 屏幕宽 × 0.82（原版 f23 `c0(0.82f)`，与换源弹窗同一比例）。 */
 private const val TMDB_DIALOG_WIDTH_FRACTION = 0.82f
+
+/**
+ * 左列键盘的等比缩放系数。
+ *
+ * 原版 `dialog_tmdb_match.xml` L50-99 的左列宽 **217dp**；复用的 [KeyboardSection] 是搜索页基准
+ * **328dp**（7×40 + 6×8）。217 / 328 ≈ 0.66 —— 缩放后键 26.4dp、间距 5.3dp、左列 217dp，
+ * 高度约 216dp，和右侧「标题行 + 214dp 结果卡」基本齐平，弹窗恢复原版的扁长比例。
+ */
+private const val TMDB_KEYBOARD_SCALE = 0.66f
 
 /** 顶部行高 24dp（dialog_tmdb_match.xml L21 `tmdbBadge` layout_height="24dp"）。 */
 private val TMDB_HEADER_HEIGHT = 24.dp

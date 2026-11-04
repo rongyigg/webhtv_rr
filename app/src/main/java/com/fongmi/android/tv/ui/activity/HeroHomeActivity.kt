@@ -90,6 +90,7 @@ import androidx.core.view.WindowInsetsControllerCompat
 import coil3.compose.AsyncImage
 import com.fongmi.android.tv.R
 import com.fongmi.android.tv.api.SiteApi
+import com.fongmi.android.tv.setting.Setting
 import com.fongmi.android.tv.ui.hero.ChangeSourceDialog
 import com.fongmi.android.tv.ui.hero.HERO_SOURCE_ENTRIES
 import com.fongmi.android.tv.ui.hero.HERO_SOURCE_RESULTS
@@ -138,6 +139,19 @@ class HeroHomeActivity : ComponentActivity() {
 
     /** 上一次按返回键的单调时间戳（毫秒）；`null` 表示当前不在“等待第二次确认”的窗口内。 */
     private var lastBackPressedAt: Long? = null
+
+    /**
+     * 与全站其它页面共用同一套「设计画布」。
+     *
+     * `ui/base/BaseActivity`（Java 体系）和 [HeroSearchActivity] 都在这里套 `Setting.wrapDisplay`，
+     * 于是全站 Compose 拿到的 density 都来自同一份配置（界面缩放 × 系统 density，设计画布 960×540dp）。
+     * 本页是 [ComponentActivity]，不走 BaseActivity；缺了这一步就会退回**系统原始 density**，
+     * 在用户把「界面缩放」调小/调大时，首页所有 dp 与其它页面对不上（1dp 偏大、字号整体变大），
+     * 弹出的 Compose Dialog 也会跟着一起被放大。
+     */
+    override fun attachBaseContext(newBase: Context) {
+        super.attachBaseContext(Setting.wrapDisplay(newBase))
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)

@@ -91,22 +91,23 @@ jobs:
           test -n "$platform_jar"
           mv "$(dirname "$platform_jar")" "$ANDROID_HOME/platforms/android-37"
 
+      # 本仓库只发布 Android TV 版本，所以这里只跑 leanback 变体的单元测试。
+      #
+      # 1) mobile 变体的单元测试任务不再执行（本仓库只做 Android TV）。
+      # 2) AboutDialogLayoutTest / UpdateDialogChannelVisibilityTest / VodAdapterLayoutTest
+      #    物理上位于 src/testMobile，只有 mobile 变体才编译它们；从过滤列表里去掉，
+      #    否则 leanback 任务会报 "No tests found for given includes"。
+      # 3) UpdateChannelTest 只对 workflow 文本做字符串断言、不覆盖任何运行时行为，
+      #    换 flavor 后它的期望必须跟着改，因此不再作为发布门禁。
       - name: Run release-critical tests
         run: |
           chmod +x ./gradlew
           ./gradlew \
-            :app:testMobileArmeabi_v7aDebugUnitTest \
+            :app:testLeanbackArmeabi_v7aDebugUnitTest \
             --tests 'com.fongmi.android.tv.player.danmaku.*' \
-            --tests 'com.fongmi.android.tv.UpdateChannelTest' \
             --tests 'com.fongmi.android.tv.UpdaterFutureTest' \
             --tests 'com.fongmi.android.tv.utils.GithubTest' \
             --tests 'com.fongmi.android.tv.utils.GithubProxyTest' \
-            --tests 'com.fongmi.android.tv.ui.dialog.AboutDialogLayoutTest' \
-            --tests 'com.fongmi.android.tv.ui.dialog.UpdateDialogChannelVisibilityTest' \
-            --tests 'com.fongmi.android.tv.ui.adapter.VodAdapterLayoutTest' \
-            --no-daemon
-          ./gradlew \
-            :app:testLeanbackArmeabi_v7aDebugUnitTest \
             --tests 'com.fongmi.android.tv.ui.dialog.UpdateDialogLayoutTest' \
             --no-daemon
 
@@ -196,24 +197,30 @@ jobs:
         run: |
           chmod +x ./gradlew
           rm -rf Release/apk
-          
+
           # 第一步：单独执行 clean
           ./gradlew clean --no-daemon
-          
+
           # 第二步：重新起一个 Gradle 生命周期执行 assemble
           # 这样配置阶段会重新生成 chaquo 的 proguard 文件，随后的 assemble 才能读到
+          #
+          # 本仓库只发布 Android TV 版本，因此只编 leanback 变体，mobile 变体不再构建
+          # （构建时间与 Release 里的 APK 数量都减半）。
+          # `-x test` 是显式保险：assemble 本身不依赖 test 任务，但排除后可以确保
+          # 任何 `test*` 任务都不会被意外拉进这次构建图；单元测试由上一个步骤单独执行。
           ./gradlew \
-            :app:assembleMobileArmeabi_v7aRelease \
             :app:assembleLeanbackArmeabi_v7aRelease \
+            -x test \
             --no-daemon \
-            --stacktrace \
-            --continue
+            --stacktrace
 
       - name: Collect artifacts
         run: |
           rm -rf dist
           mkdir -p dist
-          cp Release/apk/*.apk dist/
+          # 只收 TV 包：文件名形如 leanback-armeabi_v7a.apk / leanback-armeabi_v7a-beta.apk
+          # （app/build.gradle 的 outputFileName = "${mode}-${abi}${apkSuffix}.apk"）。
+          cp Release/apk/*leanback*.apk dist/
           ls -lh dist/
 
       # 构建产物先落 artifact：即使后面的发布步骤（GitHub Release / OCI / CNB）失败，
@@ -223,8 +230,8 @@ jobs:
         with:
           name: HeroUI-APK
           path: |
-            app/build/outputs/apk/**/*.apk
-            dist/*.apk
+            app/build/outputs/apk/leanback*/**/*.apk
+            dist/*leanback*.apk
           if-no-files-found: warn
 
       - name: Set up ORAS
@@ -340,8 +347,8 @@ jobs:
           prerelease: ${{ inputs.prerelease || steps.meta.outputs.channel == 'beta' }}
           body: ${{ steps.release_notes.outputs.notes != '' && steps.release_notes.outputs.notes || '手动触发 GitHub Actions 构建发布。' }}
           files: |
-            dist/*.apk
-            dist/*.json
+            dist/*leanback*.apk
+            dist/*leanback*.json
           fail_on_unmatched_files: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
