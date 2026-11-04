@@ -216,6 +216,17 @@ jobs:
           cp Release/apk/*.apk dist/
           ls -lh dist/
 
+      # 构建产物先落 artifact：即使后面的发布步骤（GitHub Release / OCI / CNB）失败，
+      # APK 也能在 Actions 页面直接下载，不用重新跑一次 90 分钟的构建。
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: HeroUI-APK
+          path: |
+            app/build/outputs/apk/**/*.apk
+            dist/*.apk
+          if-no-files-found: warn
+
       - name: Set up ORAS
         id: oras
         if: ${{ inputs.publish_oci }}
@@ -315,26 +326,25 @@ jobs:
           PY
           ls -lh dist/
 
-      - name: Create GitHub Release
+      # 发布改用 softprops/action-gh-release：它内部用官方 REST API + 自动重试，
+      # 不会像手写 `gh release create/upload` 那样在 GitHub 抖动（502/504）时把整条流水线打挂。
+      # 已存在的同名 Release 会被更新、同名资产会被覆盖，所以「同 tag 重跑」也是安全的。
+      - name: Publish Release
+        uses: softprops/action-gh-release@v2
+        if: github.event_name == 'workflow_dispatch'
+        with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          name: ${{ steps.meta.outputs.title }}
+          target_commitish: ${{ github.sha }}
+          draft: false
+          prerelease: ${{ inputs.prerelease || steps.meta.outputs.channel == 'beta' }}
+          body: ${{ steps.release_notes.outputs.notes != '' && steps.release_notes.outputs.notes || '手动触发 GitHub Actions 构建发布。' }}
+          files: |
+            dist/*.apk
+            dist/*.json
+          fail_on_unmatched_files: true
         env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_NOTES: ${{ steps.release_notes.outputs.notes }}
-        run: |
-          PRERELEASE_FLAG=""
-          if [ "${{ inputs.prerelease }}" = "true" ] || [ "${{ steps.meta.outputs.channel }}" = "beta" ]; then
-            PRERELEASE_FLAG="--prerelease"
-          fi
-          NOTES="${RELEASE_NOTES:-手动触发 GitHub Actions 构建发布。}"
-          if gh release view "${{ steps.meta.outputs.tag }}" >/dev/null 2>&1; then
-            gh release upload "${{ steps.meta.outputs.tag }}" dist/*.apk dist/*.json --clobber
-          else
-            gh release create "${{ steps.meta.outputs.tag }}" \
-              --target "$GITHUB_SHA" \
-              --title "${{ steps.meta.outputs.title }}" \
-              --notes "$NOTES" \
-              $PRERELEASE_FLAG \
-              dist/*.apk dist/*.json
-          fi
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Publish update channel manifests
         env:
