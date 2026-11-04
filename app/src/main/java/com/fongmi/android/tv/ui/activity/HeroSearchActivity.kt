@@ -106,22 +106,27 @@ import kotlinx.coroutines.launch
  *
  * 版式基准 = 原版截图 + `ref_docs/activity_search.xml`：**上下弹性布局，一屏直排**。
  * ```
- * Column(fillMaxSize + padding(start/end=24dp, top=24dp))           // 唯一根节点，无整体滚动
+ * Column(fillMaxSize + padding(top=24dp))                          // 唯一根节点，无横向 padding、无整体滚动
  *   ├─ Row(fillMaxWidth + weight(1f))                                // L12-16：上半区
- *   │    ├─ KeyboardSection(width=328dp + fillMaxHeight)             // L17-65：输入行 40 + 8 + 键盘 280
- *   │    └─ RightContentColumn(weight(1f) + verticalScroll)          // L66-143：历史 + 热搜 / 建议
- *   └─ if (hasInput) ResultSection(fillMaxWidth + wrapContentHeight) // L145-207：下半区
- *        ├─ LazyRow(36dp, contentPadding start=0 / end=24)            // 站点 Tab
- *        └─ LazyRow(contentPadding start=0 / end=24, 间距 12dp)       // 海报行（HeroPosterCard 214dp）
+ *   │    ├─ KeyboardSection(padding(start=24dp) + width=328dp)       // L17-65：输入行 40 + 8 + 键盘 280
+ *   │    └─ RightContentColumn(weight(1f) + padding(end=24dp))       // L66-143：历史 + 热搜 / 建议
+ *   └─ if (hasInput) ResultSection(fillMaxWidth + wrapContentHeight + padding(top=12dp))
+ *        ├─ LazyRow(height=36dp, contentPadding(24, 24),间距 8dp)      // L152-161：站点 Tab
+ *        └─ Box(fillMaxWidth + height=215dp)                         // L162-167：海报容器
+ *             └─ LazyRow(fillMaxSize, contentPadding(24, 24),间距 12dp)
+ *                  └─ AndroidView(HeroPosterCard 120×214dp，绝不加尺寸 Modifier)
  * ```
  *
- * 三条硬约束（历史 bug 的根因所在）：
- * 1. 根节点只有 [Column]；上半区 `weight(1f)`、下半区 `wrapContentHeight()`，两者顺序排列，
- *    **物理上不可能互相覆盖**，也不可能出现「海报把键盘压掉一截」。
- * 2. 键盘宽度写死 328dp、本体高度恒为 328dp（[TOP_SECTION_HEIGHT]），且**不在任何滚动容器里**；
- *    右列 `verticalScroll` 只是兜底，720dp 屏上内容约 200dp，实际静止不动。
- * 3. 键盘用 `Column + Row` 手摆，绝不用 LazyGrid：键 `size(40.dp)`、间距 **8dp**（逆向
- *    `SpaceItemDecoration(7, 8)`），7 列 = 7×40 + 6×8 = 328dp，任何分辨率下都不会被拉伸。
+ * 三条硬约束：
+ * 1. **根节点没有横向 padding**。24dp 左边距由键盘自己 `padding(start=24dp)` 让出，
+ *    右列自己 `padding(end=24dp)`，两条 `LazyRow` 用 `contentPadding(24, 24)`。
+ *    Compose 的 LazyRow 按自身外框裁剪，只有它的滚动区够宽，第一项「全部」在焦点放大
+ *    1.08 时才不会被切边 —— 这正是原版 `clipChildren=false + clipToPadding=false` 的等价写法。
+ * 2. 键盘**不写死高度**：`Column` + 6 行 `Row` 自然测量（328dp），不 `fillMaxHeight`、
+ *    不 `verticalScroll`、不 `heightIn`；上半区 `weight(1f)`、下半区 `wrapContentHeight()`，
+ *    两者顺序排列，**物理上不可能互相覆盖**，1080P 屏上键盘绝不会被结果区遮挡。
+ * 3. 海报区高度由**外层 `Box(height=215dp)`** 决定（原版 FrameLayout 就是这么写的），
+ *    卡片自身 `onMeasure` 是 120×214dp，215 = 214 + 1dp 余量；`AndroidView` 里不加任何尺寸 Modifier。
  *
  * 键盘第一行与 `ref_docs/xd1.java` L27 一致：`(占位, <, >, ⌫, 键盘, 房子, A)`，之后 B-Z、0-9，
  * 共 42 格 = 6 行 × 7 列，最右列正是 A / H / O / V / 2 / 9（与 `topbar_search_page.png` 一致）。
@@ -408,7 +413,10 @@ private fun HeroSearchScreen(
                     1.0f to Color.Black,
                 ),
             )
-            .padding(start = ROOT_PADDING_H, end = ROOT_PADDING_H, top = ROOT_PADDING_TOP),
+            // 【标准 1】外层不放 start/end padding：横向的 24dp 缓冲区交给各子节点自己处理
+            // （键盘自己补 start，两条 LazyRow 用 contentPadding 补两端），
+            // 这样 LazyRow 的滚动区就是整屏宽度，第一项（「全部」）左右都有 24dp 可裁缓冲。
+            .padding(top = ROOT_PADDING_TOP),
     ) {
         // 上半区：weight(1f) 吃掉下半区固定高度之外的全部空间（720dp 屏约 420dp）。
         Row(
@@ -416,11 +424,9 @@ private fun HeroSearchScreen(
                 .fillMaxWidth()
                 .weight(1f),
         ) {
-            // 左列：328dp 宽 + fillMaxHeight；键盘内容 328dp 高，贴顶排布，不滚动。
+            // 左列：【标准 2】不写死高度、不 fillMaxHeight、不 verticalScroll，
+            // 宽度 328dp 由内容撑（7×40 + 6×8），左边 24dp 由 KeyboardSection 自己补。
             KeyboardSection(
-                modifier = Modifier
-                    .width(LEFT_COLUMN_WIDTH)
-                    .fillMaxHeight(),
                 field = field,
                 inputRequester = inputRequester,
                 searchRequester = searchRequester,
@@ -435,11 +441,14 @@ private fun HeroSearchScreen(
 
             Spacer(modifier = Modifier.width(LEFT_COLUMN_MARGIN_END))
 
-            // 右列：历史 / 热搜（无输入）或 建议（有输入），只在这里做垂直滚动兜底。
+            // 右列：历史 / 热搜（无输入）或 建议（有输入）。
+            // 右端 24dp 对应 activity_search.xml L11 paddingEnd="24dp"：外层已放开 padding，
+            // 这里自己补回来，否则最后一枚胶囊会贴死在屏幕右边缘。
             RightContentColumn(
                 modifier = Modifier
                     .weight(1f)
-                    .fillMaxHeight(),
+                    .fillMaxHeight()
+                    .padding(end = ROOT_PADDING_H),
                 scroll = rightScroll,
                 history = history,
                 words = words,
@@ -456,8 +465,8 @@ private fun HeroSearchScreen(
             )
         }
 
-        // 下半区：wrapContentHeight，高度只由内容（36 Tab + 12 + 海报 214）决定，
-        // 不吃 weight，所以永远挤压不到上半区键盘。
+        // 下半区：【标准 3】独立 Column，只按内容量高（36dp Tab 行 + 12dp + 215dp 海报 Box），
+        // 不吃 weight、不 fillMaxSize，所以永远挤压不到上半区键盘。
         if (hasInput) {
             ResultSection(
                 modifier = Modifier
@@ -512,12 +521,16 @@ private fun HeroSearchScreen(
  *   宽度是 7×40dp + 6×8dp = 328dp 算出来的；
  * - 与输入框行的间距：**8dp**（`activity_search.xml` L61 `android:layout_marginTop="8dp"`）。
  *
- * 高度：键盘本体恒为 **328dp**（输入行 40 + 8 + 6×40 + 5×8），在整个上半区里贴顶排布；
- * 外层 `Row` 只给它 `fillMaxHeight` 的容器高度，绝不会反过来压缩它。
+ * 高度：【标准 2】**不写死、不 fillMaxHeight、不 verticalScroll**，完全按内容自然测量：
+ * 输入行 40 + 8 + 6×40 + 5×8 = **328dp**。1080P 屏上半区高度远大于 328dp，不会有任何遮挡。
+ *
+ * 横向：【标准 1】外层根节点不再加 start/end padding，24dp 左边距由这里自己让出。
+ * 顺序必须是 `padding(start = 24dp).width(328dp)`（padding 在外、width 在内）：
+ * 这样**内容**恒为 7×40 + 6×8 = 328dp，整列占 24 + 328 = 352dp；
+ * 若反过来写 `width(328dp).padding(start = 24dp)`，内容只剩 304dp，最右列（2/9）会被挤掉。
  */
 @Composable
 private fun KeyboardSection(
-    modifier: Modifier = Modifier,
     field: TextFieldValue,
     inputRequester: FocusRequester,
     searchRequester: FocusRequester,
@@ -530,11 +543,9 @@ private fun KeyboardSection(
     onKeyMove: (Int, Key) -> Boolean,
 ) {
     Column(
-        modifier = modifier
-            .width(LEFT_COLUMN_WIDTH)
-            // 兜底最小高度 = 328dp：即使某个子节点测出更小，键盘块也保持整块高度。
-            // 只给下限、不给固定值，字体放大时内容可以自然变高，6 行永远不会被裁。
-            .heightIn(min = TOP_SECTION_HEIGHT),
+        modifier = Modifier
+            .padding(start = ROOT_PADDING_H)
+            .width(LEFT_COLUMN_WIDTH),
         verticalArrangement = Arrangement.spacedBy(KEY_SPACING),
     ) {
         // 输入框行：mic 36dp + 12dp + 只读输入框(weight 1f) + 12dp + 搜索 40dp（整行 40dp）
@@ -992,20 +1003,26 @@ private fun HeroWordChip(
 // ---------------------------------------------------------------------------
 
 /**
- * 下半区结果区：`fillMaxWidth + wrapContentHeight`，高度只由内容决定
- * （36dp 站点 Tab + 12dp 间隔 + 海报卡自带的 214dp），**既不写死高度、也不 fillMaxSize**，
- * 所以任何密度下海报都不会被裁掉一截，也永远不会反向挤压上半区键盘。
+ * 下半区结果区（对应 `activity_search.xml` L145-207 的 `resultSection`）：
+ * 独立 `Column(fillMaxWidth + wrapContentHeight + padding(top = 12dp))`，高度只由内容决定，
+ * 不吃 weight、不 fillMaxSize，**永远挤压不到上半区键盘**。
+ * ```
+ * Column(wrapContentHeight)                       // L145-151：match_parent 宽 + wrap 高 + marginTop 12
+ *   ├─ LazyRow(height = 36dp)                     // L152-161：siteRecycler，36dp 行高
+ *   ├─ Spacer(12dp)                               // L154 paddingBottom 2 + L159 marginBottom 10
+ *   └─ Box(fillMaxWidth + height = 215dp)         // L162-167：FrameLayout height="215dp"
+ *        └─ LazyRow(fillMaxSize)                  // L168-175：recycler match_parent
+ * ```
  *
- * 站点 Tab 与海报行是同一列里的两个顺序子节点（中间 12dp），**物理上不可能重叠**。
+ * 【标准 1】两条 `LazyRow` 的 `contentPadding` 都是 `start = 24dp, end = 24dp`。
+ * Compose 的 `LazyRow` 会按**自身外框**裁剪超出边界的子项，而外层根节点现在没有横向 padding，
+ * LazyRow 的滚动区等于整屏宽度；首项左侧 24dp 的 contentPadding 就是那块裁剪缓冲区，
+ * 「全部」在焦点放大 1.08 时也不会被切边。等价于原版 `clipChildren=false +
+ * clipToPadding=false + 根 paddingStart=24dp` 的组合效果（L6-7 / L10-11 / L155-156 / L170-171）。
  *
- * 两条 LazyRow 的 `contentPadding` 都是 `start = 0.dp, end = 24.dp`：
- * 首项与上方「历史 / 建议」左边缘严格对齐（根容器已有 24dp paddingStart），
- * 末项留 24dp，滑到最右时焦点放大不会被硬切。
- *
- * 关于 `clipToPadding(false)`：这是 View 的 `ViewGroup` 参数；Compose 的 `LazyRow` 只按
- * 自身外框裁剪、**不按 contentPadding 裁剪**，所以 end 侧 24dp 天然等价于
- * View 侧 `padding + clipToPadding=false`（原版 `activity_search.xml` L154-156/L170-171
- * 正是 `paddingBottom=2dp` + `clipChildren=false` + `clipToPadding=false`）。
+ * 海报区**【标准 3】高度 215dp 由外层 `Box` 写死**（原版 FrameLayout 就是这么写的），
+ * 卡片自身 `onMeasure` 是 120×214dp，215 = 214 + 1dp 余量，绝不会被切；
+ * `AndroidView` 里**绝不加任何尺寸 Modifier**。
  */
 @Composable
 private fun ResultSection(
@@ -1028,15 +1045,15 @@ private fun ResultSection(
     onPosterRight: (Int) -> Unit,
 ) {
     Column(modifier = modifier) {
-        // 站点 Tab：行高 36dp，胶囊本体 26dp（adapter_type.xml L10）垂直居中。
+        // 站点 Tab：行高 36dp（原版 siteRecycler wrap_content = 36dp），胶囊本体 26dp 垂直居中。
         LazyRow(
             state = siteState,
             modifier = Modifier
                 .fillMaxWidth()
                 .height(SITE_ROW_HEIGHT),
             contentPadding = PaddingValues(
-                start = 0.dp,
-                end = RESULT_CONTENT_END,
+                start = RESULT_CONTENT_PADDING,
+                end = RESULT_CONTENT_PADDING,
             ),
             horizontalArrangement = Arrangement.spacedBy(SITE_ITEM_SPACING),
             verticalAlignment = Alignment.CenterVertically,
@@ -1056,61 +1073,69 @@ private fun ResultSection(
             }
         }
 
+        // 12dp = 原版 siteRecycler paddingBottom 2dp + marginBottom 10dp（L154 / L159）。
         Spacer(modifier = Modifier.height(SITE_POSTER_GAP))
 
-        // 海报行：**不写死高度**，高度由 HeroPosterCard 自己的 onMeasure（120×214dp）决定，
-        // 因此任何密度/字体缩放下都不会被切掉一截；横向滚动由 LazyRow 负责。
-        LazyRow(
-            state = posterState,
-            modifier = Modifier.fillMaxWidth(),
-            contentPadding = PaddingValues(
-                start = 0.dp,
-                end = RESULT_CONTENT_END,
-            ),
-            horizontalArrangement = Arrangement.spacedBy(POSTER_ITEM_SPACING),
+        // 【标准 3】海报容器：高度 215dp（`activity_search.xml` L162-167 的 FrameLayout
+        // height="215dp"），内部 LazyRow 填满它。卡片自身 onMeasure 是 120×214dp，
+        // 215 = 214 + 1dp 余量，横向滚动交给 LazyRow。
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(POSTER_BOX_HEIGHT),
         ) {
-            itemsIndexed(items = HERO_RESULTS) { index, item ->
-                // 【红线】HeroPosterCard 自己 onMeasure 死锁 120×214dp，
-                // 这里绝不加 Modifier.width()/size()，直接放进去。
-                AndroidView(
-                    factory = { context ->
-                        HeroPosterCard(context).also { card -> posterRegistry.bind(index, card) }
-                    },
-                    update = { card ->
-                        // 只在值变化时写，避免每次重组都触发 HeroPosterCard 内部的图片重载。
-                        if (card.title != item.title) card.title = item.title
-                        if (card.topStartTag != item.topTag) card.topStartTag = item.topTag
-                        if (card.bottomStartTag != item.bottomTag) card.bottomStartTag = item.bottomTag
-                        if (card.imageUrl != item.imageUrl) card.imageUrl = item.imageUrl
+            LazyRow(
+                state = posterState,
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(
+                    start = RESULT_CONTENT_PADDING,
+                    end = RESULT_CONTENT_PADDING,
+                ),
+                horizontalArrangement = Arrangement.spacedBy(POSTER_ITEM_SPACING),
+            ) {
+                itemsIndexed(items = HERO_RESULTS) { index, item ->
+                    // 【红线】HeroPosterCard 自己 onMeasure 死锁 120×214dp，
+                    // 这里绝不加 Modifier.size()/width()/height()，直接放进去。
+                    AndroidView(
+                        factory = { context ->
+                            HeroPosterCard(context).also { card -> posterRegistry.bind(index, card) }
+                        },
+                        update = { card ->
+                            // 只在值变化时写，避免每次重组都触发 HeroPosterCard 内部的图片重载。
+                            if (card.title != item.title) card.title = item.title
+                            if (card.topStartTag != item.topTag) card.topStartTag = item.topTag
+                            if (card.bottomStartTag != item.bottomTag) card.bottomStartTag = item.bottomTag
+                            if (card.imageUrl != item.imageUrl) card.imageUrl = item.imageUrl
 
-                        card.setOnFocusChangeListener { _, hasFocus ->
-                            if (hasFocus) onPosterFocused()
-                        }
-                        card.setOnClickListener { onPosterOpen(item.title) }
-                        card.setOnKeyListener { _, keyCode, event ->
-                            if (event.action != KeyEvent.ACTION_DOWN) return@setOnKeyListener false
-                            when (keyCode) {
-                                KeyEvent.KEYCODE_DPAD_LEFT -> {
-                                    onPosterLeft(index)
-                                    true
-                                }
-
-                                KeyEvent.KEYCODE_DPAD_RIGHT -> {
-                                    onPosterRight(index)
-                                    true
-                                }
-
-                                KeyEvent.KEYCODE_DPAD_UP -> {
-                                    onPosterUp(index)
-                                    true
-                                }
-
-                                else -> false
+                            card.setOnFocusChangeListener { _, hasFocus ->
+                                if (hasFocus) onPosterFocused()
                             }
-                        }
-                    },
-                    onRelease = { card -> posterRegistry.unbind(index, card) },
-                )
+                            card.setOnClickListener { onPosterOpen(item.title) }
+                            card.setOnKeyListener { _, keyCode, event ->
+                                if (event.action != KeyEvent.ACTION_DOWN) return@setOnKeyListener false
+                                when (keyCode) {
+                                    KeyEvent.KEYCODE_DPAD_LEFT -> {
+                                        onPosterLeft(index)
+                                        true
+                                    }
+
+                                    KeyEvent.KEYCODE_DPAD_RIGHT -> {
+                                        onPosterRight(index)
+                                        true
+                                    }
+
+                                    KeyEvent.KEYCODE_DPAD_UP -> {
+                                        onPosterUp(index)
+                                        true
+                                    }
+
+                                    else -> false
+                                }
+                            }
+                        },
+                        onRelease = { card -> posterRegistry.unbind(index, card) },
+                    )
+                }
             }
         }
     }
@@ -1502,7 +1527,9 @@ private fun suggestionsFor(keyword: String): List<String> {
 // 尺寸常量（每一条都能在 ref_docs 里找到出处，见对应注释）
 // ---------------------------------------------------------------------------
 
-// 根容器：activity_search.xml L4/L10/L11 → paddingTop 24dp、paddingStart/End 24dp。
+// 根容器：activity_search.xml L4 → paddingTop 24dp；横向 24dp 不再放在根上（标准 1），
+// 而是拆给各子节点：键盘自己 padding(start=24)、右列自己 padding(end=24)、
+// 两条 LazyRow 用 contentPadding(24, 24) —— 只有 LazyRow 自己的滚动区够宽，焦点放大才不被裁。
 private val ROOT_PADDING_H = 24.dp
 private val ROOT_PADDING_TOP = 24.dp
 
@@ -1530,9 +1557,8 @@ private val INPUT_STROKE = 2.dp
 private val INPUT_SHAPE = RoundedCornerShape(13.dp)
 private val INPUT_PADDING_H = 12.dp
 
-// 左列键盘块总高 = 输入行 40 + 8(activity_search.xml L61 的 marginTop) + 6×40 + 5×8 = 328dp。
-// 与宽度 328dp 相等 → 整块是 328×328 的方阵，720dp 屏上只占 46%。
-private val TOP_SECTION_HEIGHT = INPUT_HEIGHT + KEY_SPACING + KEY_SIZE * 6 + KEY_SPACING * 5
+// 左列键盘块自然高度 = 输入行 40 + 8(activity_search.xml L61 marginTop) + 6×40 + 5×8 = 328dp。
+// 与宽度 328dp 相等 → 整块是 328×328 的方阵；不写死、不 heightIn、不 fillMaxHeight（标准 2）。
 
 // 键盘键：40dp / 16sp / 4dp 圆角（adapter_keyboard_text.xml）。
 private val KEY_SHAPE = RoundedCornerShape(4.dp)
@@ -1563,22 +1589,26 @@ private val CHIP_BG_NORMAL = Color(0x33000000)      // black_20（半透明，�
 private val CHIP_BG_FOCUSED = Color(0x66000000)     // black_40 + 红描边
 private val CHIP_BG_SELECTED = Color(0x66000000)    // activated
 
-// 站点 Tab：13sp / 26dp（adapter_type.xml）+ 行高 36dp + 12dp 间距。
+// 站点 Tab：13sp / 26dp（adapter_type.xml）+ 行高 36dp（activity_search.xml L152-161）+ 间距 8dp。
 private const val SITE_TAB_SP = 13f
 private val SITE_TAB_HEIGHT = 26.dp
 private val SITE_TAB_SHAPE = RoundedCornerShape(13.dp)
 private const val SITE_SELECTED_SCALE = 1.08f
 private const val SITE_SCALE_DURATION_MS = 140
 private val SITE_ROW_HEIGHT = 36.dp
-private val SITE_ITEM_SPACING = 12.dp
+private val SITE_ITEM_SPACING = 8.dp
+// Tab 行与海报 Box 之间的 12dp = siteRecycler paddingBottom 2dp + marginBottom 10dp（L154 / L159）。
 private val SITE_POSTER_GAP = 12.dp
-// 结果两行只留 end 24dp，start = 0dp：让「全部」/ 首张海报与上方「历史 / 建议」左边缘严格对齐
-// （原版 resultSection 本身就是根容器 paddingStart=24dp 的直接子节点，自身不再额外缩进）。
-private val RESULT_CONTENT_END = 24.dp
+// 两条 LazyRow 的内容内边距：start/end 都留 24dp（标准 1）。
+// 外层根节点已不再有横向 padding，LazyRow 的滚动区就是整屏宽度，
+// 首项左侧的 24dp 就是焦点放大 1.08 时的裁剪缓冲区，「全部」不会被切边。
+private val RESULT_CONTENT_PADDING = 24.dp
 private val RESULT_SECTION_TOP_GAP = 12.dp         // activity_search.xml L151
 private val RIGHT_SECTION_GAP = 16.dp              // 「历史」与「建议 / 热搜」之间的紧凑间隔
 
-// 海报行：横向 LazyRow，高度由 HeroPosterCard 的 120×214dp onMeasure 决定（不写死），卡间距 12dp。
+// 海报：外层 Box 高 215dp（activity_search.xml L162-167 FrameLayout height="215dp"），
+// 卡片自身 onMeasure = 120×214dp，卡间距 12dp。
+private val POSTER_BOX_HEIGHT = 215.dp
 private val POSTER_ITEM_SPACING = 12.dp
 private const val POSTER_SCROLL_ANCHOR = 4
 
