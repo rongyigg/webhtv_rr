@@ -11,6 +11,7 @@ import androidx.activity.compose.setContent
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -21,7 +22,9 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
@@ -97,43 +100,37 @@ import com.fongmi.android.tv.ui.hero.HeroImageLoader
 import com.fongmi.android.tv.ui.hero.HeroPosterCard
 import com.fongmi.android.tv.ui.hero.SourceSidebar
 import com.fongmi.android.tv.ui.hero.SourceSidebarMode
-import com.fongmi.android.tv.utils.Notify
 import kotlinx.coroutines.launch
 
 /**
  * HeroUI（Compose）搜索页。
  *
- * 版式严格按 `ref_docs/activity_search.xml` 的**上下结构**（L2-11 根 LinearLayout vertical）：
+ * 版式基准 = `ref_docs/activity_search.xml`（根 vertical LinearLayout）：
  * ```
- * Column(paddingTop=24dp, paddingStart/End=24dp, paddingBottom=0)
- *   ├─ Row(weight=1f)                        // L12-16：上半区，左右两列
- *   │    ├─ Column(wrap_content)             // L17-65：输入框 + 键盘
- *   │    │    ├─ Row: mic 36dp + 输入框(+ 搜索按钮，见 topbar_search_page.png)
- *   │    │    └─ 键盘：7 列 × 6 行，40dp 键 + 8dp 间距
- *   │    └─ Column(weight=1f, 可滚动)        // L66-143：历史 + 热搜（有输入时替换为建议）
- *   └─ Column(paddingTop=12dp)               // L145-207：下半区结果区，仅输入框有文字时出现
- *        ├─ 站点 Tab：LazyRow（26dp 高胶囊）
- *        └─ 海报行：215dp 的 LazyRow（AndroidView 包 HeroPosterCard）
+ * Column(fillMaxSize + padding(start/end=24dp, top=24dp))       // L2-11
+ *   ├─ Row(fillMaxWidth + weight(1f))                            // L12-16：上半区
+ *   │    ├─ KeyboardSection(width=316dp)                         // L17-65：输入框行 + 键盘
+ *   │    └─ RightContentSection(weight=1f, verticalScroll)       // L66-143：历史 + 热搜/建议
+ *   └─ if (hasInput) ResultSection(fillMaxWidth + wrapContentHeight + padding(top=12dp))  // L145-207
+ *        ├─ LazyRow(height=36dp,  contentPadding=24dp)           // 站点 Tab
+ *        └─ Box(height=215dp) → LazyRow(fillMaxSize)              // 海报行
  * ```
  *
- * 键盘第一行与反编译的 `ref_docs/xd1.java` L27 完全一致：
- * `(占位, <, >, ⌫, 键盘, 房子, A)` → 之后 B-Z、0-9，合计 42 项 = 6 行 × 7 列，
- * 因此最右列正是 A / H / O / V / 2 / 9（与设计稿 `topbar_search_page.png` 一致）。
+ * 三条硬约束（历史 bug 的根因所在）：
+ * 1. 根节点只有 [Column]，没有任何根级 [Box] 叠加；上半区恒为 `weight(1f)`，下半区恒为
+ *    `wrapContentHeight()`，两者在 Column 里顺序排列，**物理上不可能互相覆盖**。
+ * 2. 上半区 `Row` 额外 `clipToBounds()`；左列**不做 verticalScroll**（TV 端滚动会丢遥控器焦点，
+ *    实测 720dp 高度下 316dp 键盘完整可见）。高度真不够时由父级裁掉，绝不下压或覆盖下面的海报行。
+ * 3. 键盘用 `Column + Row` 手摆，绝不用 LazyGrid：每个键 `size(40.dp)` 写死，间距 6dp，
+ *    7 列 = 7×40 + 6×6 = 316dp，任何分辨率下都不会被拉伸。
  *
- * 所有尺寸、颜色、圆角都取自 `ref_docs` 与仓库内的原始 drawable，没有目测调参：
- * - 键盘键：40dp、16sp 白字、4dp 圆角（`adapter_keyboard_text.xml` L3/L10）；
- *   常态 `0x33FFFFFF`，焦点 **`0xFFFF0000` 红底** + 1.5dp 白描边（需求指定的焦点红底）。
- * - 胶囊（历史 / 热搜 / 建议 / 站点 Tab）：16sp / 13sp、`selector_item_round.xml` →
- *   `shape_item_round_normal`（#33000000 半透明，不是实心黑底）/ `focused`（#66000000 + 红描边）
- *   / `activated`（#66000000）；圆角 28dp、内边距 14dp×8dp、外边距 6dp（`adapter_search_word.xml` L7-12）。
- * - 站点 Tab：26dp 高、13sp（`adapter_type.xml` L3/L10），行高 36dp，选中放大 1.08 倍 / 140ms（`dz2.java` L45-47）。
- * - 区块标题：红色竖条 4dp × 16dp（`shape_red_bar.xml`：#e50914、2dp 圆角）+ 20sp 粗体白字。
+ * 键盘第一行与 `ref_docs/xd1.java` L27 一致：`(占位, <, >, ⌫, 键盘, 房子, A)`，之后 B-Z、0-9，
+ * 共 42 格 = 6 行 × 7 列，最右列正是 A / H / O / V / 2 / 9（与 `topbar_search_page.png` 一致）。
  *
- * 焦点契约（全部显式 [FocusRequester]，不依赖 2D 自动搜索）：
- * 输入框 ↓ → 键盘第 1 行；键盘内部四向移动；
- * **键盘最右列（A/H/O/V/2/9）→ 右侧第一排第一个胶囊（历史优先，其次热搜/建议）**；
- * **该胶囊 ← → 退回键盘上次停留的键**；胶囊 ↓ → 站点 Tab；Tab ↓ → 首张海报；
- * 海报 ↔ 行内左右移动、↑ → 站点 Tab；卡片确定键 → [HeroDetailActivity.start]。
+ * 焦点契约（全部显式 [FocusRequester]）：
+ * 输入框 ↓ → 键盘第一行；键盘内四向移动；**最右列 → 右侧第一排第一个胶囊**；
+ * **该胶囊 ← → 回到键盘上次停留的键**；胶囊 ↓ → 站点 Tab；Tab ↓ → 首张海报；
+ * 海报 ←→ 行内移动、↑ → 站点 Tab；确定键 → [HeroDetailActivity.start]。
  */
 class HeroSearchActivity : ComponentActivity() {
 
@@ -149,7 +146,7 @@ class HeroSearchActivity : ComponentActivity() {
         setContent {
             MaterialTheme(colorScheme = darkColorScheme()) {
                 HeroSearchScreen(
-                    // 卡片点击只走这一个真实入口，不碰播放器与 catvod 数据层。
+                    // 卡片点击只走这一个真实入口：不碰播放器，也不碰 catvod 数据层。
                     onOpenDetail = { title -> HeroDetailActivity.start(this, title) },
                 )
             }
@@ -172,42 +169,41 @@ private fun HeroSearchScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
-    // 输入内容用 TextFieldValue 维护：readOnly 只吃我们自己的虚拟键盘，光标由键盘 < / > 驱动。
+    // 输入内容用 TextFieldValue 维护：readOnly 只吃自己的虚拟键盘，光标由键盘 < / > 驱动。
     var field by remember { mutableStateOf(TextFieldValue("")) }
     var history by remember { mutableStateOf(HERO_HISTORY.toList()) }
     var selectedSite by remember { mutableIntStateOf(0) }
     var focusedSite by remember { mutableIntStateOf(0) }
-    // 键盘上次停留的键：右侧胶囊按 ← 时回到这里，而不是永远回第一个键。
-    var lastKeyIndex by remember { mutableIntStateOf(FIRST_ACTION_KEY_INDEX) }
-    // 结果区当前是否持有焦点：文字被清空导致结果区消失时，用它把焦点安全送回输入框。
+    // 键盘上次停留的键：右侧胶囊按 ← 回到这里，而不是永远回第一个键。
+    var lastKeyIndex by remember { mutableIntStateOf(FIRST_KEY_INDEX) }
+    // 结果区是否持有焦点：输入被清空导致结果区整体消失时，用它把焦点安全送回输入框。
     var resultsFocused by remember { mutableStateOf(false) }
 
     val keyword = field.text
-    val hasKeyword = keyword.trim().isNotEmpty()
-    // 有文字 → 「历史 + 建议」；无文字 → 「历史 + 热搜」（需求三态）。
-    val wordList = remember(keyword) {
-        if (hasKeyword) suggestionsFor(keyword) else HERO_HOT
+    val hasInput = keyword.trim().isNotEmpty()
+    // 三态：无输入 → 「历史 + 热搜」；有输入 → 「历史 + 建议」。
+    val wordTitle = if (hasInput) TITLE_SUGGEST else TITLE_HOT
+    val words = remember(keyword) {
+        if (hasInput) suggestionsFor(keyword) else HERO_HOT
     }
 
     val inputRequester = remember { FocusRequester() }
     val searchRequester = remember { FocusRequester() }
     val keyRequesters = remember { List(HERO_KEYS.size) { FocusRequester() } }
     val historyRequesters = remember(history) { List(history.size) { FocusRequester() } }
-    val wordRequesters = remember(wordList) { List(wordList.size) { FocusRequester() } }
+    val wordRequesters = remember(words) { List(words.size) { FocusRequester() } }
     val siteRequesters = remember { List(HERO_SITE_TABS.size) { FocusRequester() } }
-    // 键盘最右列 → 「右侧第一排第一个胶囊」的固定落点（核心四）。
+    // 「右侧第一排第一个胶囊」的固定落点：键盘最右列 → 这里；站点 Tab ↑ → 也回这里。
     val rightFirstRequester = remember { FocusRequester() }
-    // 海报卡是 Android View（HeroPosterCard），焦点必须直接交给 View，
-    // 这样卡片自带的 2dp 红色描边才会亮起（见 HeroPosterCard#drawFocusRing）。
-    val posterViews = remember { HeroPosterViewRegistry() }
+    // 海报卡是 Android View（HeroPosterCard），Compose 的 FocusRequester 摸不到它，
+    // 用一张「下标 → View」的登记表跨区交接焦点，卡片自带的 2dp 红描边才会亮。
+    val posterRegistry = remember { HeroPosterViewRegistry() }
 
-    val leftScroll = rememberScrollState()
     val rightScroll = rememberScrollState()
     val siteState = rememberLazyListState()
     val posterState = rememberLazyListState()
 
-    // 焦点回到输入框/键盘 = 离开结果区，清掉「结果区持有焦点」标记，
-    // 这样之后清空输入时不会把焦点从键盘抢回输入框。
+    // 焦点回到输入框/键盘 = 离开结果区，清掉标记，避免之后清空输入时把焦点从键盘抢走。
     fun focusInput() {
         resultsFocused = false
         requestFocus(inputRequester)
@@ -215,18 +211,18 @@ private fun HeroSearchScreen(
 
     fun focusKeyboard(index: Int) {
         resultsFocused = false
-        val target = index.coerceIn(FIRST_ACTION_KEY_INDEX, HERO_KEYS.lastIndex)
+        val target = index.coerceIn(FIRST_KEY_INDEX, HERO_KEYS.lastIndex)
         lastKeyIndex = target
-        if (!requestFocus(keyRequesters, target)) requestFocus(keyRequesters, FIRST_ACTION_KEY_INDEX)
+        if (!requestFocus(keyRequesters, target)) requestFocus(keyRequesters, FIRST_KEY_INDEX)
     }
 
-    /** 键盘最右列 →「右侧第一排第一个元素」：绑定在历史（或热搜/建议）第一个胶囊上。 */
+    /** 键盘最右列 → 右侧第一排第一个胶囊（历史优先，其次热搜/建议）。 */
     fun focusRightFirstChip() {
         runCatching { rightFirstRequester.requestFocus() }
     }
 
     fun focusSite(index: Int) {
-        if (!hasKeyword) {
+        if (!hasInput) {
             focusInput()
             return
         }
@@ -240,15 +236,14 @@ private fun HeroSearchScreen(
     }
 
     fun focusPoster(index: Int) {
-        if (!hasKeyword) return
+        if (!hasInput) return
         val target = index.coerceIn(0, HERO_RESULTS.lastIndex)
         scope.launch {
-            // index 0..3 停靠在行首，index 4 起把目标卡滚到最左侧（与首页同一套靠左吸附规则）。
             posterState.animateScrollToItem(if (target >= POSTER_SCROLL_ANCHOR) target else 0)
             withFrameNanos { }
-            if (!posterViews.requestFocus(target)) {
+            if (!posterRegistry.requestFocus(target)) {
                 withFrameNanos { }
-                posterViews.requestFocus(target)
+                posterRegistry.requestFocus(target)
             }
         }
     }
@@ -264,7 +259,7 @@ private fun HeroSearchScreen(
         history = (listOf(value) + history.filterNot { it == value }).take(HISTORY_LIMIT)
     }
 
-    /** 与 `CustomKeyboard.onTextClick` L31-36 一致：不超过 19 个字符，插入到光标位置。 */
+    /** 与 `CustomKeyboard.onTextClick` L31-36 一致：总长不超过 19，插入到光标处。 */
     fun insert(text: String) {
         val value = field
         if (value.text.length >= KEYWORD_MAX_LENGTH) return
@@ -292,7 +287,7 @@ private fun HeroSearchScreen(
         field = field.copy(selection = TextRange(caret))
     }
 
-    /** 顶部放大镜：记一条历史并把焦点交给结果区（结果区随输入实时出现，不需要额外的搜索态）。 */
+    /** 顶部放大镜：记一条历史，焦点交给结果区（结果区随输入实时出现，没有额外搜索态）。 */
     fun confirmSearch() {
         val text = keyword.trim()
         if (text.isEmpty()) {
@@ -300,26 +295,25 @@ private fun HeroSearchScreen(
             return
         }
         recordHistory(text)
-        if (hasKeyword) focusSite(0) else focusInput()
+        focusSite(0)
     }
 
     /**
-     * 键盘「房子」键 → 全局接口源侧边栏（复用 [SourceSidebar]，绝不自造 Dialog）。
+     * 小房子键 → 全局接口源侧边栏（复用 [SourceSidebar]，绝不自造 Dialog）。
      *
-     * `onClosed` 里延时一帧再把焦点交还「房子」键：Dialog 关闭后当前窗口尚未拿到焦点，
-     * 立刻 requestFocus 会被丢掉（首页同一处也是这个处理）。
+     * 按需求用 [SourceSidebarMode.Multi]：带勾选圈与「全选 / 全不选」，
+     * 确定键 = 切换勾选（不关闭），返回键关闭后由 `onClosed` 把焦点交还房子键。
      */
     fun openSourceSidebar() {
         SourceSidebar.show(
             context = context,
             entries = HERO_SOURCE_ENTRIES,
-            mode = SourceSidebarMode.Single,
-            onSiteSelected = { index ->
-                Notify.show(
-                    context.getString(R.string.source_sidebar_switched, HERO_SOURCE_ENTRIES[index].label)
-                )
-            },
+            mode = SourceSidebarMode.Multi,
+            initialChecked = BooleanArray(HERO_SOURCE_ENTRIES.size) { true },
+            onCheckedChanged = { },
+            onSiteSelected = { },
             onClosed = {
+                // Dialog 关闭后当前窗口尚未拿到焦点，延时一帧再 requestFocus 才不会被丢。
                 scope.launch {
                     withFrameNanos { }
                     if (!requestFocus(keyRequesters, HOUSE_KEY_INDEX)) {
@@ -339,12 +333,12 @@ private fun HeroSearchScreen(
                 HeroKeyAction.CursorLeft -> moveCaret(-1)
                 HeroKeyAction.CursorRight -> moveCaret(1)
                 HeroKeyAction.Backspace -> backspace()
-                // 原版这个位置是「键盘布局切换键」；本页没有符号键盘页，改为清空输入（空键更难用）。
+                // 原版这个位置是「键盘布局切换键」；本页没有符号键盘页，改为清空输入。
                 HeroKeyAction.Keyboard -> field = TextFieldValue("")
                 HeroKeyAction.House -> openSourceSidebar()
             }
 
-            // 占位格不聚焦，这里只是把 when 补完整。
+            // 占位格不聚焦，由 HeroKeyPlaceholder 单独渲染，走不到这里。
             else -> Unit
         }
     }
@@ -354,13 +348,13 @@ private fun HeroSearchScreen(
         val column = index % KEY_COLUMNS
         return when (key) {
             Key.DirectionLeft -> {
-                // 最左列（含第 1 行的占位格）不再左移，就地消费。
+                // 最左列（含第一行占位格右侧的 `<`）不再左移，就地消费。
                 if (column > 0 && index - 1 > PLACEHOLDER_INDEX) requestFocus(keyRequesters, index - 1)
                 true
             }
 
             Key.DirectionRight -> {
-                // 最右列 = A / H / O / V / 2 / 9：拦截并跳到右侧第一排第一个胶囊（核心四）。
+                // 最右列 = A / H / O / V / 2 / 9：拦截并跳到右侧第一排第一个胶囊。
                 if (column == KEY_COLUMNS - 1) {
                     focusRightFirstChip()
                 } else {
@@ -390,15 +384,17 @@ private fun HeroSearchScreen(
     }
 
     // 输入被清空 → 结果区整块消失，此时把焦点从已销毁的结果区送回输入框。
-    LaunchedEffect(hasKeyword) {
-        if (!hasKeyword && resultsFocused) {
+    LaunchedEffect(hasInput) {
+        if (!hasInput && resultsFocused) {
             resultsFocused = false
             withFrameNanos { }
             focusInput()
         }
     }
 
-    // ---- 根 Column：背景直接画在 Column 自己身上，不再用 Box 叠加 ----
+    // ------------------------------------------------------------------
+    // 骨架 1：上下结构。根节点只有 Column，没有 Box 叠加。
+    // ------------------------------------------------------------------
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -411,159 +407,254 @@ private fun HeroSearchScreen(
             )
             .padding(start = ROOT_PADDING_H, end = ROOT_PADDING_H, top = ROOT_PADDING_TOP),
     ) {
-        // ================= 上半区：左键盘 + 右历史/热搜（activity_search.xml L12-144）=================
-        // weight(1f) 吃掉「固定结果区」之外的全部高度；clipToBounds 兜底，
-        // 即使子节点内容超出自身高度，也只会被裁掉，绝不可能画到下半区去。
+        // 上半区：weight(1f) 吃掉「下半区固定高度」之外的全部空间。
+        // clipToBounds 兜底：子节点即使超高也只会被裁掉，绝不可能画到下面的海报行上。
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .weight(1f)
                 .clipToBounds(),
         ) {
-            // ---------- 左上：输入框 + 键盘（L17-65）----------
-            // 键盘固定 328 × 328dp（7×40 + 6×8），屏幕更矮时由自身滚动，不挤占下半区。
-            Column(
-                modifier = Modifier
-                    .width(LEFT_COLUMN_WIDTH)
-                    .fillMaxHeight()
-                    .verticalScroll(leftScroll),
-            ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    // Mic 36dp + marginEnd 12dp（L32-35）。语音能力未接，只做展示，不参与焦点。
-                    HeroGlyphIcon(glyph = HeroGlyph.Mic, modifier = Modifier.size(MIC_SIZE))
-                    Spacer(modifier = Modifier.width(MIC_MARGIN_END))
-                    HeroSearchInput(
-                        requester = inputRequester,
-                        value = field,
-                        onMoveDown = { focusKeyboard(FIRST_ACTION_KEY_INDEX) },
-                        modifier = Modifier.weight(1f),
-                    )
-                    Spacer(modifier = Modifier.width(SEARCH_BUTTON_MARGIN_START))
-                    // 设计稿 topbar_search_page.png 的放大镜按钮：40dp 圆形，与键盘键同尺寸。
-                    HeroSearchSubmit(
-                        requester = searchRequester,
-                        onConfirm = { confirmSearch() },
-                        onMoveDown = { focusKeyboard(FIRST_ACTION_KEY_INDEX) },
-                        onMoveLeft = { focusInput() },
-                    )
-                }
-                // 键盘 marginTop 8dp（L61）。
-                Spacer(modifier = Modifier.height(KEYBOARD_TOP_GAP))
-                HeroKeyboard(
-                    requesters = keyRequesters,
-                    onFocusKey = { index -> lastKeyIndex = index },
-                    onClick = { key -> onKeyClick(key) },
-                    onMove = { index, key -> onKeyMove(index, key) },
-                )
-            }
+            KeyboardSection(
+                field = field,
+                inputRequester = inputRequester,
+                searchRequester = searchRequester,
+                keyRequesters = keyRequesters,
+                onInputDown = { focusKeyboard(FIRST_KEY_INDEX) },
+                onSearch = { confirmSearch() },
+                onSearchDown = { focusKeyboard(FIRST_KEY_INDEX) },
+                onSearchLeft = { focusInput() },
+                onKeyFocused = { index -> lastKeyIndex = index },
+                onKeyClick = { key -> onKeyClick(key) },
+                onKeyMove = { index, key -> onKeyMove(index, key) },
+            )
 
             Spacer(modifier = Modifier.width(LEFT_COLUMN_MARGIN_END))
 
-            // ---------- 右上：历史 + 热搜/建议（L66-143）----------
-            Column(
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxHeight()
-                    .verticalScroll(rightScroll),
-            ) {
-                HeroWordSection(
-                    title = TITLE_HISTORY,
-                    words = history,
-                    requesters = historyRequesters,
-                    // 「右侧第一排第一个胶囊」的焦点落点由父级持有，键盘最右列 → 直接打过来。
-                    firstRowRequester = if (history.isNotEmpty()) rightFirstRequester else null,
-                    // 历史永远排在第一排；为空时第一排由热搜/建议承担。
-                    isFirstRowSection = history.isNotEmpty(),
-                    resultsVisible = hasKeyword,
-                    onWordClick = { text ->
-                        setKeyword(text)
-                        recordHistory(text)
-                    },
-                    onLeftEdge = { focusKeyboard(lastKeyIndex) },
-                    onMoveDownToResults = { focusSite(0) },
-                )
-                if (wordList.isNotEmpty()) {
-                    HeroWordSection(
-                        title = if (hasKeyword) TITLE_SUGGEST else TITLE_HOT,
-                        words = wordList,
-                        requesters = wordRequesters,
-                        firstRowRequester = if (history.isEmpty()) rightFirstRequester else null,
-                        isFirstRowSection = history.isEmpty(),
-                        resultsVisible = hasKeyword,
-                        onWordClick = { text ->
-                            setKeyword(text)
-                            recordHistory(text)
-                        },
-                        onLeftEdge = { focusKeyboard(lastKeyIndex) },
-                        onMoveDownToResults = { focusSite(0) },
-                    )
-                }
-            }
+            RightContentSection(
+                scroll = rightScroll,
+                history = history,
+                words = words,
+                wordTitle = wordTitle,
+                hasInput = hasInput,
+                historyRequesters = historyRequesters,
+                wordRequesters = wordRequesters,
+                rightFirstRequester = rightFirstRequester,
+                onWordClick = { text ->
+                    setKeyword(text)
+                    recordHistory(text)
+                },
+                onLeftEdge = { focusKeyboard(lastKeyIndex) },
+                onDownToResults = { focusSite(0) },
+            )
         }
 
-        // ================= 下半区：结果区（L145-207，仅输入框有文字时出现）=================
-        // 只允许 fillMaxWidth + wrapContentHeight + padding(top = 12dp)：
-        // 不吃 weight、不 fillMaxSize，永远只占「站点 Tab 行 + 215dp 海报行」自身的固定高度。
-        if (hasKeyword) {
-            Column(
+        // 下半区：只允许 fillMaxWidth + wrapContentHeight + padding(top = 12dp)，
+        // 不吃 weight、不 fillMaxSize，高度恒等于「36dp Tab 行 + 12dp 间隔 + 215dp 海报行」。
+        if (hasInput) {
+            ResultSection(
                 modifier = Modifier
                     .fillMaxWidth()
                     .wrapContentHeight()
                     .padding(top = RESULT_SECTION_TOP_GAP),
-            ) {
-                HeroSiteTabs(
-                    state = siteState,
-                    selected = selectedSite,
-                    requesters = siteRequesters,
-                    onFocused = { index ->
-                        focusedSite = index
-                        resultsFocused = true
-                    },
-                    onConfirm = { index ->
-                        selectedSite = index
-                        focusedSite = index
-                    },
-                    onMoveUp = { focusRightFirstChip() },
-                    onMoveDown = { focusPoster(0) },
-                    onMoveLeft = { index -> focusSite(index - 1) },
-                    onMoveRight = { index -> focusSite(index + 1) },
-                )
-                // siteRecycler marginBottom 10dp（L159）。
-                Spacer(modifier = Modifier.height(SITE_ROW_BOTTOM_GAP))
-                HeroResultRow(
-                    state = posterState,
-                    registry = posterViews,
-                    onFocused = { resultsFocused = true },
-                    onOpenDetail = { title ->
-                        recordHistory(keyword)
-                        onOpenDetail(title)
-                    },
-                    // 海报 ↑ 回到站点 Tab：落在当前焦点停留的那一项，而不是海报的下标。
-                    onMoveUp = { focusSite(focusedSite) },
-                    onMoveLeft = { index -> if (index > 0) focusPoster(index - 1) },
-                    onMoveRight = { index ->
-                        if (index < HERO_RESULTS.lastIndex) focusPoster(index + 1)
-                    },
-                )
-            }
+                siteState = siteState,
+                posterState = posterState,
+                selectedSite = selectedSite,
+                siteRequesters = siteRequesters,
+                posterRegistry = posterRegistry,
+                onSiteFocused = { index ->
+                    focusedSite = index
+                    resultsFocused = true
+                },
+                onSiteConfirm = { index ->
+                    selectedSite = index
+                    focusedSite = index
+                },
+                onSiteUp = { focusRightFirstChip() },
+                onSiteDown = { focusPoster(0) },
+                onSiteLeft = { index -> focusSite(index - 1) },
+                onSiteRight = { index -> focusSite(index + 1) },
+                onPosterFocused = { resultsFocused = true },
+                onPosterOpen = { title ->
+                    recordHistory(keyword)
+                    onOpenDetail(title)
+                },
+                onPosterUp = { focusSite(focusedSite) },
+                onPosterLeft = { index -> if (index > 0) focusPoster(index - 1) },
+                onPosterRight = { index ->
+                    if (index < HERO_RESULTS.lastIndex) focusPoster(index + 1)
+                },
+            )
         }
     }
 }
 
 // ---------------------------------------------------------------------------
-// 左侧：搜索输入框
+// 骨架 2：左侧键盘区（316dp 宽，Column + Row 手摆，绝不用 LazyGrid）
+// ---------------------------------------------------------------------------
+
+/**
+ * 左列：输入框行 + 虚拟键盘。
+ *
+ * 宽度锁死 316dp = 7 × 40dp + 6 × 6dp（`ref_docs/adapter_keyboard_text.xml` L10 的 40dp；
+ * 间距 6dp 由本版需求指定）。**不做 verticalScroll**：TV 端滚动会让遥控器焦点帧丢失，
+ * 高度不足时交给父级 `clipToBounds` 裁掉，绝不越界到下面的海报行。
+ */
+@Composable
+private fun KeyboardSection(
+    field: TextFieldValue,
+    inputRequester: FocusRequester,
+    searchRequester: FocusRequester,
+    keyRequesters: List<FocusRequester>,
+    onInputDown: () -> Unit,
+    onSearch: () -> Unit,
+    onSearchDown: () -> Unit,
+    onSearchLeft: () -> Unit,
+    onKeyFocused: (Int) -> Unit,
+    onKeyClick: (HeroKey) -> Unit,
+    onKeyMove: (Int, Key) -> Boolean,
+) {
+    Column(
+        modifier = Modifier
+            .width(LEFT_COLUMN_WIDTH)
+            .fillMaxHeight(),
+        verticalArrangement = Arrangement.spacedBy(KEY_SPACING),
+    ) {
+        // 输入框行：mic 36dp + 12dp + 只读输入框(weight 1f) + 12dp + 搜索 40dp
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            HeroGlyphIcon(glyph = HeroGlyph.Mic, modifier = Modifier.size(MIC_SIZE))
+            Spacer(modifier = Modifier.width(MIC_MARGIN_END))
+            HeroSearchInput(
+                requester = inputRequester,
+                value = field,
+                onMoveDown = onInputDown,
+                modifier = Modifier.weight(1f),
+            )
+            Spacer(modifier = Modifier.width(SEARCH_BUTTON_MARGIN_START))
+            HeroSearchSubmit(
+                requester = searchRequester,
+                onConfirm = onSearch,
+                onMoveDown = onSearchDown,
+                onMoveLeft = onSearchLeft,
+            )
+        }
+
+        // 键盘：6 行 × 7 列 = 42 格，每格 40dp 写死，行/列间距 6dp。
+        Column(verticalArrangement = Arrangement.spacedBy(KEY_SPACING)) {
+            for (row in 0 until KEY_ROWS) {
+                Row(horizontalArrangement = Arrangement.spacedBy(KEY_SPACING)) {
+                    for (column in 0 until KEY_COLUMNS) {
+                        val index = row * KEY_COLUMNS + column
+                        if (index == PLACEHOLDER_INDEX) {
+                            HeroKeyPlaceholder()
+                        } else {
+                            KeyboardKey(
+                                key = HERO_KEYS[index],
+                                requester = keyRequesters[index],
+                                onFocused = { onKeyFocused(index) },
+                                onMove = { key -> onKeyMove(index, key) },
+                                onKey = { onKeyClick(HERO_KEYS[index]) },
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * 单个按键：**严格 40 × 40dp**（`adapter_keyboard_text.xml` L10），4dp 圆角、16sp 白字。
+ *
+ * 焦点反馈（本版重点）：
+ * - 常态 `0x33FFFFFF`（半透明白），焦点 **纯红 `0xFFFF0000`**，方向键在键盘内移动时一定看得见；
+ * - 蓝色/白色描边都不加在底色上：红底之外只叠 1.5dp 白描边，保证纯红仍是最强信号；
+ * - `collectIsFocusedAsState()` 是主信号，`onFocusChanged` 只做兜底（极端机型上交互源可能不派发），
+ *   两者取或，绝不会出现「焦点移动了但没有背景」。
+ */
+@Composable
+private fun KeyboardKey(
+    key: HeroKey,
+    requester: FocusRequester,
+    onFocused: () -> Unit,
+    onMove: (Key) -> Boolean,
+    onKey: () -> Unit,
+) {
+    val interaction = remember { MutableInteractionSource() }
+    val isFocused by interaction.collectIsFocusedAsState()
+    var focusFlag by remember { mutableStateOf(false) }
+    val focused = isFocused || focusFlag
+    val bgColor = if (focused) KEY_BG_FOCUSED else KEY_BG_NORMAL
+
+    Box(
+        modifier = Modifier
+            .size(KEY_SIZE)                       // 40dp 写死，任何区域都不会被拉伸
+            .clip(KEY_SHAPE)                      // 4dp
+            .background(bgColor, KEY_SHAPE)       // 红底焦点
+            .focusRequester(requester)
+            .onFocusChanged {
+                focusFlag = it.isFocused
+                if (it.isFocused) onFocused()
+            }
+            .onPreviewKeyEvent { event ->
+                if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                when (event.key) {
+                    // 遥控器 OK / 回车：直接触发，不依赖 clickable 内部映射。
+                    Key.DirectionCenter, Key.Enter -> {
+                        onKey()
+                        true
+                    }
+
+                    else -> onMove(event.key)
+                }
+            }
+            // 单一焦点目标：clickable 自身提供 focusable + 点击 + FocusInteraction，
+            // 再叠一个 focusable 会产生两个焦点节点，反而可能丢掉红底。
+            .clickable(interactionSource = interaction, indication = null, onClick = onKey),
+        contentAlignment = Alignment.Center,
+    ) {
+        when (key) {
+            is HeroKey.Text -> Text(
+                text = key.value,
+                color = Color.White,
+                fontSize = KEY_TEXT_SP.sp,
+                maxLines = 1,
+            )
+
+            is HeroKey.Action -> HeroGlyphIcon(
+                glyph = key.glyph,
+                modifier = Modifier.size(KEY_ICON_SIZE),
+            )
+
+            else -> Unit
+        }
+    }
+}
+
+/** 第一行第 1 格占位（原版 `ic_keyboard_remote` 的 4 个方块）：不聚焦、无动作。 */
+@Composable
+private fun HeroKeyPlaceholder() {
+    Box(
+        modifier = Modifier
+            .size(KEY_SIZE)
+            .clip(KEY_SHAPE)
+            .background(KEY_BG_NORMAL, KEY_SHAPE),
+        contentAlignment = Alignment.Center,
+    ) {
+        HeroGlyphIcon(glyph = HeroGlyph.Grid, modifier = Modifier.size(KEY_ICON_SIZE))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 左侧：搜索输入框 + 放大镜按钮
 // ---------------------------------------------------------------------------
 
 /**
  * 只读搜索框（禁用系统输入法）。
  *
- * - 文字 24sp、字距 0.02（activity_search.xml L37、L53），hint 色 = white（L39）。
- * - 焦点态红色描边：`selector_tmdb_input.xml` 的 focused 态（仓库里只有选择器，没有对应 shape），
- *   这里按设计稿 `topbar_search_page.png` 的描边取 2dp、颜色 `#e50914`
- *   （`shape_red_bar.xml` L4 的红色）、圆角 13dp，高度与 40dp 键盘键对齐。
+ * - 文字 24sp、字距 0.02（`activity_search.xml` L37/L53），hint 白（L39）；
+ * - 焦点态 2dp 红框（`selector_tmdb_input.xml` 的 focused 态 + `topbar_search_page.png`）；
+ * - 高度与 40dp 键盘键对齐，圆角 13dp。
  */
 @Composable
 private fun HeroSearchInput(
@@ -598,7 +689,7 @@ private fun HeroSearchInput(
                 .onPreviewKeyEvent { event ->
                     if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
                     when (event.key) {
-                        // 输入框 ↓ 进入键盘第一行（L45 nextFocusDown=keyboard）。
+                        // 输入框 ↓ → 键盘第一行（L45 nextFocusDown=keyboard）。
                         Key.DirectionDown -> {
                             onMoveDown()
                             true
@@ -636,7 +727,7 @@ private fun HeroSearchInput(
     }
 }
 
-/** 顶部放大镜按钮：40dp 圆（与键盘键同尺寸），配色复用键盘键三态。 */
+/** 放大镜按钮：40dp 圆（与键盘键同尺寸），配色复用键盘键两态。 */
 @Composable
 private fun HeroSearchSubmit(
     requester: FocusRequester,
@@ -644,17 +735,26 @@ private fun HeroSearchSubmit(
     onMoveDown: () -> Unit,
     onMoveLeft: () -> Unit,
 ) {
-    var focused by remember { mutableStateOf(false) }
     val interaction = remember { MutableInteractionSource() }
+    val isFocused by interaction.collectIsFocusedAsState()
+    var focusFlag by remember { mutableStateOf(false) }
+    val focused = isFocused || focusFlag
 
     Box(
         modifier = Modifier
             .size(SEARCH_BUTTON_SIZE)
+            .clip(CircleShape)
+            .background(if (focused) KEY_BG_FOCUSED else KEY_BG_NORMAL, CircleShape)
             .focusRequester(requester)
-            .onFocusChanged { focused = it.isFocused }
+            .onFocusChanged { focusFlag = it.isFocused }
             .onPreviewKeyEvent { event ->
                 if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
                 when (event.key) {
+                    Key.DirectionCenter, Key.Enter -> {
+                        onConfirm()
+                        true
+                    }
+
                     Key.DirectionDown -> {
                         onMoveDown()
                         true
@@ -668,9 +768,6 @@ private fun HeroSearchSubmit(
                     else -> false
                 }
             }
-            .clip(CircleShape)
-            .background(if (focused) KEY_BG_FOCUSED else KEY_BG_NORMAL, CircleShape)
-            .then(if (focused) Modifier.border(KEY_STROKE, Color.White, CircleShape) else Modifier)
             .clickable(interactionSource = interaction, indication = null, onClick = onConfirm),
         contentAlignment = Alignment.Center,
     ) {
@@ -679,124 +776,66 @@ private fun HeroSearchSubmit(
 }
 
 // ---------------------------------------------------------------------------
-// 左侧：虚拟键盘（7 列 × 6 行 = 42 键）
+// 右侧：历史 + 热搜/建议
 // ---------------------------------------------------------------------------
 
 /**
- * 虚拟键盘：`ref_docs/xd1.java` L27-38 —— 6 个图标键 + A-Z + 0-9 = 42 项，正好 6 行 × 7 列；
- * 列间距 8dp（`CustomKeyboard.java` L25 `new SpaceItemDecoration(7, 8)`）。
+ * 右列：历史 + 热搜（无输入）/ 建议（有输入）。
  *
- * 第一行是 `(占位, <, >, ⌫, 键盘, 房子, A)`：第 0 格是占位（原版 `ic_keyboard_remote`），
- * 只作为视觉占位、不参与焦点；「房子」直接调 [SourceSidebar]。
+ * 自己是 `RowScope` 扩展，所以 `weight(1f)` 是合法的；内部再挂独立 `verticalScroll`，
+ * 标签再多也只在自己区域内滚动，不会撑破上半区的 `weight(1f)`。
  */
 @Composable
-private fun HeroKeyboard(
-    requesters: List<FocusRequester>,
-    onFocusKey: (Int) -> Unit,
-    onClick: (HeroKey) -> Unit,
-    onMove: (Int, Key) -> Boolean,
+private fun RowScope.RightContentSection(
+    scroll: ScrollState,
+    history: List<String>,
+    words: List<String>,
+    wordTitle: String,
+    hasInput: Boolean,
+    historyRequesters: List<FocusRequester>,
+    wordRequesters: List<FocusRequester>,
+    rightFirstRequester: FocusRequester,
+    onWordClick: (String) -> Unit,
+    onLeftEdge: () -> Unit,
+    onDownToResults: () -> Unit,
 ) {
-    Column(verticalArrangement = Arrangement.spacedBy(KEY_SPACING)) {
-        for (row in 0 until KEY_ROWS) {
-            Row(horizontalArrangement = Arrangement.spacedBy(KEY_SPACING)) {
-                for (column in 0 until KEY_COLUMNS) {
-                    val index = row * KEY_COLUMNS + column
-                    if (index == PLACEHOLDER_INDEX) {
-                        HeroKeyPlaceholder()
-                    } else {
-                        HeroKeyCell(
-                            key = HERO_KEYS[index],
-                            requester = requesters[index],
-                            onFocused = { onFocusKey(index) },
-                            onMove = { key -> onMove(index, key) },
-                            onClick = { onClick(HERO_KEYS[index]) },
-                        )
-                    }
-                }
-            }
+    Column(
+        modifier = Modifier
+            .weight(1f)
+            .fillMaxHeight()
+            .verticalScroll(scroll),
+    ) {
+        HeroWordSection(
+            title = TITLE_HISTORY,
+            words = history,
+            requesters = historyRequesters,
+            // 历史非空时，「右侧第一排第一个」就是历史第一条。
+            firstRowRequester = if (history.isNotEmpty()) rightFirstRequester else null,
+            isFirstRowSection = history.isNotEmpty(),
+            resultsVisible = hasInput,
+            onWordClick = onWordClick,
+            onLeftEdge = onLeftEdge,
+            onDownToResults = onDownToResults,
+        )
+        if (words.isNotEmpty()) {
+            HeroWordSection(
+                title = wordTitle,
+                words = words,
+                requesters = wordRequesters,
+                firstRowRequester = if (history.isEmpty()) rightFirstRequester else null,
+                isFirstRowSection = history.isEmpty(),
+                resultsVisible = hasInput,
+                onWordClick = onWordClick,
+                onLeftEdge = onLeftEdge,
+                onDownToResults = onDownToResults,
+            )
         }
     }
 }
 
-/** 第 1 行第 1 格的占位：原版是 `ic_keyboard_remote`（4 个方块），不聚焦、无动作。 */
-@Composable
-private fun HeroKeyPlaceholder() {
-    Box(
-        modifier = Modifier
-            .size(KEY_SIZE)
-            .clip(KEY_SHAPE)
-            .background(KEY_BG_NORMAL, KEY_SHAPE),
-        contentAlignment = Alignment.Center,
-    ) {
-        HeroGlyphIcon(glyph = HeroGlyph.Grid, modifier = Modifier.size(KEY_ICON_SIZE))
-    }
-}
-
 /**
- * 单键：40×40dp、16sp 白字、4dp 圆角。
- *
- * 焦点反馈（核心二）：`interaction.collectIsFocusedAsState()` 驱动——
- * 常态 `0x33FFFFFF`，焦点态 **纯红 `0xFFFF0000`** + 1.5dp 白描边，方向键在键盘内移动时一定看得见。
- * `onFocusChanged` 只用来登记「上次停留的键」，供右侧胶囊按 ← 时回跳。
- */
-@Composable
-private fun HeroKeyCell(
-    key: HeroKey,
-    requester: FocusRequester,
-    onFocused: () -> Unit,
-    onMove: (Key) -> Boolean,
-    onClick: () -> Unit,
-) {
-    val interaction = remember { MutableInteractionSource() }
-    val interactionFocused by interaction.collectIsFocusedAsState()
-    var focusChanged by remember { mutableStateOf(false) }
-    val focused = interactionFocused || focusChanged
-    val bgColor = if (focused) KEY_BG_FOCUSED else KEY_BG_NORMAL
-
-    Box(
-        modifier = Modifier
-            .size(KEY_SIZE)
-            .focusRequester(requester)
-            .onFocusChanged {
-                focusChanged = it.isFocused
-                if (it.isFocused) onFocused()
-            }
-            .onPreviewKeyEvent { event ->
-                event.type == KeyEventType.KeyDown && onMove(event.key)
-            }
-            .clip(KEY_SHAPE)
-            .background(bgColor, KEY_SHAPE)
-            // 红色底上再用红描边等于没有描边：键盘键沿用 shape_keyboard_focused 的白色 1.5dp 描边。
-            .then(if (focused) Modifier.border(KEY_STROKE, Color.White, KEY_SHAPE) else Modifier)
-            .clickable(interactionSource = interaction, indication = null, onClick = onClick),
-        contentAlignment = Alignment.Center,
-    ) {
-        when (key) {
-            is HeroKey.Text -> Text(
-                text = key.value,
-                color = Color.White,
-                fontSize = KEY_TEXT_SP.sp,
-                maxLines = 1,
-            )
-
-            is HeroKey.Action -> HeroGlyphIcon(
-                glyph = key.glyph,
-                modifier = Modifier.size(KEY_ICON_SIZE),
-            )
-
-            // 占位格由 HeroKeyPlaceholder 单独渲染，不会走到这里。
-            else -> Unit
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// 右侧：区块标题 + 流式胶囊
-// ---------------------------------------------------------------------------
-
-/**
- * 区块标题：4dp × 16dp 红色竖条（`shape_red_bar.xml`：#e50914、2dp 圆角）+ 20sp 粗体白字。
- * 竖条与文字间距 10dp，整行下方 8dp（activity_search.xml L92 / L109 的 layout_marginBottom）。
+ * 区块标题：4dp × 16dp 红条（`shape_red_bar.xml`：#e50914、2dp 圆角）+ 20sp 粗体白字，
+ * 条与文字间距 10dp，整行下方 8dp（`activity_search.xml` L92/L109）。
  */
 @Composable
 private fun HeroSectionTitle(title: String) {
@@ -822,9 +861,9 @@ private fun HeroSectionTitle(title: String) {
 }
 
 /**
- * 历史 / 热搜 / 建议区：`FlowRow`，胶囊 16sp、左右 14dp + 上下 8dp、28dp 圆角、6dp 外边距
- * （`adapter_search_word.xml` L3/L12 + `shape_item_round_normal.xml` L7-13）。
- * 列表整体左移 6dp，用负外边距抵消首尾 6dp —— 对应 XML L101/L118 的 `layout_marginStart="-6dp"`。
+ * 历史 / 热搜 / 建议区：`FlowRow`，胶囊 16sp、内边距 14dp×8dp、28dp 圆角、外边距 6dp
+ * （`adapter_search_word.xml` L3/L12 + `shape_item_round_*.xml`）。
+ * 整体左移 6dp 抵消首尾外边距，对应 XML 的 `layout_marginStart="-6dp"`。
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -832,13 +871,13 @@ private fun HeroWordSection(
     title: String,
     words: List<String>,
     requesters: List<FocusRequester>,
-    // 只有「第一排第一个胶囊」会拿到它：键盘最右列 → 直接打到这里。
+    // 只有「第一排第一个胶囊」拿得到它：键盘最右列直接打到这里。
     firstRowRequester: FocusRequester?,
     isFirstRowSection: Boolean,
     resultsVisible: Boolean,
     onWordClick: (String) -> Unit,
     onLeftEdge: () -> Unit,
-    onMoveDownToResults: () -> Unit,
+    onDownToResults: () -> Unit,
 ) {
     if (words.isEmpty()) return
 
@@ -855,12 +894,15 @@ private fun HeroWordSection(
                 val isFirstChip = isFirstRowSection && index == 0
                 HeroWordChip(
                     text = word,
-                    requester = if (isFirstChip) firstRowRequester ?: requesters.getOrNull(index) else requesters.getOrNull(index),
-                    // 只在「第一排第一个」位置上拦截 ← / ↓，其余交给 Compose 的二维焦点搜索。
+                    requester = if (isFirstChip) {
+                        firstRowRequester ?: requesters.getOrNull(index)
+                    } else {
+                        requesters.getOrNull(index)
+                    },
                     isFirstChip = isFirstChip,
                     resultsVisible = resultsVisible,
                     onLeftEdge = onLeftEdge,
-                    onMoveDownToResults = onMoveDownToResults,
+                    onDownToResults = onDownToResults,
                     onClick = { onWordClick(word) },
                     modifier = Modifier.padding(CHIP_MARGIN),
                 )
@@ -869,6 +911,10 @@ private fun HeroWordSection(
     }
 }
 
+/**
+ * 胶囊标签：**不铺纯黑**，底色沿用 `selector_item_round.xml` 的半透明黑；
+ * 焦点态额外加 **1.5dp 纯红描边**（本版要求的焦点反馈），保证在暗背景上一眼可见。
+ */
 @Composable
 private fun HeroWordChip(
     text: String,
@@ -876,48 +922,49 @@ private fun HeroWordChip(
     isFirstChip: Boolean,
     resultsVisible: Boolean,
     onLeftEdge: () -> Unit,
-    onMoveDownToResults: () -> Unit,
+    onDownToResults: () -> Unit,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val interaction = remember { MutableInteractionSource() }
-    val interactionFocused by interaction.collectIsFocusedAsState()
-    var focusChanged by remember { mutableStateOf(false) }
-    val focused = interactionFocused || focusChanged
+    val isFocused by interaction.collectIsFocusedAsState()
+    var focusFlag by remember { mutableStateOf(false) }
+    val focused = isFocused || focusFlag
 
     Box(
         modifier = modifier
             .then(if (requester != null) Modifier.focusRequester(requester) else Modifier)
-            .onFocusChanged { focusChanged = it.isFocused }
+            .clip(CHIP_SHAPE)
+            .background(if (focused) CHIP_BG_FOCUSED else CHIP_BG_NORMAL, CHIP_SHAPE)
+            .then(if (focused) Modifier.border(CHIP_STROKE, FOCUS_RED, CHIP_SHAPE) else Modifier)
+            .onFocusChanged { focusFlag = it.isFocused }
             .onPreviewKeyEvent { event ->
                 if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
                 when (event.key) {
-                    // 第一排第一个胶囊 ← → 退回键盘（核心四）。
-                    Key.DirectionLeft -> {
-                        if (isFirstChip) {
-                            onLeftEdge()
-                            true
-                        } else {
-                            false
-                        }
+                    Key.DirectionCenter, Key.Enter -> {
+                        onClick()
+                        true
+                    }
+
+                    // 第一排第一个胶囊 ← → 退回键盘（回到上次停留的键）。
+                    Key.DirectionLeft -> if (isFirstChip) {
+                        onLeftEdge()
+                        true
+                    } else {
+                        false
                     }
 
                     // 胶囊 ↓ → 站点 Tab（结果区存在时）。
-                    Key.DirectionDown -> {
-                        if (resultsVisible) {
-                            onMoveDownToResults()
-                            true
-                        } else {
-                            false
-                        }
+                    Key.DirectionDown -> if (resultsVisible) {
+                        onDownToResults()
+                        true
+                    } else {
+                        false
                     }
 
                     else -> false
                 }
             }
-            .clip(CHIP_SHAPE)
-            .background(if (focused) CHIP_BG_FOCUSED else CHIP_BG_NORMAL, CHIP_SHAPE)
-            .then(if (focused) Modifier.border(CHIP_STROKE, KEY_BORDER_FOCUSED, CHIP_SHAPE) else Modifier)
             .clickable(interactionSource = interaction, indication = null, onClick = onClick)
             .padding(horizontal = CHIP_PADDING_H, vertical = CHIP_PADDING_V),
         contentAlignment = Alignment.Center,
@@ -933,49 +980,135 @@ private fun HeroWordChip(
 }
 
 // ---------------------------------------------------------------------------
-// 右侧：站点 Tab + 海报行
+// 骨架 3：下半区（站点 Tab + 海报行）
 // ---------------------------------------------------------------------------
 
+/**
+ * 结果区：`fillMaxWidth + wrapContentHeight + padding(top = 12dp)`，高度只由内容决定，
+ * 永远不参与上半区的高度分配，所以不会挤压键盘、也不会被键盘压住。
+ *
+ * 两条 LazyRow 的 `contentPadding` 取 [RESULT_CONTENT_PADDING] = 0dp：
+ * 根 `Column` 已经有 24dp 横向 padding，再缩进会让第一个「全部」和第一张海报
+ * 与上方「历史」标题、左侧键盘左边缘错位。保留这个参数是为了以后一键调整。
+ */
 @Composable
-private fun HeroSiteTabs(
-    state: LazyListState,
-    selected: Int,
-    requesters: List<FocusRequester>,
-    onFocused: (Int) -> Unit,
-    onConfirm: (Int) -> Unit,
-    onMoveUp: () -> Unit,
-    onMoveDown: () -> Unit,
-    onMoveLeft: (Int) -> Unit,
-    onMoveRight: (Int) -> Unit,
+private fun ResultSection(
+    modifier: Modifier = Modifier,
+    siteState: LazyListState,
+    posterState: LazyListState,
+    selectedSite: Int,
+    siteRequesters: List<FocusRequester>,
+    posterRegistry: HeroPosterViewRegistry,
+    onSiteFocused: (Int) -> Unit,
+    onSiteConfirm: (Int) -> Unit,
+    onSiteUp: () -> Unit,
+    onSiteDown: () -> Unit,
+    onSiteLeft: (Int) -> Unit,
+    onSiteRight: (Int) -> Unit,
+    onPosterFocused: () -> Unit,
+    onPosterOpen: (String) -> Unit,
+    onPosterUp: (Int) -> Unit,
+    onPosterLeft: (Int) -> Unit,
+    onPosterRight: (Int) -> Unit,
 ) {
-    LazyRow(
-        state = state,
-        modifier = Modifier
-            .fillMaxWidth()
-            // 站点 Tab 行高按需求约 36dp（Tab 本体仍是 adapter_type.xml 的 26dp）；
-            // siteRecycler paddingBottom=2dp（L154）。
-            .height(SITE_ROW_HEIGHT)
-            .padding(bottom = SITE_ROW_BOTTOM_PADDING),
-        horizontalArrangement = Arrangement.spacedBy(SITE_ITEM_SPACING),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        itemsIndexed(items = HERO_SITE_TABS) { index, label ->
-            HeroSiteTab(
-                label = label,
-                selected = index == selected,
-                requester = requesters[index],
-                onFocused = { onFocused(index) },
-                onConfirm = { onConfirm(index) },
-                onMoveUp = onMoveUp,
-                onMoveDown = onMoveDown,
-                onMoveLeft = { onMoveLeft(index) },
-                onMoveRight = { onMoveRight(index) },
-            )
+    Column(modifier = modifier) {
+        // 站点 Tab：行高 36dp，胶囊本体 26dp（adapter_type.xml L10）垂直居中。
+        LazyRow(
+            state = siteState,
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(SITE_ROW_HEIGHT),
+            contentPadding = PaddingValues(
+                start = RESULT_CONTENT_PADDING,
+                end = RESULT_CONTENT_PADDING,
+            ),
+            horizontalArrangement = Arrangement.spacedBy(SITE_ITEM_SPACING),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            itemsIndexed(items = HERO_SITE_TABS) { index, label ->
+                HeroSiteTab(
+                    label = label,
+                    selected = index == selectedSite,
+                    requester = siteRequesters[index],
+                    onFocused = { onSiteFocused(index) },
+                    onConfirm = { onSiteConfirm(index) },
+                    onMoveUp = onSiteUp,
+                    onMoveDown = onSiteDown,
+                    onMoveLeft = { onSiteLeft(index) },
+                    onMoveRight = { onSiteRight(index) },
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(SITE_POSTER_GAP))
+
+        // 海报行：高度锁死 215dp（activity_search.xml L167）。
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(POSTER_AREA_HEIGHT),
+        ) {
+            LazyRow(
+                state = posterState,
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(
+                    start = RESULT_CONTENT_PADDING,
+                    end = RESULT_CONTENT_PADDING,
+                ),
+                horizontalArrangement = Arrangement.spacedBy(POSTER_ITEM_SPACING),
+            ) {
+                itemsIndexed(items = HERO_RESULTS) { index, item ->
+                    // 【红线】HeroPosterCard 自己 onMeasure 死锁 120×214dp，
+                    // 这里绝不加 Modifier.width()/size()，直接放进去。
+                    AndroidView(
+                        factory = { context ->
+                            HeroPosterCard(context).also { card -> posterRegistry.bind(index, card) }
+                        },
+                        update = { card ->
+                            // 只在值变化时写，避免每次重组都触发 HeroPosterCard 内部的图片重载。
+                            if (card.title != item.title) card.title = item.title
+                            if (card.topStartTag != item.topTag) card.topStartTag = item.topTag
+                            if (card.bottomStartTag != item.bottomTag) card.bottomStartTag = item.bottomTag
+                            if (card.imageUrl != item.imageUrl) card.imageUrl = item.imageUrl
+
+                            card.setOnFocusChangeListener { _, hasFocus ->
+                                if (hasFocus) onPosterFocused()
+                            }
+                            card.setOnClickListener { onPosterOpen(item.title) }
+                            card.setOnKeyListener { _, keyCode, event ->
+                                if (event.action != KeyEvent.ACTION_DOWN) return@setOnKeyListener false
+                                when (keyCode) {
+                                    KeyEvent.KEYCODE_DPAD_LEFT -> {
+                                        onPosterLeft(index)
+                                        true
+                                    }
+
+                                    KeyEvent.KEYCODE_DPAD_RIGHT -> {
+                                        onPosterRight(index)
+                                        true
+                                    }
+
+                                    KeyEvent.KEYCODE_DPAD_UP -> {
+                                        onPosterUp(index)
+                                        true
+                                    }
+
+                                    else -> false
+                                }
+                            }
+                        },
+                        onRelease = { card -> posterRegistry.unbind(index, card) },
+                    )
+                }
+            }
         }
     }
 }
 
-/** 站点胶囊：高 26dp、13sp、13dp 圆角；选中态放大 1.08（dz2.java L45-47、L114-120）。 */
+/**
+ * 站点胶囊：26dp 高、13sp、13dp 圆角（`adapter_type.xml` L3/L10）；
+ * 选中放大 1.08 / 140ms（`dz2.java` L45-47）；焦点态红描边 + 提亮底色。
+ */
 @Composable
 private fun HeroSiteTab(
     label: String,
@@ -988,10 +1121,10 @@ private fun HeroSiteTab(
     onMoveLeft: () -> Unit,
     onMoveRight: () -> Unit,
 ) {
-    var focused by remember { mutableStateOf(false) }
     val interaction = remember { MutableInteractionSource() }
-    val interactionFocused by interaction.collectIsFocusedAsState()
-    val isFocused = focused || interactionFocused
+    val isFocused by interaction.collectIsFocusedAsState()
+    var focusFlag by remember { mutableStateOf(false) }
+    val focused = isFocused || focusFlag
     val scale by animateFloatAsState(
         targetValue = if (selected) SITE_SELECTED_SCALE else 1f,
         animationSpec = tween(durationMillis = SITE_SCALE_DURATION_MS),
@@ -1003,13 +1136,28 @@ private fun HeroSiteTab(
             .scale(scale)
             .height(SITE_TAB_HEIGHT)
             .focusRequester(requester)
+            .clip(SITE_TAB_SHAPE)
+            .background(
+                when {
+                    focused -> CHIP_BG_FOCUSED
+                    selected -> CHIP_BG_SELECTED
+                    else -> CHIP_BG_NORMAL
+                },
+                SITE_TAB_SHAPE,
+            )
+            .then(if (focused) Modifier.border(CHIP_STROKE, FOCUS_RED, SITE_TAB_SHAPE) else Modifier)
             .onFocusChanged {
-                focused = it.isFocused
+                focusFlag = it.isFocused
                 if (it.isFocused) onFocused()
             }
             .onPreviewKeyEvent { event ->
                 if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
                 when (event.key) {
+                    Key.DirectionCenter, Key.Enter -> {
+                        onConfirm()
+                        true
+                    }
+
                     Key.DirectionUp -> {
                         onMoveUp()
                         true
@@ -1033,16 +1181,6 @@ private fun HeroSiteTab(
                     else -> false
                 }
             }
-            .clip(SITE_TAB_SHAPE)
-            .background(
-                when {
-                    isFocused -> CHIP_BG_FOCUSED
-                    selected -> CHIP_BG_SELECTED
-                    else -> CHIP_BG_NORMAL
-                },
-                SITE_TAB_SHAPE,
-            )
-            .then(if (isFocused) Modifier.border(CHIP_STROKE, KEY_BORDER_FOCUSED, SITE_TAB_SHAPE) else Modifier)
             .clickable(interactionSource = interaction, indication = null, onClick = onConfirm)
             .padding(horizontal = CHIP_PADDING_H),
         contentAlignment = Alignment.Center,
@@ -1051,85 +1189,14 @@ private fun HeroSiteTab(
             text = label,
             color = Color.White,
             fontSize = SITE_TAB_SP.sp,
-            fontWeight = if (isFocused || selected) FontWeight.Medium else FontWeight.Normal,
+            fontWeight = if (focused || selected) FontWeight.Medium else FontWeight.Normal,
             maxLines = 1,
         )
     }
 }
 
-/**
- * 215dp 海报行（activity_search.xml L162-206）+ 16dp 间距（`SearchActivityV2` L425）。
- *
- * 卡片只用全局唯一组件 [HeroPosterCard]（120 × 214dp，尺寸由组件自己锁死），
- * 这里通过 [AndroidView] 承载它，并把方向键交给组件自己画出来的红色描边。
- */
-@Composable
-private fun HeroResultRow(
-    state: LazyListState,
-    registry: HeroPosterViewRegistry,
-    onFocused: () -> Unit,
-    onOpenDetail: (String) -> Unit,
-    onMoveUp: (Int) -> Unit,
-    onMoveLeft: (Int) -> Unit,
-    onMoveRight: (Int) -> Unit,
-) {
-    LazyRow(
-        state = state,
-        // 215dp 直接锁在 LazyRow 自己身上：不再套 Box，结果区高度 = 站点 Tab 行 + 本行，恒定不撑破。
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(POSTER_AREA_HEIGHT),
-        horizontalArrangement = Arrangement.spacedBy(POSTER_ITEM_SPACING),
-    ) {
-        itemsIndexed(items = HERO_RESULTS) { index, item ->
-            AndroidView(
-                modifier = Modifier
-                    .width(HeroPosterCard.CARD_WIDTH_DP.dp)
-                    .height(HeroPosterCard.CARD_HEIGHT_DP.dp),
-                factory = { context ->
-                    HeroPosterCard(context).also { card -> registry.bind(index, card) }
-                },
-                update = { card ->
-                    // 只在值变化时写，避免每次重组都触发 HeroPosterCard 内部的 Glide 重载。
-                    if (card.title != item.title) card.title = item.title
-                    if (card.topStartTag != item.topTag) card.topStartTag = item.topTag
-                    if (card.bottomStartTag != item.bottomTag) card.bottomStartTag = item.bottomTag
-                    if (card.imageUrl != item.imageUrl) card.imageUrl = item.imageUrl
-
-                    card.setOnFocusChangeListener { _, hasFocus ->
-                        if (hasFocus) onFocused()
-                    }
-                    card.setOnClickListener { onOpenDetail(item.title) }
-                    card.setOnKeyListener { _, keyCode, event ->
-                        if (event.action != KeyEvent.ACTION_DOWN) return@setOnKeyListener false
-                        when (keyCode) {
-                            KeyEvent.KEYCODE_DPAD_LEFT -> {
-                                onMoveLeft(index)
-                                true
-                            }
-
-                            KeyEvent.KEYCODE_DPAD_RIGHT -> {
-                                onMoveRight(index)
-                                true
-                            }
-
-                            KeyEvent.KEYCODE_DPAD_UP -> {
-                                onMoveUp(index)
-                                true
-                            }
-
-                            else -> false
-                        }
-                    }
-                },
-                onRelease = { card -> registry.unbind(index, card) },
-            )
-        }
-    }
-}
-
 // ---------------------------------------------------------------------------
-// 图标（本项目 main 源集没有 mic / search / keyboard 矢量，用 Canvas 画，避免新增资源文件）
+// 图标（main 源集没有 mic / search / keyboard 矢量，用 Canvas 画，不新增资源文件）
 // ---------------------------------------------------------------------------
 
 private enum class HeroGlyph { Mic, Search, ArrowLeft, ArrowRight, Backspace, Keyboard, House, Grid }
@@ -1251,7 +1318,6 @@ private fun HeroGlyphIcon(
                     cornerRadius = CornerRadius(width * 0.06f, width * 0.06f),
                     style = stroke,
                 )
-                // 三排按键点 + 空格条，比例参考设计稿里的键盘图标。
                 for (row in 0 until 3) {
                     for (column in 0 until 4) {
                         drawCircle(
@@ -1309,9 +1375,8 @@ private fun HeroGlyphIcon(
 // ---------------------------------------------------------------------------
 
 /**
- * LazyRow 里的 [HeroPosterCard] 是 Android View，Compose 的 [FocusRequester] 无法直接定位它，
- * 因此把「下标 → 已创建的 View」登记起来，跨区移动时直接调用 `requestFocus()`，
- * 让卡片自己的红色描边生效。
+ * [HeroPosterCard] 是 Android View，Compose 的 [FocusRequester] 定位不到它，
+ * 因此登记「下标 → View」，跨区移动时直接 `requestFocus()`，卡片自带的红框才会亮。
  */
 private class HeroPosterViewRegistry {
 
@@ -1332,7 +1397,7 @@ private class HeroPosterViewRegistry {
     }
 }
 
-/** 在已挂载的 FocusRequester 列表里安全地请求焦点：未组合的 Lazy 项会抛异常，这里降级返回 false。 */
+/** 在已挂载的 FocusRequester 列表里安全请求焦点：未组合的 Lazy 项会抛异常，这里降级返回 false。 */
 private fun requestFocus(requesters: List<FocusRequester>, index: Int): Boolean {
     val requester = requesters.getOrNull(index) ?: return false
     return requestFocus(requester)
@@ -1342,7 +1407,7 @@ private fun requestFocus(requester: FocusRequester): Boolean =
     runCatching { requester.requestFocus() }.isSuccess
 
 // ---------------------------------------------------------------------------
-// 假数据（数据层未接，先验证结构与焦点；结构参考 xp.java 的 a=7 分支：纯字符串列表）
+// 假数据（数据层未接，先验证结构与焦点；结构同 xp.java 的 a=7 分支：纯字符串列表）
 // ---------------------------------------------------------------------------
 
 private data class HeroSearchResult(
@@ -1354,7 +1419,7 @@ private data class HeroSearchResult(
 
 private sealed class HeroKey {
 
-    /** 第 1 行第 1 格的占位（原版 `ic_keyboard_remote`）：不聚焦、无动作，只占位。 */
+    /** 第一行第一格占位（原版 `ic_keyboard_remote`）：不聚焦、无动作。 */
     data object Placeholder : HeroKey()
 
     data class Text(val value: String) : HeroKey()
@@ -1365,10 +1430,10 @@ private sealed class HeroKey {
 private enum class HeroKeyAction { CursorLeft, CursorRight, Backspace, Keyboard, House }
 
 /**
- * 42 键 = 第 1 行 `(占位, <, >, ⌫, 键盘, 房子, A)` + B-Z + 0-9
- * （`xd1.java` L27/L28 的排布：6 个图标键 + 36 个字符键）。
+ * 42 格 = 第一行 `(占位, <, >, ⌫, 键盘, 房子, A)` + B-Z + 0-9
+ * （`xd1.java` L27/L28：6 个图标键 + 36 个字符键）。
  *
- * 下标与键盘格子一一对应：0 占位、1 `<`、2 `>`、3 `⌫`、4 键盘、5 房子、6 `A` … 41 `9`，
+ * 下标与格子一一对应：0 占位、1 `<`、2 `>`、3 `⌫`、4 键盘、5 房子、6 `A` … 41 `9`，
  * 所以最右列正好是 A / H / O / V / 2 / 9。
  */
 private val HERO_KEYS: List<HeroKey> = buildList {
@@ -1382,7 +1447,6 @@ private val HERO_KEYS: List<HeroKey> = buildList {
     ('0'..'9').forEach { add(HeroKey.Text(it.toString())) }
 }
 
-/** 历史记录：结构同 xp.java 的 a=7 分支（字符串列表），最多展示 9 条。 */
 private val HERO_HISTORY: List<String> = listOf(
     "凡人修仙传",
     "http://127.0.0.1:8877/proxy?do=appSignature",
@@ -1398,7 +1462,7 @@ private val HERO_HOT: List<String> = listOf(
     "熊出没全集",
 )
 
-/** 建议词：先走精确假数据表，其余关键字从热搜 / 历史 / 结果标题里做包含匹配。 */
+/** 建议词：先走精确假数据表，其余关键字从热搜 / 历史 / 结果标题做包含匹配。 */
 private val HERO_SUGGESTIONS: Map<String, List<String>> = mapOf(
     "凡人" to listOf("凡人修仙传第一季", "凡人修仙传第二季", "凡人修仙传国漫"),
 )
@@ -1427,28 +1491,24 @@ private fun suggestionsFor(keyword: String): List<String> {
 // 尺寸常量（每一条都能在 ref_docs 里找到出处，见对应注释）
 // ---------------------------------------------------------------------------
 
-// 根容器：activity_search.xml L4/L10/L11 → paddingTop 24dp、paddingStart/End 24dp、paddingBottom 0dp。
+// 根容器：activity_search.xml L4/L10/L11 → paddingTop 24dp、paddingStart/End 24dp。
 private val ROOT_PADDING_H = 24.dp
 private val ROOT_PADDING_TOP = 24.dp
 
-// 左列：7 × 40dp + 6 × 8dp = 328dp（adapter_keyboard_text.xml L10 + CustomKeyboard.java L25）。
+// 键盘：7 列 × 40dp + 6 × 6dp = 316dp（adapter_keyboard_text.xml L10）。
 private val KEY_SIZE = 40.dp
-private val KEY_SPACING = 8.dp
-private val LEFT_COLUMN_WIDTH = 328.dp
+private val KEY_SPACING = 6.dp
+private val LEFT_COLUMN_WIDTH = 316.dp
 private val LEFT_COLUMN_MARGIN_END = 24.dp          // activity_search.xml L21
 
-// 顶部行：mic 36dp + marginEnd 12dp（L32-35）；键盘 marginTop 8dp（L61）。
+// 输入框行：mic 36dp + 间距 12dp；搜索按钮 40dp；图标 24dp。
 private val MIC_SIZE = 36.dp
 private val MIC_MARGIN_END = 12.dp
-private val KEYBOARD_TOP_GAP = 8.dp
-
-// 搜索按钮：40dp 圆形（与键盘键同尺寸），图标 24dp（adapter_keyboard_icon.xml L7-8）。
 private val SEARCH_BUTTON_SIZE = 40.dp
 private val SEARCH_BUTTON_MARGIN_START = 12.dp
 private val KEY_ICON_SIZE = 24.dp
 
-// 输入框：文字 24sp、字距 0.02（L37、L53）；红框描边 2dp / 圆角 13dp
-// （selector_tmdb_input.xml 的 focused 态 + 设计稿 topbar_search_page.png）。
+// 输入框：24sp、字距 0.02（L37/L53）；红框 2dp、圆角 13dp。
 private const val INPUT_TEXT_SP = 24f
 private const val INPUT_LETTER_SPACING = 0.02f
 private val INPUT_HEIGHT = 40.dp
@@ -1456,65 +1516,63 @@ private val INPUT_STROKE = 2.dp
 private val INPUT_SHAPE = RoundedCornerShape(13.dp)
 private val INPUT_PADDING_H = 12.dp
 
-// 键盘键：selector_keyboard.xml → shape_keyboard_normal/focused.xml 的 40dp/4dp 圆角/1.5dp 描边骨架，
-// 但配色按需求改为「红底焦点」：常态 0x33FFFFFF，焦点 0xFFFF0000（暂用红色，要求有焦点背景）。
+// 键盘键：40dp / 16sp / 4dp 圆角（adapter_keyboard_text.xml）。
 private val KEY_SHAPE = RoundedCornerShape(4.dp)
 private const val KEY_TEXT_SP = 16f
-private val KEY_STROKE = 1.5.dp
 private val KEY_BG_NORMAL = Color(0x33FFFFFF)
 private val KEY_BG_FOCUSED = Color(0xFFFF0000)
 
-// 焦点红色（键盘红底、胶囊/站点 Tab 的红描边共用同一个值，便于以后统一换肤）。
-private val KEY_BORDER_FOCUSED = Color(0xFFFF0000)
+// 焦点红（键盘红底、胶囊/Tab 描边共用）。
+private val FOCUS_RED = Color(0xFFFF0000)
 
-// 区块标题：20sp 粗体白字 + 4dp × 16dp 红条、间距 10dp（shape_red_bar.xml：2dp 圆角 / #e50914）。
+// 区块标题：20sp 粗体白 + 4×16dp 红条（shape_red_bar.xml：#e50914、2dp 圆角）+ 10dp 间距。
 private const val SECTION_TITLE_SP = 20f
 private val SECTION_BAR_WIDTH = 4.dp
 private val SECTION_BAR_HEIGHT = 16.dp
 private val SECTION_BAR_MARGIN_END = 10.dp
 private val SECTION_BAR_SHAPE = RoundedCornerShape(2.dp)
-private val SECTION_TITLE_BOTTOM_GAP = 8.dp         // activity_search.xml L92 / L109
+private val SECTION_TITLE_BOTTOM_GAP = 8.dp
 
-// 流式胶囊：adapter_search_word.xml L3/L12 + shape_item_round_normal.xml L7-13。
+// 胶囊：16sp、14dp×8dp 内边距、28dp 圆角、6dp 外边距（adapter_search_word.xml + shape_item_round_*）。
 private const val CHIP_TEXT_SP = 16f
 private val CHIP_PADDING_H = 14.dp
 private val CHIP_PADDING_V = 8.dp
 private val CHIP_MARGIN = 6.dp
-private val CHIP_SHAPE = RoundedCornerShape(percent = 50) // radius 28dp ≥ 高度一半时就是胶囊
+private val CHIP_SHAPE = RoundedCornerShape(percent = 50)
 private val CHIP_STROKE = 1.5.dp
-private val CHIP_BG_NORMAL = Color(0x33000000)       // @color/black_20（半透明，不是实心黑底）
-private val CHIP_BG_FOCUSED = Color(0x66000000)      // @color/black_40 + 红描边
-private val CHIP_BG_SELECTED = Color(0x66000000)     // @color/black_40（activated）
+private val CHIP_BG_NORMAL = Color(0x33000000)      // black_20（半透明，不是纯黑）
+private val CHIP_BG_FOCUSED = Color(0x66000000)     // black_40 + 红描边
+private val CHIP_BG_SELECTED = Color(0x66000000)    // activated
 
-// 站点 Tab：adapter_type.xml L3/L10（13sp / 26dp）+ dz2.java L45-47（选中 1.08 倍、140ms）。
+// 站点 Tab：13sp / 26dp（adapter_type.xml）+ 行高 36dp + 12dp 间距 + 24dp 内容内边距。
 private const val SITE_TAB_SP = 13f
 private val SITE_TAB_HEIGHT = 26.dp
 private val SITE_TAB_SHAPE = RoundedCornerShape(13.dp)
 private const val SITE_SELECTED_SCALE = 1.08f
 private const val SITE_SCALE_DURATION_MS = 140
-private val SITE_ITEM_SPACING = 12.dp                // SearchActivityV2 L408 setHorizontalSpacing(dp(12))
-private val SITE_ROW_HEIGHT = 36.dp                  // 需求：站点 Tab 行约 36dp（Tab 本体 26dp 居中）
-private val SITE_ROW_BOTTOM_PADDING = 2.dp           // activity_search.xml L154
-private val SITE_ROW_BOTTOM_GAP = 10.dp              // activity_search.xml L159
-private val RESULT_SECTION_TOP_GAP = 12.dp           // activity_search.xml L151
+private val SITE_ROW_HEIGHT = 36.dp
+private val SITE_ITEM_SPACING = 12.dp
+private val SITE_POSTER_GAP = 12.dp
+private val RESULT_CONTENT_PADDING = 0.dp          // 根 Column 已有 24dp padding，再缩进会与「历史」标题错位
+private val RESULT_SECTION_TOP_GAP = 12.dp         // activity_search.xml L151
 
-// 海报行：activity_search.xml L167 → 215dp；卡片间距 16dp（SearchActivityV2 L425）。
+// 海报行：215dp（activity_search.xml L167）+ 12dp 间距。
 private val POSTER_AREA_HEIGHT = 215.dp
-private val POSTER_ITEM_SPACING = 16.dp
+private val POSTER_ITEM_SPACING = 12.dp
 private const val POSTER_SCROLL_ANCHOR = 4
 
 // 红色：@color/red = #e50914（shape_red_bar.xml L4）。
 private val ACCENT_RED = Color(0xFFE50914)
 
-// 输入长度上限：CustomKeyboard.onTextClick L33（> 19 直接返回）；历史最多 9 条。
+// 输入上限 19 字（CustomKeyboard.onTextClick L33）；历史最多 9 条。
 private const val KEYWORD_MAX_LENGTH = 19
 private const val HISTORY_LIMIT = 9
 
-// 键盘网格：xd1.java 的 42 项 = 6 行 × 7 列；下标 0 为占位格，5 为「房子」。
+// 键盘网格：42 格 = 6 行 × 7 列；0 占位、5 房子。
 private const val KEY_COLUMNS = 7
 private const val KEY_ROWS = 6
 private const val PLACEHOLDER_INDEX = 0
-private const val FIRST_ACTION_KEY_INDEX = 1
+private const val FIRST_KEY_INDEX = 1
 private const val HOUSE_KEY_INDEX = 5
 
 // 图标线稿粗细（24dp 基准）。
