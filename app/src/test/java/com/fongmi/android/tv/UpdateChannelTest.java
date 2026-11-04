@@ -73,7 +73,7 @@ public class UpdateChannelTest {
     public void releaseWorkflowCanRepairAnExistingReleaseOnRetry() throws Exception {
         String workflow = read(findRepoPath().resolve(Path.of(".github", "workflows", "android-release.yml")));
         String resolveStep = between(workflow, "- name: Resolve release tag", "- name: Configure release signing");
-        String releaseStep = between(workflow, "- name: Create GitHub Release", "- name: Publish update channel manifests");
+        String releaseStep = between(workflow, "- name: Publish Release", "- name: Publish update channel manifests");
 
         assertFalse("An existing tag at the same commit should be reusable",
                 resolveStep.contains("Release tag exists::$TAG already exists"));
@@ -83,15 +83,26 @@ public class UpdateChannelTest {
                 resolveStep.contains("$(date +%Y%m%d%H%M)"));
         assertTrue("A retry must reject an existing tag that targets another commit",
                 resolveStep.contains("Existing release tag targets another commit"));
-        assertTrue("A retry must detect an already-created GitHub Release",
-                releaseStep.contains("if gh release view \"${{ steps.meta.outputs.tag }}\""));
-        assertTrue("A retry must repair partially uploaded release assets",
-                releaseStep.contains("gh release upload \"${{ steps.meta.outputs.tag }}\" dist/*.apk dist/*.json --clobber"));
+        // 发布步骤已从手写 `gh release create/upload` 换成 softprops/action-gh-release：
+        // 该 action 会按 tag 查找已有 Release，存在就更新、同名资产直接覆盖（等价于旧脚本里的
+        // `gh release view` 判断 + `--clobber`），重试同样是幂等的。
+        // 这里只校验「用的是这个 action」「上传清单覆盖 APK 与 manifest」「失败不静默」，
+        // 不再绑定具体命令行字符串，避免以后换实现时又因为匹配不到而误报。
+        assertTrue("Release publication must go through the retrying release action",
+                releaseStep.contains("uses: softprops/action-gh-release"));
+        assertTrue("A retry must re-upload every APK and manifest for the resolved tag",
+                releaseStep.contains("tag_name: ${{ steps.meta.outputs.tag }}")
+                        && releaseStep.contains("dist/*.apk")
+                        && releaseStep.contains("dist/*.json"));
+        assertTrue("A partially published release must fail loudly instead of being skipped",
+                releaseStep.contains("fail_on_unmatched_files: true"));
     }
 
     private static String between(String source, String start, String end) {
         int from = source.indexOf(start);
+        assertTrue("Missing workflow marker: " + start, from >= 0);
         int to = source.indexOf(end, from + start.length());
+        assertTrue("Missing workflow marker after '" + start + "': " + end, to > from);
         return source.substring(from, to);
     }
 
