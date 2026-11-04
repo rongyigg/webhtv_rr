@@ -108,11 +108,12 @@ import kotlinx.coroutines.launch
  * ```
  * Column(fillMaxSize + padding(top=24dp))                          // 唯一根节点，无横向 padding、无整体滚动
  *   ├─ Row(fillMaxWidth + weight(1f))                                // L12-16：上半区
- *   │    ├─ KeyboardSection(padding(start=24dp) + width=328dp)       // L17-65：输入行 40 + 8 + 键盘 280
- *   │    └─ RightContentColumn(weight(1f) + padding(end=24dp))       // L66-143：历史 + 热搜 / 建议
+ *   │    ├─ KeyboardSection(start=24 + width=328 + verticalScroll)   // L17-65：输入行 40 + 8 + 键盘 280
+ *   │    └─ RightContentColumn(weight(1f) + end=24 + verticalScroll) // L66-143：历史 + 热搜 / 建议
  *   └─ if (hasInput) ResultSection(fillMaxWidth + wrapContentHeight + padding(top=12dp))
- *        ├─ LazyRow(height=36dp, contentPadding(24, 24),间距 8dp)      // L152-161：站点 Tab
- *        └─ Box(fillMaxWidth + height=215dp)                         // L162-167：海报容器
+ *        ├─ LazyRow(height=32dp, contentPadding(24, 24), 间距 8dp)     // L152-161：站点 Tab
+ *        ├─ Spacer(8dp)
+ *        └─ Box(fillMaxWidth + height=215dp)                          // L162-167：海报容器
  *             └─ LazyRow(fillMaxSize, contentPadding(24, 24),间距 12dp)
  *                  └─ AndroidView(HeroPosterCard 120×214dp，绝不加尺寸 Modifier)
  * ```
@@ -122,9 +123,9 @@ import kotlinx.coroutines.launch
  *    右列自己 `padding(end=24dp)`，两条 `LazyRow` 用 `contentPadding(24, 24)`。
  *    Compose 的 LazyRow 按自身外框裁剪，只有它的滚动区够宽，第一项「全部」在焦点放大
  *    1.08 时才不会被切边 —— 这正是原版 `clipChildren=false + clipToPadding=false` 的等价写法。
- * 2. 键盘**不写死高度**：`Column` + 6 行 `Row` 自然测量（328dp），不 `fillMaxHeight`、
- *    不 `verticalScroll`、不 `heightIn`；上半区 `weight(1f)`、下半区 `wrapContentHeight()`，
- *    两者顺序排列，**物理上不可能互相覆盖**，1080P 屏上键盘绝不会被结果区遮挡。
+ * 2. **上下半区彻底分离**：上半区 `weight(1f)`、下半区 `wrapContentHeight()`（绝不给 weight），
+ *    两者顺序排列，物理上不可能互相覆盖。键盘与右列各带一层 `verticalScroll` 兜底，
+ *    小屏/超大字体时内容仍可完整滚到，1080P 下两层滚动静止不动。
  * 3. 海报区高度由**外层 `Box(height=215dp)`** 决定（原版 FrameLayout 就是这么写的），
  *    卡片自身 `onMeasure` 是 120×214dp，215 = 214 + 1dp 余量；`AndroidView` 里不加任何尺寸 Modifier。
  *
@@ -424,8 +425,8 @@ private fun HeroSearchScreen(
                 .fillMaxWidth()
                 .weight(1f),
         ) {
-            // 左列：【标准 2】不写死高度、不 fillMaxHeight、不 verticalScroll，
-            // 宽度 328dp 由内容撑（7×40 + 6×8），左边 24dp 由 KeyboardSection 自己补。
+            // 左列：宽度 328dp（7×40 + 6×8），左边 24dp 由 KeyboardSection 自己补；
+            // 高度 = fillMaxHeight + verticalScroll 兜底，1080P 下滚动静止。
             KeyboardSection(
                 field = field,
                 inputRequester = inputRequester,
@@ -521,8 +522,9 @@ private fun HeroSearchScreen(
  *   宽度是 7×40dp + 6×8dp = 328dp 算出来的；
  * - 与输入框行的间距：**8dp**（`activity_search.xml` L61 `android:layout_marginTop="8dp"`）。
  *
- * 高度：【标准 2】**不写死、不 fillMaxHeight、不 verticalScroll**，完全按内容自然测量：
- * 输入行 40 + 8 + 6×40 + 5×8 = **328dp**。1080P 屏上半区高度远大于 328dp，不会有任何遮挡。
+ * 高度：【容错】`fillMaxHeight + verticalScroll(rememberScrollState())`。
+ * 1080P 屏上半区高度 > 328dp，滚动容器内容不超出视口，**实际静止不动**；
+ * 只有小屏或超大字体把内容顶出视口时，焦点下移才会把下一行带进可视区，绝不遮挡。
  *
  * 横向：【标准 1】外层根节点不再加 start/end padding，24dp 左边距由这里自己让出。
  * 顺序必须是 `padding(start = 24dp).width(328dp)`（padding 在外、width 在内）：
@@ -545,7 +547,11 @@ private fun KeyboardSection(
     Column(
         modifier = Modifier
             .padding(start = ROOT_PADDING_H)
-            .width(LEFT_COLUMN_WIDTH),
+            .width(LEFT_COLUMN_WIDTH)
+            .fillMaxHeight()
+            // 【容错】小屏/超大字体时内容超过视口，遥控器往下按焦点会自动把该行带进可视区；
+            // 大屏（1080P）下 328dp 内容小于视口，这一层滚动静止，不会产生任何位移。
+            .verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(KEY_SPACING),
     ) {
         // 输入框行：mic 36dp + 12dp + 只读输入框(weight 1f) + 12dp + 搜索 40dp（整行 40dp）
@@ -1008,8 +1014,8 @@ private fun HeroWordChip(
  * 不吃 weight、不 fillMaxSize，**永远挤压不到上半区键盘**。
  * ```
  * Column(wrapContentHeight)                       // L145-151：match_parent 宽 + wrap 高 + marginTop 12
- *   ├─ LazyRow(height = 36dp)                     // L152-161：siteRecycler，36dp 行高
- *   ├─ Spacer(12dp)                               // L154 paddingBottom 2 + L159 marginBottom 10
+ *   ├─ LazyRow(height = 32dp)                     // L152-161：siteRecycler，32dp 行高
+ *   ├─ Spacer(8dp)                                // Tab 行与海报区之间 8dp
  *   └─ Box(fillMaxWidth + height = 215dp)         // L162-167：FrameLayout height="215dp"
  *        └─ LazyRow(fillMaxSize)                  // L168-175：recycler match_parent
  * ```
@@ -1073,7 +1079,7 @@ private fun ResultSection(
             }
         }
 
-        // 12dp = 原版 siteRecycler paddingBottom 2dp + marginBottom 10dp（L154 / L159）。
+        // Tab 行与海报 Box 之间 8dp。
         Spacer(modifier = Modifier.height(SITE_POSTER_GAP))
 
         // 【标准 3】海报容器：高度 215dp（`activity_search.xml` L162-167 的 FrameLayout
@@ -1142,7 +1148,7 @@ private fun ResultSection(
 }
 
 /**
- * 站点胶囊：26dp 高、13sp、13dp 圆角（`adapter_type.xml` L3/L10）；
+ * 站点胶囊：26dp 高、16sp、13dp 圆角（`adapter_type.xml` L3/L10，字号按需求统一到 16sp）；
  * 选中放大 1.08 / 140ms（`dz2.java` L45-47）；焦点态红描边 + 提亮底色。
  */
 @Composable
@@ -1557,8 +1563,8 @@ private val INPUT_STROKE = 2.dp
 private val INPUT_SHAPE = RoundedCornerShape(13.dp)
 private val INPUT_PADDING_H = 12.dp
 
-// 左列键盘块自然高度 = 输入行 40 + 8(activity_search.xml L61 marginTop) + 6×40 + 5×8 = 328dp。
-// 与宽度 328dp 相等 → 整块是 328×328 的方阵；不写死、不 heightIn、不 fillMaxHeight（标准 2）。
+// 左列键盘内容自然高度 = 输入行 40 + 8(activity_search.xml L61 marginTop) + 6×40 + 5×8 = 328dp。
+// 宽度同为 328dp，整块是 328×328 的方阵；容器再套 fillMaxHeight + verticalScroll 兜底。
 
 // 键盘键：40dp / 16sp / 4dp 圆角（adapter_keyboard_text.xml）。
 private val KEY_SHAPE = RoundedCornerShape(4.dp)
@@ -1570,10 +1576,10 @@ private const val KEY_FOCUS_FADE_MS = 90            // 红底跟随焦点的过�
 // 焦点红（键盘红底、胶囊/Tab 描边共用）。
 private val FOCUS_RED = Color(0xFFFF0000)
 
-// 区块标题：20sp 粗体白 + 4×16dp 红条（shape_red_bar.xml：#e50914、2dp 圆角）+ 10dp 间距。
+// 区块标题：20sp 粗体白 + 4×20dp 红条（shape_red_bar.xml：#e50914、2dp 圆角）+ 10dp 间距。
 private const val SECTION_TITLE_SP = 20f
 private val SECTION_BAR_WIDTH = 4.dp
-private val SECTION_BAR_HEIGHT = 16.dp
+private val SECTION_BAR_HEIGHT = 20.dp
 private val SECTION_BAR_MARGIN_END = 10.dp
 private val SECTION_BAR_SHAPE = RoundedCornerShape(2.dp)
 private val SECTION_TITLE_BOTTOM_GAP = 8.dp
@@ -1589,16 +1595,16 @@ private val CHIP_BG_NORMAL = Color(0x33000000)      // black_20（半透明，�
 private val CHIP_BG_FOCUSED = Color(0x66000000)     // black_40 + 红描边
 private val CHIP_BG_SELECTED = Color(0x66000000)    // activated
 
-// 站点 Tab：13sp / 26dp（adapter_type.xml）+ 行高 36dp（activity_search.xml L152-161）+ 间距 8dp。
-private const val SITE_TAB_SP = 13f
+// 站点 Tab：16sp（与胶囊标签同字号）+ 行高 32dp（activity_search.xml L152-161）+ 间距 8dp。
+private const val SITE_TAB_SP = 16f
 private val SITE_TAB_HEIGHT = 26.dp
 private val SITE_TAB_SHAPE = RoundedCornerShape(13.dp)
 private const val SITE_SELECTED_SCALE = 1.08f
 private const val SITE_SCALE_DURATION_MS = 140
-private val SITE_ROW_HEIGHT = 36.dp
+private val SITE_ROW_HEIGHT = 32.dp
 private val SITE_ITEM_SPACING = 8.dp
-// Tab 行与海报 Box 之间的 12dp = siteRecycler paddingBottom 2dp + marginBottom 10dp（L154 / L159）。
-private val SITE_POSTER_GAP = 12.dp
+// Tab 行与海报 Box 之间的 8dp。
+private val SITE_POSTER_GAP = 8.dp
 // 两条 LazyRow 的内容内边距：start/end 都留 24dp（标准 1）。
 // 外层根节点已不再有横向 padding，LazyRow 的滚动区就是整屏宽度，
 // 首项左侧的 24dp 就是焦点放大 1.08 时的裁剪缓冲区，「全部」不会被切边。
