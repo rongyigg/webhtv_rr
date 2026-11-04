@@ -63,6 +63,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
+import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
@@ -81,8 +82,10 @@ import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.TextStyle
@@ -97,6 +100,8 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import coil3.compose.AsyncImage
+import coil3.request.ImageRequest
 import com.fongmi.android.tv.R
 import com.fongmi.android.tv.setting.Setting
 import com.fongmi.android.tv.ui.hero.HERO_SOURCE_ENTRIES
@@ -147,9 +152,14 @@ import kotlinx.coroutines.launch
  * - **键盘最右列按 → 不消费、返回 false**，交给 Compose 原生 2D 焦点搜索，
  *   按几何位置自动落到右侧「同一排」的第一个胶囊；
  * - **键盘最后一行按 ↓** → 有结果区时按所在列落到站点 Tab，无结果区时交还原生搜索；
- * - **胶囊按 ← 同样不消费**，由原生 2D 搜索把焦点交还键盘最右列；
- * - 胶囊 ↓ → 同列的下一个区块（历史 → 建议/热搜）→ 站点 Tab；Tab ↓ → 首张海报；
- *   海报 ←→ 行内移动、↑ → 站点 Tab；确定键 → [HeroDetailActivity.start]。
+ * - **胶囊按 ← / ↓ 都不消费**，交原生 2D 搜索：← 回键盘最右列；
+ *   ↓ 先落同一区块的下一行（如「建议」第二排），再落下一个区块 / 站点 Tab；
+ *   Tab ↓ → 首张海报；海报 ←→ 行内移动、↑ → 站点 Tab；确定键 → [HeroDetailActivity.start]。
+ *
+ * 外观：
+ * - 背景 = 首页大图极小尺寸解码后放大（等价高斯模糊）+ 半透明黑遮罩，同原版
+ *   `SearchActivityV2` 的 `heroBitmap` 模糊 + `0x33000000` 蒙层；
+ * - 胶囊焦点 = 红色渐变色块（#E50914 → #F44336），同原版 `shape_item_round_focused`，不是描边。
  */
 class HeroSearchActivity : ComponentActivity() {
 
@@ -180,9 +190,12 @@ class HeroSearchActivity : ComponentActivity() {
             systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
         }
         HeroImageLoader.install()
+        // 首页带过来的那张大图：本页把它当磨砂底图（原版就是把首页 heroBitmap 模糊后当背景）。
+        val backdropUrl = intent?.getStringExtra(EXTRA_BACKDROP)
         setContent {
             MaterialTheme(colorScheme = darkColorScheme()) {
                 HeroSearchScreen(
+                    backdropUrl = backdropUrl,
                     // 卡片点击只走这一个真实入口：不碰播放器，也不碰 catvod 数据层。
                     onOpenDetail = { title -> HeroDetailActivity.start(this, title) },
                 )
@@ -192,15 +205,20 @@ class HeroSearchActivity : ComponentActivity() {
 
     companion object {
 
-        /** 统一入口：首页顶栏「搜索」调用。 */
-        fun start(context: Context) {
-            context.startActivity(Intent(context, HeroSearchActivity::class.java))
+        private const val EXTRA_BACKDROP = "hero_backdrop"
+
+        /** 统一入口：首页顶栏「搜索」调用，并把首页当前那张大图一起带过来做磨砂背景。 */
+        fun start(context: Context, backdropUrl: String? = null) {
+            context.startActivity(
+                Intent(context, HeroSearchActivity::class.java).putExtra(EXTRA_BACKDROP, backdropUrl),
+            )
         }
     }
 }
 
 @Composable
 private fun HeroSearchScreen(
+    backdropUrl: String?,
     onOpenDetail: (String) -> Unit,
 ) {
     val context = LocalContext.current
@@ -457,18 +475,15 @@ private fun HeroSearchScreen(
         val keyboardBandHeight = maxHeight - ROOT_PADDING_TOP - RESULT_BAND_HEIGHT
         val keyboardScale = (keyboardBandHeight / KEYBOARD_NATURAL_HEIGHT).coerceIn(0f, 1f)
 
+        // 背景层：首页大图 → 极小尺寸解码（等价高斯模糊）→ 半透明黑遮罩，
+        // 原版 SearchActivityV2 的 U1() + setBackgroundColor(0x33000000) 就是这个结构。
+        HeroSearchBackground(backdropUrl)
+
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .background(
-                    Brush.verticalGradient(
-                        0.0f to Color(0xFF0B1119),
-                        0.55f to Color(0xFF101823),
-                        1.0f to Color.Black,
-                    ),
-                )
                 // 【标准 1】外层不放 start/end padding：横向的 24dp 缓冲区交给各子节点自己处理
-                // （键盘自己补 start，两条 LazyRow 用 contentPadding 补两端），
+                // （左列前面一个 24dp Spacer、两条 LazyRow 用 contentPadding 补两端），
                 // 这样 LazyRow 的滚动区就是整屏宽度，第一项（「全部」）左右都有 24dp 可裁缓冲。
                 .padding(top = ROOT_PADDING_TOP),
         ) {
@@ -570,6 +585,57 @@ private fun HeroSearchScreen(
                     },
                 )
             }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 背景层：首页大图 → 磨砂 → 半透明黑遮罩
+// ---------------------------------------------------------------------------
+
+/**
+ * 本页背景，结构对齐原版 `SearchActivityV2`：
+ *
+ * ```java
+ * view.setBackgroundResource(R.drawable.bg_hero_mask_v);   // 纵向压黑
+ * view2.setBackgroundColor(855638016);                    // 0x33000000，20% 黑
+ * U1();  // 把首页传进来的 heroBitmap 丢到后台线程模糊，再 setImageBitmap 铺满
+ * ```
+ *
+ * 结论：**原版是「高斯模糊的首页大图 + 半透明黑遮罩」，不是纯粹的半透明蒙版**——
+ * 图2 里能看见海报的色块轮廓却完全看不出细节，正是模糊后的结果；
+ * 如果只是半透明蒙版，下面的海报和文字会是清晰的。
+ *
+ * 这里的实现等价但更省：把图**解码到 48×27** 再拉伸铺满整屏。
+ * 双线性放大天然就是高斯模糊的效果，所有 Android 版本表现一致，
+ * 既不需要 `RenderEffect`（API 31+，且电视盒子 GPU 开销高），
+ * 也不需要已废弃的 RenderScript，实际绘制成本只有一张 48×27 的小图。
+ *
+ * 没有大图时（例如从别处直接打开本页）退回原来的纯色渐变。
+ */
+@Composable
+private fun HeroSearchBackground(backdropUrl: String?) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black),
+    ) {
+        if (backdropUrl.isNullOrBlank()) {
+            Box(modifier = Modifier.fillMaxSize().background(FALLBACK_BACKGROUND))
+        } else {
+            AsyncImage(
+                model = ImageRequest.Builder(LocalContext.current)
+                    .data(backdropUrl)
+                    .size(BACKDROP_SAMPLE_WIDTH, BACKDROP_SAMPLE_HEIGHT)
+                    .build(),
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize(),
+            )
+            // ① 整体半透明黑：原版 0x33000000，这里加深一点保证白字在浅色背景上也够清楚。
+            Box(modifier = Modifier.fillMaxSize().background(BACKDROP_SCRIM))
+            // ② 底部压黑：海报行下方是白字标题，必须有深底托住。
+            Box(modifier = Modifier.fillMaxSize().background(BACKDROP_BOTTOM_FADE))
         }
     }
 }
@@ -919,8 +985,6 @@ private fun RightContentColumn(
             firstRowRequester = if (history.isNotEmpty()) rightFirstRequester else null,
             isFirstRowSection = history.isNotEmpty(),
             resultsVisible = hasInput,
-            // 历史 ↓ → 建议 / 热搜 同一位置（原生 2D 搜索跨区块时会失手）。
-            downRequesters = if (words.isNotEmpty()) wordRequesters else null,
             onWordClick = onWordClick,
             onDownToResults = onDownToResults,
         )
@@ -983,8 +1047,6 @@ private fun HeroWordSection(
     firstRowRequester: FocusRequester?,
     isFirstRowSection: Boolean,
     resultsVisible: Boolean,
-    // 下一个区块（历史 → 建议/热搜）的 requester 列表：↓ 时按同一位置落点。
-    downRequesters: List<FocusRequester>? = null,
     onWordClick: (String) -> Unit,
     onDownToResults: () -> Unit,
 ) {
@@ -1009,7 +1071,6 @@ private fun HeroWordSection(
                         requesters.getOrNull(index)
                     },
                     resultsVisible = resultsVisible,
-                    downRequester = downRequesters?.let { it.getOrNull(index) ?: it.firstOrNull() },
                     onDownToResults = onDownToResults,
                     onClick = { onWordClick(word) },
                     modifier = Modifier.padding(CHIP_MARGIN),
@@ -1021,14 +1082,14 @@ private fun HeroWordSection(
 
 /**
  * 胶囊标签：**不铺纯黑**，底色沿用 `selector_item_round.xml` 的半透明黑；
- * 焦点态额外加 **1.5dp 纯红描边**（本版要求的焦点反馈），保证在暗背景上一眼可见。
+ * 焦点态是原版 `shape_item_round_focused` 的**红色渐变色块**（#E50914 → #F44336），
+ * 只在焦点时整块变红，不使用描边。
  */
 @Composable
 private fun HeroWordChip(
     text: String,
     requester: FocusRequester?,
     resultsVisible: Boolean,
-    downRequester: FocusRequester? = null,
     onDownToResults: () -> Unit,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
@@ -1037,13 +1098,18 @@ private fun HeroWordChip(
     val isFocused by interaction.collectIsFocusedAsState()
     var focusFlag by remember { mutableStateOf(false) }
     val focused = isFocused || focusFlag
+    val focusManager = LocalFocusManager.current
 
     Box(
         modifier = modifier
             .then(if (requester != null) Modifier.focusRequester(requester) else Modifier)
             .clip(CHIP_SHAPE)
-            .background(if (focused) CHIP_BG_FOCUSED else CHIP_BG_NORMAL, CHIP_SHAPE)
-            .then(if (focused) Modifier.border(CHIP_STROKE, FOCUS_RED, CHIP_SHAPE) else Modifier)
+            // 焦点态 = **红色渐变色块**（左深右浅：#E50914 → #F44336 → 玫瑰粉），
+            // 整块实心变红、无描边 —— 与原版截图里「开心锤锤」的焦点样式一致。
+            .background(
+                brush = if (focused) CHIP_FOCUS_BRUSH else SolidColor(CHIP_BG_NORMAL),
+                shape = CHIP_SHAPE,
+            )
             .onFocusChanged { focusFlag = it.isFocused }
             .onPreviewKeyEvent { event ->
                 if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
@@ -1055,20 +1121,20 @@ private fun HeroWordChip(
 
                     // ←/→ 一律不拦截：交给 Compose 原生 2D 焦点搜索，
                     // 它会按几何位置自动把焦点交给键盘最右列（高度最接近的那一排）。
-                    // ↓ 的落点顺序：下一区块同一位置的胶囊（历史 → 建议/热搜）→ 站点 Tab。
-                    Key.DirectionDown -> when {
-                        downRequester != null -> {
-                            // 用与其他跨区交接同一个安全入口（未挂载时不抛异常）。
-                            requestFocus(downRequester)
+                    //
+                    // ↓ 同样**先走原生 2D 搜索**：它会先落到同一区块的下一行，
+                    // 已经是最后一行时再落到下一个区块/站点 Tab。
+                    // 以前的写法直接跳到站点 Tab，于是「建议」第二行的胶囊永远进不去。
+                    Key.DirectionDown -> {
+                        if (focusManager.moveFocus(FocusDirection.Down)) {
                             true
-                        }
-
-                        resultsVisible -> {
+                        } else if (resultsVisible) {
+                            // 原生搜索不到目标（例如区块刚好被清空）：兜底落到站点 Tab。
                             onDownToResults()
                             true
+                        } else {
+                            false
                         }
-
-                        else -> false
                     }
 
                     else -> false
@@ -1617,6 +1683,22 @@ private fun suggestionsFor(keyword: String): List<String> {
 // 尺寸常量（每一条都能在 ref_docs 里找到出处，见对应注释）
 // ---------------------------------------------------------------------------
 
+// 背景：首页大图按 48×27 解码后拉伸铺满 = 等价高斯模糊（见 HeroSearchBackground）。
+private const val BACKDROP_SAMPLE_WIDTH = 48
+private const val BACKDROP_SAMPLE_HEIGHT = 27
+private val BACKDROP_SCRIM = Color(0x4D000000)      // 30% 黑：压住高光、保留色块
+private val BACKDROP_BOTTOM_FADE = Brush.verticalGradient(
+    0.0f to Color.Transparent,
+    0.55f to Color.Black.copy(alpha = 0.35f),
+    1.0f to Color.Black.copy(alpha = 0.92f),
+)
+// 没有大图时的兜底：原来的深蓝黑渐变。
+private val FALLBACK_BACKGROUND = Brush.verticalGradient(
+    0.0f to Color(0xFF0B1119),
+    0.55f to Color(0xFF101823),
+    1.0f to Color.Black,
+)
+
 // 根容器：activity_search.xml L4 → paddingTop 24dp；横向 24dp 不再放在根上（标准 1），
 // 而是拆给各子节点：键盘自己 padding(start=24)、右列自己 padding(end=24)、
 // 两条 LazyRow 用 contentPadding(24, 24) —— 只有 LazyRow 自己的滚动区够宽，焦点放大才不被裁。
@@ -1711,6 +1793,22 @@ private val RESULT_BAND_HEIGHT = RESULT_SECTION_TOP_GAP + SITE_ROW_HEIGHT + SITE
 
 // 红色：@color/red = #e50914（shape_red_bar.xml L4）。
 private val ACCENT_RED = Color(0xFFE50914)
+
+// 焦点渐变的中间色标：@color/red_500 = #F44336，与项目里 shape_detail_item_focused /
+// shape_detail_play_focused（angle=315）同色，保证全站焦点色一致。
+private val RED_500 = Color(0xFFF44336)
+
+// 焦点渐变的浅色端：原版截图里「开心锤锤」这个焦点块右端明显透粉，
+// 不是纯 #F44336，所以补一个偏玫瑰色的末端色标。
+private val RED_300 = Color(0xFFFF7A85)
+
+// 胶囊焦点块：**左深右浅的红色横向渐变**，对齐原版截图（#E50914 → #F44336 → 玫瑰粉），
+// 整块实心变红，四周无描边。
+private val CHIP_FOCUS_BRUSH = Brush.horizontalGradient(
+    0.0f to ACCENT_RED,
+    0.55f to RED_500,
+    1.0f to RED_300,
+)
 
 // 输入上限 19 字（CustomKeyboard.onTextClick L33）；历史最多 9 条。
 private const val KEYWORD_MAX_LENGTH = 19

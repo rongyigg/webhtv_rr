@@ -317,7 +317,8 @@ private fun HeroHomeScreen(onOpenDetail: (String) -> Unit) {
                 // 这里在 HeroHomeScreen 作用域内，`context` 就是 L210 的 LocalContext.current。
                 onOpenHistory = { HeroHistoryActivity.start(context) },
                 // 顶栏「搜索」→ HeroSearchActivity（Compose 体系，纯 UI 结构 + 假数据）。
-                onOpenSearch = { HeroSearchActivity.start(context) },
+                // 把首页当前这张大图一起带过去：搜索页用它做磨砂背景（同原版模糊首页大图的做法）。
+                onOpenSearch = { HeroSearchActivity.start(context, heroPoster.backdropUrl) },
                 // 顶栏 ↓ 进入 Tab 栏：落到记忆中的 Tab，而不是与顶栏项横向对齐的那一个。
                 onMoveDown = { focusTab() },
             )
