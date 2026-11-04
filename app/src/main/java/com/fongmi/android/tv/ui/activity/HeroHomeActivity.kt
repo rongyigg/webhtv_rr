@@ -7,6 +7,7 @@ import android.graphics.Color as AndroidColor
 import android.graphics.drawable.ColorDrawable
 import android.os.Bundle
 import android.os.SystemClock
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.compose.setContent
@@ -49,6 +50,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -87,11 +89,15 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import androidx.lifecycle.Observer
 import androidx.lifecycle.ViewModelProvider
 import coil3.compose.AsyncImage
 import com.fongmi.android.tv.R
 import com.fongmi.android.tv.api.SiteApi
 import com.fongmi.android.tv.api.config.VodConfig
+import com.fongmi.android.tv.bean.Result
+import com.fongmi.android.tv.bean.Site
+import com.fongmi.android.tv.bean.Vod
 import com.fongmi.android.tv.model.SiteViewModel
 import com.fongmi.android.tv.setting.Setting
 import com.fongmi.android.tv.setting.SiteBlockSetting
@@ -138,6 +144,25 @@ import kotlinx.coroutines.launch
  */
 class HeroHomeActivity : ComponentActivity() {
 
+    /**
+     * Activity 作用域的 [SiteViewModel]。
+     *
+     * 首页真实化（`homeContent()` 写 `result`）和换源弹窗（`searchContent(List)` 写 `search`）
+     * **必须共用这一个实例**：它构造函数里就建了两个单线程 executor，按次 new 会泄漏线程；
+     * 同时两条 LiveData 通道各自独立，首页刷新不会打断换源检索。
+     */
+    private val siteViewModel: SiteViewModel by lazy {
+        ViewModelProvider(this)[SiteViewModel::class.java]
+    }
+
+    /**
+     * 上一次发起 `homeContent()` 时用的接口源 key。
+     *
+     * [onResume] 拿它和当前 [VodConfig] 的首页源比对：不同就说明用户刚在设置页换了源，
+     * 需要重新拉一次首页；相同则直接跳过，避免每次回到前台都白刷一遍。
+     */
+    private var loadedHomeSiteKey: String = ""
+
     /** 上一次按返回键的单调时间戳（毫秒）；`null` 表示当前不在“等待第二次确认”的窗口内。 */
     private var lastBackPressedAt: Long? = null
 
@@ -164,19 +189,59 @@ class HeroHomeActivity : ComponentActivity() {
         }
         installDoubleBackToExit()
         HeroImageLoader.install()
-        // 换源弹窗（以及后续首页数据真实化）共用同一个 Activity 作用域的 SiteViewModel：
-        // 它构造函数里就建了两个单线程 executor，绝对不能按弹窗 / 按次 new（会泄漏线程）。
-        val siteViewModel = ViewModelProvider(this)[SiteViewModel::class.java]
+        // 首页真实化：记录「当前用的是哪个源」。onResume 靠它判断用户是不是刚从设置页换了源。
+        loadedHomeSiteKey = VodConfig.get().getHome().key
         setContent {
             MaterialTheme(colorScheme = darkColorScheme()) {
                 HeroHomeScreen(
                     siteViewModel = siteViewModel,
-                    onOpenDetail = { title -> HeroDetailActivity.start(this, title) },
+                    // 首次加载与切源后重载都走这里，日志只在一个地方打。
+                    onRefreshHome = { refreshHome("界面请求") },
+                    // 卡片确定键 → 真实详情页，带上真实的 (Vod, Site)。
+                    onOpenDetail = { vod, site -> HeroDetailActivity.start(this, vod, site) },
                     // 顶栏「设置」：SettingActivity 只存在于 leanback flavor，见 openSettings 的说明。
                     onOpenSettings = { openSettings() },
                 )
             }
         }
+    }
+
+    /**
+     * 从设置页回来时强制刷新首页。
+     *
+     * 用户在设置页里新增 / 切换接口源后，[VodConfig] 的内存状态已经变了，
+     * 但首页不会自动重拉 —— 这里按「源 key 是否变化」判断，变了就重新请求一次。
+     *
+     * 为什么不每次都刷：`onResume` 在弹窗关闭、回到前台时也会触发，
+     * 每次无条件请求会让首页反复闪进度条，也浪费一次网络往返。
+     */
+    override fun onResume() {
+        super.onResume()
+        val site = VodConfig.get().getHome()
+        Log.d(TAG_HOME, "onResume 当前接口源: key=${site.key} name=${site.displayName}")
+        if (site.key == loadedHomeSiteKey) return
+        Log.d(TAG_HOME, "接口源已变化: ${loadedHomeSiteKey} -> ${site.key}，重新请求 homeContent")
+        refreshHome("设置页返回")
+    }
+
+    /**
+     * 真正发起一次首页请求。
+     *
+     * [SiteViewModel.homeContent] 内部是 `SiteApi.homeContent(VodConfig.get().getHome())`，
+     * 写的是 `result` 这条 LiveData（**不是**换源弹窗用的 `search`），所以两者互不干扰。
+     */
+    private fun refreshHome(reason: String) {
+        val site = VodConfig.get().getHome()
+        loadedHomeSiteKey = site.key
+        Log.d(
+            TAG_HOME,
+            "请求 homeContent（$reason）: key=${site.key} name=${site.displayName} " +
+                "总源数=${VodConfig.get().getSites().size}",
+        )
+        if (site.key.isEmpty()) {
+            Log.w(TAG_HOME, "当前接口源为空，homeContent 必然失败：请先在设置页添加接口源")
+        }
+        siteViewModel.homeContent()
     }
 
     /**
@@ -262,9 +327,12 @@ class HeroHomeActivity : ComponentActivity() {
 
 @Composable
 private fun HeroHomeScreen(
-    // Activity 作用域的 SiteViewModel：换源弹窗的检索通道（`search` LiveData）由它提供。
+    // Activity 作用域的 SiteViewModel：首页 `homeContent()` 与换源弹窗共用这一个实例。
     siteViewModel: SiteViewModel,
-    onOpenDetail: (String) -> Unit,
+    // 重新拉首页数据。首次进入、小房子切源、设置页返回都走这一个入口。
+    onRefreshHome: () -> Unit,
+    // 卡片确定键：回传真实的 (Vod, Site)，由 Activity 交给 HeroDetailActivity。
+    onOpenDetail: (Vod, Site) -> Unit,
     // 顶栏「设置」：真正打开页面的逻辑在 HeroHomeActivity 里（需要按 flavor 反射），由调用方传 lambda。
     onOpenSettings: () -> Unit,
 ) {
@@ -277,7 +345,43 @@ private fun HeroHomeScreen(
     // 避免 2D 焦点搜索在“顶栏项宽 ≠ 卡片宽”时落空。
     val topBarRequesters = remember { List(TOP_BAR_LABELS.size) { FocusRequester() } }
     val tabRequesters = remember { List(HERO_TABS.size) { FocusRequester() } }
-    val posterRequesters = remember { List(HERO_POSTERS.size) { FocusRequester() } }
+
+    // ------------------------------------------------------------------
+    // 首页真实数据
+    // ------------------------------------------------------------------
+    // `SiteViewModel.homeContent()` 写的是 `result` 这条 LiveData；换源弹窗用的是 `search`，
+    // 两条通道各自独立，首页刷新不会打断换源检索。
+    //
+    // 本项目没有 `androidx.compose.runtime:runtime-livedata` 依赖（没有 `observeAsState`），
+    // 这里用行为完全等价的 observeForever + onDispose 摘除，包括「立刻重放上一次值」这一特性 ——
+    // 所以 Activity 重建时旧数据会先回来，不会闪一下空列表。
+    var homeResult by remember { mutableStateOf<Result?>(null) }
+    DisposableEffect(siteViewModel) {
+        // `SiteViewModel.init()` 会把 `result` 置为 null，LiveData 会把 null 一起派发下来，
+        // 所以这里必须按可空接收：null 直接忽略（等价于「还没拿到数据」）。
+        val observer = Observer<Result?> { result ->
+            if (result != null) {
+                val site = VodConfig.get().getHome()
+                // 【关键】`SiteApi.homeContent` 不像 `searchContent` 那样给每条 Vod 盖 site。
+                // 不补的话 `Vod.getSiteKey()` 是空串：详情页「排除当前源」直接失效、
+                // 卡片左上角来源标签也是空白。
+                result.list.forEach { it.setSite(site) }
+                Log.d(TAG_HOME, "获取到真实数据条数=${result.list.size} msg=${result.msg} site=${site.key}")
+                homeResult = result
+            }
+        }
+        siteViewModel.result.observeForever(observer)
+        onDispose { siteViewModel.result.removeObserver(observer) }
+    }
+    // 首次进入就请求一次。失败 / 空列表一律交给下面的空态，**绝不回退任何假数据**。
+    LaunchedEffect(Unit) {
+        Log.d(TAG_HOME, "首次进入首页，触发 homeContent")
+        onRefreshHome()
+    }
+
+    /** Vod → HeroPoster 的唯一映射点；`homeResult == null`（首帧 / 首次请求在途）时返回空列表。 */
+    val homePosters = remember(homeResult) { homeResult.toHomePosters() }
+
 
     // Tab 栏的记忆索引：从第一排按“下”或从第三排按“上”进入时，都落回这一项。
     var rememberedTabIndex by remember { mutableIntStateOf(0) }
@@ -296,18 +400,28 @@ private fun HeroHomeScreen(
     var showTmdbDialog by remember { mutableStateOf(false) }
     var pendingPosterFocus by remember { mutableIntStateOf(-1) }
 
-    // 换分类时用同一批假数据做轮转，视觉上列表确实换了，但不需要第二套资源。
-    val basePosters = remember(selectedTabIndex) { postersForTab(selectedTabIndex.coerceAtLeast(0)) }
     // TMDB 手动匹配结果：按「剧名 → 匹配项」记一份 override，
-    // 命中时把首页这张卡的海报与背景图一起换成 TMDB 海报（第一段只换图，不动其它字段）。
+    // 命中时把首页这张卡的海报与背景图一起换成 TMDB 海报（只换图，不动 Vod 本身）。
     var tmdbOverrides by remember { mutableStateOf<Map<String, TmdbMatchItem>>(emptyMap()) }
-    val posters = remember(basePosters, tmdbOverrides) {
-        basePosters.map { poster ->
+    val posters = remember(homePosters, tmdbOverrides) {
+        homePosters.map { poster ->
             val override = tmdbOverrides[poster.title]
             if (override != null) poster.copy(url = override.poster, backdropUrl = override.poster) else poster
         }
     }
-    val heroPoster = posters.getOrElse(focusedPosterIndex) { posters[0] }
+    // 【防越界】真实列表长度不固定：必须跟着 posters.size 重建。
+    // 写死成 `List(常量)` 会在接口源返回更多条目时于 `requesters[index]` 处越界崩溃。
+    val posterRequesters = remember(posters.size) { List(posters.size) { FocusRequester() } }
+    // 真实数据可能为空：这里必须可空，不能用 `posters[0]` 兜底（空列表会直接抛越界）。
+    val heroPoster = posters.getOrNull(focusedPosterIndex) ?: posters.firstOrNull()
+
+    // 换源 / 刷新后列表可能变短：把记忆下标夹回合法范围，
+    // 否则「信息区显示第一张、焦点却在第 N 张」会错位。
+    LaunchedEffect(posters.size) {
+        if (focusedPosterIndex > posters.lastIndex) {
+            focusedPosterIndex = posters.lastIndex.coerceAtLeast(0)
+        }
+    }
 
     // 任意一排 → 顶栏：默认落在最左侧的第一项（小房子），不记忆上次位置。
     // 同时清掉「模块内」标记：选中的分类 Tab 立刻退成无红框、无红底（规则 ③）。
@@ -332,6 +446,9 @@ private fun HeroHomeScreen(
 
     // → 海报行：从别的排切入时用默认参数 index = 0，永远落在最左侧的第一张。
     fun focusPoster(index: Int = 0) {
+        // 真实数据可能为空（首次加载中 / 接口源返回空）：空列表时 `coerceIn(0, -1)` 会直接抛
+        // IllegalArgumentException，所以必须先挡掉，焦点留在原地。
+        if (posters.isEmpty()) return
         val target = index.coerceIn(0, posters.lastIndex)
         // 靠左吸附：焦点在 index 0..3 时锚点恒为 0，列表不动，右侧露出第 8 张的边；
         // 焦点到 index 4 及以后，锚点 = 焦点索引 → 被选中的卡正好停在 24dp 基准线上，
@@ -360,9 +477,10 @@ private fun HeroHomeScreen(
     // 长按卡片确定键 → 换源弹窗（View 体系独立 Dialog，见 [ChangeSourceDialog]，层级盖在首页之上）。
     // 打开期间用 [showSourceDialog] 占位，关闭后由下面的 LaunchedEffect 把焦点还给长按的那张卡。
     fun changeSource() {
-        // 关键词取当前这张卡的剧名：首页数据真实化之前它仍是 Mock 剧名，
-        // 但检索走的是**真实站点**，所以必须用「屏幕上正在显示的那部剧」。
-        val keyword = heroPoster.title
+        // 关键词 = 当前这张卡对应的**真实剧名**（`Vod.getName()`）。
+        // 还没有数据时换源没有意义，直接忽略这次长按。
+        val poster = heroPoster ?: return
+        val keyword = poster.title
         val currentSiteKey = VodConfig.get().getHome().key
         // 候选源规则集中在 ChangeSourceDialog.candidates：
         // isSearchable + isChangeable + 非隐藏 + 未被屏蔽 + 非当前源，最后按站点健康度排序，
@@ -383,10 +501,10 @@ private fun HeroHomeScreen(
             // 与 TmdbDetailActivity L11261 的换源检索一致：只搜 quick 源。
             quick = true,
             onSourceSelected = { vod, site ->
-                // vod 由 SiteApi.searchContent 盖过 site，两者是同一来源；这里两个都拿到，
-                // 下一步（详情页真实化）直接用它俩打开该源详情，不再按剧名二次搜索。
-                Notify.show(context.getString(R.string.source_sidebar_switched, "${site.displayName} · ${vod.name}"))
-                // TODO(下一单元)：HeroDetailActivity 支持 (vod, site) 入参后在这里直达该源详情页。
+                // 用户在弹窗里选中了另一部剧：vod 已由 SiteApi.searchContent 盖过 site，
+                // 两者同源，直接用它俩打开该源的真实详情页，不再按剧名二次搜索。
+                Log.d(TAG_HOME, "换源选中: ${site.displayName} / ${vod.name}")
+                onOpenDetail(vod, site)
             },
             onClosed = { showSourceDialog = false },
         )
@@ -428,9 +546,18 @@ private fun HeroHomeScreen(
         posterState.scrollToItem(0)
     }
 
+    // 数据从「有」变「无」（切到空源 / 接口源返回空）时，海报区的焦点会悬空，
+    // 这里统一收回小房子，保证任何时候都有明确的焦点落点。
+    LaunchedEffect(posters.isEmpty()) {
+        if (!posters.isEmpty()) return@LaunchedEffect
+        withFrameNanos { }
+        requestFocus(topBarRequesters, 0)
+    }
+
     Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
         // ---- 底层：全屏背景大图 + 横向/纵向遮罩（XML 顺序：heroBg → maskLeft → maskBottom）----
-        HeroBackdrop(url = heroPoster.backdropUrl)
+        // 没有数据时传空串，Coil 不加载任何东西，只剩黑色底 + 两层遮罩。
+        HeroBackdrop(url = heroPoster?.backdropUrl.orEmpty())
         HeroMaskLeft()
         HeroMaskBottom()
 
@@ -454,8 +581,19 @@ private fun HeroHomeScreen(
                             // 当前首页源在侧边栏里保持选中态，也是默认焦点（按 key 匹配，不用下标）。
                             currentSiteKey = VodConfig.get().getHome().key,
                             onSiteSelected = { site ->
-                                // TODO(下一单元·首页数据真实化)：VodConfig.get().setHome(site) 后再 homeContent()。
-                                Notify.show(context.getString(R.string.source_sidebar_switched, site.displayName))
+                                val current = VodConfig.get().getHome()
+                                if (site.key == current.key) {
+                                    // 选中的就是当前源：不重复发请求，只给个反馈。
+                                    Notify.show(context.getString(R.string.source_sidebar_switched, site.displayName))
+                                } else {
+                                    // 真正切换首页接口源。
+                                    // `setHome` 会写配置并 post `RefreshEvent.home()`，但本页不订阅 EventBus，
+                                    // 所以必须自己再拉一次 homeContent()，否则界面还是旧源的数据。
+                                    Log.d(TAG_HOME, "小房子切换接口源: ${current.key} -> ${site.key}")
+                                    VodConfig.get().setHome(site)
+                                    onRefreshHome()
+                                    Notify.show(context.getString(R.string.source_sidebar_switched, site.displayName))
+                                }
                             },
                             onClosed = {
                                 scope.launch {
@@ -471,7 +609,7 @@ private fun HeroHomeScreen(
                 onOpenHistory = { HeroHistoryActivity.start(context) },
                 // 顶栏「搜索」→ HeroSearchActivity（Compose 体系，纯 UI 结构 + 假数据）。
                 // 把首页当前这张大图一起带过去：搜索页用它做磨砂背景（同原版模糊首页大图的做法）。
-                onOpenSearch = { HeroSearchActivity.start(context, heroPoster.backdropUrl) },
+                onOpenSearch = { HeroSearchActivity.start(context, heroPoster?.backdropUrl.orEmpty()) },
                 // 顶栏「设置」→ SettingActivity（只存在于 leanback flavor，由 Activity 侧反射打开）。
                 onOpenSettings = onOpenSettings,
                 // 顶栏 ↓ 进入 Tab 栏：落到记忆中的 Tab，而不是与顶栏项横向对齐的那一个。
@@ -479,7 +617,16 @@ private fun HeroHomeScreen(
             )
             // XML 里 bottomContent 用 layout_alignParentBottom 贴底；Compose 用弹性留白表达同一语义。
             Spacer(modifier = Modifier.weight(1f))
-            HeroInfoArea(poster = heroPoster)
+            // 真实数据为空时**只显示状态文案**，绝不回退任何假数据。
+            // homeResult == null → 首次请求还在途（或还没触发），显示「正在加载」。
+            if (heroPoster != null) {
+                HeroInfoArea(poster = heroPoster)
+            } else {
+                HeroHomeStatus(
+                    loading = homeResult == null,
+                    message = homeResult?.msg.orEmpty(),
+                )
+            }
             HeroTabBar(
                 state = tabState,
                 requesters = tabRequesters,
@@ -513,8 +660,8 @@ private fun HeroHomeScreen(
                     // 两张卡与 Tab 的焦点指示同时可见，用户始终知道自己在看哪个分类。
                     moduleFocused = true
                 },
-                // 卡片确定键：不再直接起播，改为拉起详情页（剧本名一并传过去）。
-                onClick = onOpenDetail,
+                // 卡片确定键：打开这条数据**所属源**的真实详情页（Vod 与 Site 一起带过去）。
+                onClick = { poster -> onOpenDetail(poster.vod, poster.site) },
                 // 卡片长按确定键：呼出换源弹窗（见 changeSource）。
                 onLongPress = { changeSource() },
                 // 卡片长按方向下键 1.5s：呼出 TMDB 手动匹配弹窗（见下面的 TmdbMatchDialog）。
@@ -533,11 +680,13 @@ private fun HeroHomeScreen(
         // ---- 最上层：TMDB 手动匹配弹窗（Compose Dialog，层级盖在首页之上）----
         // 确定键写回 override → 首页对应卡片的海报/背景换成 TMDB 海报；
         // 关闭后由 LaunchedEffect(showTmdbDialog) 把焦点还给长按的那张卡。
-        if (showTmdbDialog) {
+        // 真实数据可能为空（切到空源 / 请求失败），此时没有剧名可匹配，弹窗直接不渲染。
+        val tmdbPoster = heroPoster
+        if (showTmdbDialog && tmdbPoster != null) {
             TmdbMatchDialog(
-                initialKeyword = heroPoster.title,
+                initialKeyword = tmdbPoster.title,
                 onConfirm = { item ->
-                    tmdbOverrides = tmdbOverrides + (heroPoster.title to item)
+                    tmdbOverrides = tmdbOverrides + (tmdbPoster.title to item)
                     showTmdbDialog = false
                 },
                 onDismiss = { showTmdbDialog = false },
@@ -851,6 +1000,74 @@ private fun HeroInfoArea(poster: HeroPoster) {
 }
 
 /**
+ * 首页空态 / 加载态。
+ *
+ * 真实数据为空时**只显示文案**，不显示任何假海报或假剧名。
+ * 版式与 [HeroInfoArea] 完全一致（左右 24dp、底部 22dp、36dp 标题行 + 20dp 元数据行 + 简介行），
+ * 于是从加载态切到真实数据时文字不会跳位。
+ *
+ * @param loading `homeResult == null` 时为 true：首次请求还在途（或还没触发）。
+ * @param message 接口返回的提示语；`Result.empty()` 的失败场景下为空串，用默认文案兜底。
+ */
+@Composable
+private fun HeroHomeStatus(loading: Boolean, message: String) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = HERO_PADDING)
+            .padding(bottom = HERO_INFO_BOTTOM_GAP),
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(HERO_TITLE_HEIGHT),
+            contentAlignment = Alignment.BottomStart,
+        ) {
+            Text(
+                text = if (loading) "正在加载首页…" else "暂无首页数据",
+                color = Color.White,
+                fontSize = HERO_TITLE_SP.sp,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                style = TextStyle(shadow = HERO_TITLE_SHADOW),
+            )
+        }
+        Spacer(modifier = Modifier.height(HERO_META_TOP_GAP))
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(HERO_META_HEIGHT),
+            contentAlignment = Alignment.BottomStart,
+        ) {
+            Text(
+                text = message.ifBlank {
+                    if (loading) "正在请求当前接口源…" else "当前接口源没有返回任何内容"
+                },
+                color = HERO_META_COLOR,
+                fontSize = HERO_META_SP.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                style = TextStyle(shadow = HERO_META_SHADOW),
+            )
+        }
+        Spacer(modifier = Modifier.height(HERO_DESC_TOP_GAP))
+        Text(
+            text = "按「小房子」可以切换接口源，或到设置页检查配置",
+            modifier = Modifier
+                .fillMaxWidth(HERO_DESC_WIDTH_FRACTION)
+                .height(HERO_DESC_HEIGHT),
+            color = HERO_DESC_COLOR,
+            fontSize = HERO_DESC_SP.sp,
+            lineHeight = HERO_DESC_LINE_HEIGHT_SP.sp,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+            style = TextStyle(shadow = HERO_DESC_SHADOW),
+        )
+    }
+}
+
+/**
  * 分类 Tab 栏（XML `typeRecycler`，L128-141）：
  * - 左右 padding 24dp（L138-139）、`paddingBottom=2dp`（L130）、`layout_marginBottom=12dp`（L137）。
  *
@@ -1022,7 +1239,7 @@ private fun PosterArea(
     state: LazyListState,
     requesters: List<FocusRequester>,
     onFocused: (Int) -> Unit,
-    onClick: (String) -> Unit,
+    onClick: (HeroPoster) -> Unit,
     onLongPress: () -> Unit,
     onLongPressTmdb: (Int) -> Unit,
     onMoveUp: (Int) -> Unit,
@@ -1044,7 +1261,7 @@ private fun PosterArea(
                 poster = poster,
                 requester = requesters[index],
                 onFocused = { onFocused(index) },
-                onClick = { onClick(poster.title) },
+                onClick = { onClick(poster) },
                 // 长按确定键 = 呼出换源弹窗（与这张卡具体是哪部剧无关，换的是接口源）。
                 onLongPress = { onLongPress() },
                 // 长按方向下键 1.5s = 呼出 TMDB 手动匹配弹窗（按这张卡自己的剧名去匹配）。
@@ -1237,47 +1454,62 @@ private fun requestFocus(requesters: List<FocusRequester>, index: Int): Boolean 
     return runCatching { requester.requestFocus() }.isSuccess
 }
 
-/** 分类切换时轮转假数据：列表顺序变了，但资源只有一套，方便先验证交互。 */
-private fun postersForTab(tabIndex: Int): List<HeroPoster> {
-    val offset = (tabIndex * 2) % HERO_POSTERS.size
-    return HERO_POSTERS.drop(offset) + HERO_POSTERS.take(offset)
-}
+/** 首页日志统一 TAG：`adb logcat -s HeroHome` 就能看到源切换、请求与回调条数。 */
+private const val TAG_HOME = "HeroHome"
 
+/**
+ * 首页一张海报卡。
+ *
+ * 前六个字段只服务 UI；[vod] / [site] 是**真实数据本体**，点确定键时直接交给详情页，
+ * 不再按剧名二次搜索（剧名可能重名，`Vod.getId()` 才是站点内唯一键）。
+ */
 private data class HeroPoster(
+    /** 在列表中的下标：只用于 LazyRow 的稳定 key，不参与业务。 */
     val id: Int,
     val title: String,
     val meta: String,
     val synopsis: String,
     val url: String,
     val backdropUrl: String,
+    /** 真实的点播条目（名称 / 图片 / 简介 / 年份 / 站点都在里面）。 */
+    val vod: Vod,
+    /** 这条数据所属的接口源。`homeContent()` 不盖 site，由观察者手动补好后再带下来。 */
+    val site: Site,
 )
 
-private data class HeroSeed(val title: String, val meta: String, val synopsis: String)
-
-/** 假数据：picsum 按 seed 返回稳定图片，不依赖 TMDB API Key 即可验证 Coil 链路。 */
-private val HERO_POSTERS: List<HeroPoster> = listOf(
-    HeroSeed("后会无期", "2026 · 剧情 · 全 24 集", "三个男人一路向西，在公路尽头重新认识了自己。"),
-    HeroSeed("尚公主", "2026 · 古装 · 全 36 集", "和亲路上她换了身份，也换了半个王朝的命运。"),
-    HeroSeed("小城良方", "2026 · 都市 · 全 28 集", "一间老药铺，藏着三代人的处方与心事。"),
-    HeroSeed("嫁金钗", "2025 · 古装 · 全 40 集", "一支金钗牵出旧案，也牵出她不肯低头的半生。"),
-    HeroSeed("玉簟秋", "2025 · 剧情 · 全 32 集", "深宅秋凉，她把每一步都走成了棋。"),
-    HeroSeed("醉梦", "2025 · 悬疑 · 全 20 集", "他记得所有梦境，却记不起梦里的那张脸。"),
-    HeroSeed("生日快乐", "2026 · 家庭 · 全 16 集", "每年生日，她都会收到一封没有署名的信。"),
-    HeroSeed("山河故人", "2025 · 历史 · 全 30 集", "山河依旧，故人散落在不同的年代里。"),
-    HeroSeed("风起洛阳", "2026 · 古装 · 全 38 集", "洛阳城的春风里，藏着三段未说出口的告白。"),
-    HeroSeed("南来北往", "2025 · 年代 · 全 26 集", "一列绿皮火车，装下了二十年的聚散。"),
-    HeroSeed("雾中灯塔", "2026 · 悬疑 · 全 18 集", "灯塔每晚亮起，海面上就多一艘没有名字的船。"),
-    HeroSeed("长安夜行", "2025 · 古装 · 全 34 集", "宵禁之后，长安属于另一群人。"),
-).mapIndexed { index, seed ->
-    HeroPoster(
-        id = index,
-        title = seed.title,
-        meta = seed.meta,
-        synopsis = seed.synopsis,
-        url = "https://picsum.photos/seed/hero-poster-$index/400/600",
-        backdropUrl = "https://picsum.photos/seed/hero-backdrop-$index/1280/720",
-    )
+/**
+ * `Result` → 首页海报列表：全项目**唯一**的映射点。
+ *
+ * - `null`（首帧 / 首次请求还在途）→ 空列表，交给 [HeroHomeStatus] 显示加载态；
+ * - 请求失败（[Result.empty]）或接口源本身没返回内容 → 同样是空列表，显示空态。
+ *
+ * 任何情况下都不回退假数据：宁可黑屏 + 一行提示，也不让用户点到一部不存在的剧。
+ */
+private fun Result?.toHomePosters(): List<HeroPoster> {
+    val items = this?.list.orEmpty()
+    // 兜底源：`homeContent()` 不盖 site，理论上观察者已经补过；万一为空就用当前首页源。
+    val fallbackSite = VodConfig.get().getHome()
+    return items.mapIndexed { index, vod ->
+        val site = vod.site ?: fallbackSite
+        HeroPoster(
+            id = index,
+            title = vod.name.ifBlank { "未命名" },
+            meta = buildMeta(vod),
+            synopsis = vod.content,
+            // 首页接口只给竖版 `vod_pic`，没有独立的横版背景图：背景同样用它，
+            // 由 Coil 的 ContentScale.Crop 裁成 16:9（比留一片纯黑更接近真实产品观感）。
+            url = vod.pic,
+            backdropUrl = vod.pic,
+            vod = vod,
+            site = site,
+        )
+    }
 }
+
+/** 元数据行：`年份 · 分类 · 备注`，空字段自动省略，不会留下多余的 `·`。 */
+private fun buildMeta(vod: Vod): String = listOf(vod.year, vod.typeName, vod.remarks)
+    .filter { it.isNotBlank() }
+    .joinToString(" · ")
 
 // 顶栏顺序：小房子 | 直播 | 搜索 | 历史 | 收藏 | 推送 | 设置（对照 ref_docs/home_ui.png）。
 private val TOP_BAR_LABELS = listOf("首页", "直播", "搜索", "历史", "收藏", "推送", "设置")

@@ -84,6 +84,8 @@ import androidx.lifecycle.ViewModelProvider
 import coil3.compose.AsyncImage
 import com.fongmi.android.tv.R
 import com.fongmi.android.tv.api.config.VodConfig
+import com.fongmi.android.tv.bean.Site
+import com.fongmi.android.tv.bean.Vod
 import com.fongmi.android.tv.model.SiteViewModel
 import com.fongmi.android.tv.ui.hero.ChangeSourceDialog
 import com.fongmi.android.tv.ui.hero.HeroAccentColor
@@ -139,29 +141,91 @@ class HeroDetailActivity : ComponentActivity() {
             systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
         }
         HeroImageLoader.install()
-        // 首页只传剧名过来，其余字段继续走假数据；剧名为空时回落到默认假数据。
-        val title = intent.getStringExtra(EXTRA_TITLE).orEmpty().ifBlank { DEMO_DETAIL.title }
+        // 真实数据入口：首页海报卡 / 换源弹窗会把 (Vod, Site) 的字段逐个塞进 Intent。
+        // 只有剧名的旧入口（adb 直接拉起）继续整页回落 DEMO_DETAIL。
+        val detail = readDetail()
+        // 换源弹窗要「排除当前源」：优先用这条数据自己的源，没有（旧入口）才回落到首页源。
+        val siteKey = intent.getStringExtra(EXTRA_SITE_KEY).orEmpty().ifBlank {
+            VodConfig.get().getHome().key
+        }
         // 换源弹窗需要 Activity 作用域的 SiteViewModel（构造函数里就建了两个单线程 executor，
         // 绝不能按弹窗 new）。详情页自己持有一份，和首页互不影响。
         val siteViewModel = ViewModelProvider(this)[SiteViewModel::class.java]
         setContent {
             MaterialTheme(colorScheme = darkColorScheme()) {
                 HeroDetailScreen(
-                    detail = DEMO_DETAIL.copy(title = title),
+                    detail = detail,
                     siteViewModel = siteViewModel,
+                    siteKey = siteKey,
                 )
             }
         }
     }
 
+    /**
+     * Intent → 页面数据。
+     *
+     * 有 `EXTRA_PIC` 就说明是从首页 / 换源弹窗进来的真实条目：
+     * 剧名、海报、元数据、简介全部取真实值；
+     * **演职员、线路、选集仍取 [DEMO_DETAIL]** —— 详情接口（`SiteViewModel.detailContent`）尚未接入，
+     * 那是下一个单元的事。
+     */
+    private fun readDetail(): HeroDetail {
+        val title = intent.getStringExtra(EXTRA_TITLE).orEmpty().ifBlank { return DEMO_DETAIL }
+        val pic = intent.getStringExtra(EXTRA_PIC).orEmpty()
+        if (pic.isBlank()) return DEMO_DETAIL.copy(title = title)
+        // 元数据：年份 · 分类 · 备注 · 接口源，空字段自动省略，不留多余的 `·`。
+        val meta = listOf(
+            intent.getStringExtra(EXTRA_YEAR).orEmpty(),
+            intent.getStringExtra(EXTRA_TYPE).orEmpty(),
+            intent.getStringExtra(EXTRA_REMARKS).orEmpty(),
+            intent.getStringExtra(EXTRA_SITE_NAME).orEmpty(),
+        ).filter { it.isNotBlank() }.joinToString(" · ")
+        return DEMO_DETAIL.copy(
+            title = title,
+            meta = meta.ifBlank { DEMO_DETAIL.meta },
+            synopsis = intent.getStringExtra(EXTRA_CONTENT).orEmpty().ifBlank { DEMO_DETAIL.synopsis },
+            posterUrl = pic,
+            // 详情接口只给竖版图：背景同样用它，由 Coil 的 Crop 裁成 16:9。
+            backdropUrl = pic,
+        )
+    }
+
     companion object {
 
         private const val EXTRA_TITLE = "extra_title"
+        private const val EXTRA_PIC = "extra_pic"
+        private const val EXTRA_YEAR = "extra_year"
+        private const val EXTRA_TYPE = "extra_type"
+        private const val EXTRA_REMARKS = "extra_remarks"
+        private const val EXTRA_CONTENT = "extra_content"
+        private const val EXTRA_SITE_KEY = "extra_site_key"
+        private const val EXTRA_SITE_NAME = "extra_site_name"
 
         /**
-         * 统一入口：首页海报卡点击后调用。
-         * 当前只有剧名是真实值（来自首页卡片），其余字段仍是 [DEMO_DETAIL] 假数据；
-         * 页面也可用 adb 直接拉起验证：
+         * 统一入口：首页海报卡确定键、换源弹窗选中后调用。
+         *
+         * [Vod] 不是 Parcelable，所以逐字段塞进 Intent；[Site] 只带 key + 名称
+         * （详情页只需要它做「排除当前源」和元数据展示，不需要完整站点配置）。
+         *
+         * 演职员 / 线路 / 选集仍来自 [DEMO_DETAIL]，详情接口是下一个单元。
+         */
+        fun start(context: Context, vod: Vod, site: Site) {
+            context.startActivity(
+                Intent(context, HeroDetailActivity::class.java)
+                    .putExtra(EXTRA_TITLE, vod.name)
+                    .putExtra(EXTRA_PIC, vod.pic)
+                    .putExtra(EXTRA_YEAR, vod.year)
+                    .putExtra(EXTRA_TYPE, vod.typeName)
+                    .putExtra(EXTRA_REMARKS, vod.remarks)
+                    .putExtra(EXTRA_CONTENT, vod.content)
+                    .putExtra(EXTRA_SITE_KEY, site.key)
+                    .putExtra(EXTRA_SITE_NAME, site.displayName),
+            )
+        }
+
+        /**
+         * 兼容入口：只有剧名时整页回落 [DEMO_DETAIL]，用于 adb 直接拉起验证：
          * `adb shell am start -n com.silent.android.webhtv/com.fongmi.android.tv.ui.activity.HeroDetailActivity`
          */
         fun start(context: Context, title: String) {
@@ -173,7 +237,7 @@ class HeroDetailActivity : ComponentActivity() {
 }
 
 @Composable
-private fun HeroDetailScreen(detail: HeroDetail, siteViewModel: SiteViewModel) {
+private fun HeroDetailScreen(detail: HeroDetail, siteViewModel: SiteViewModel, siteKey: String) {
     val context = LocalContext.current
     // 两组可聚焦区域：按钮组 + 演职员行。跨区移动全部显式 requestFocus，不依赖 2D 焦点搜索。
     val actionRequesters = remember { List(DETAIL_ACTIONS.size) { FocusRequester() } }
@@ -291,7 +355,8 @@ private fun HeroDetailScreen(detail: HeroDetail, siteViewModel: SiteViewModel) {
                         DETAIL_ACTION_CHANGE_SOURCE -> {
                             // 候选源规则与首页完全一致：
                             // isSearchable + isChangeable + 非隐藏 + 未被屏蔽 + 非当前源，再按站点健康度排序。
-                            val candidates = ChangeSourceDialog.candidates(VodConfig.get().getHome().key)
+                            // 「当前源」= 这条数据自己的源（首页带过来的 site.key），不是首页源。
+                            val candidates = ChangeSourceDialog.candidates(siteKey)
                             if (candidates.isEmpty()) {
                                 Notify.show(context.getString(R.string.play_change_empty))
                             } else {
@@ -302,7 +367,7 @@ private fun HeroDetailScreen(detail: HeroDetail, siteViewModel: SiteViewModel) {
                                     context = context,
                                     viewModel = siteViewModel,
                                     sites = candidates,
-                                    // 详情页当前只有剧名是真实值，用它做检索关键词。
+                                    // 详情页的剧名现在是真实值（来自首页 / 上一次换源），直接用它检索。
                                     keyword = detail.title,
                                     // 与 TmdbDetailActivity 一致：只搜 quick 源。
                                     quick = true,
