@@ -11,7 +11,6 @@ import androidx.activity.compose.setContent
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -40,11 +39,9 @@ import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.darkColorScheme
@@ -105,24 +102,26 @@ import kotlinx.coroutines.launch
 /**
  * HeroUI（Compose）搜索页。
  *
- * 版式基准 = `ref_docs/activity_search.xml`（根 vertical LinearLayout）：
+ * 版式基准 = 原版截图 + `ref_docs/activity_search.xml`：**上下两层，不做左右分栏**。
  * ```
  * Column(fillMaxSize + padding(start/end=24dp, top=24dp))       // L2-11
- *   ├─ Row(fillMaxWidth + weight(1f))                            // L12-16：上半区
- *   │    ├─ KeyboardSection(width=316dp)                         // L17-65：输入框行 + 键盘
- *   │    └─ RightContentSection(weight=1f, verticalScroll)       // L66-143：历史 + 热搜/建议
- *   └─ if (hasInput) ResultSection(fillMaxWidth + wrapContentHeight + padding(top=12dp))  // L145-207
- *        ├─ LazyRow(height=36dp,  contentPadding=24dp)           // 站点 Tab
- *        └─ Box(height=215dp) → LazyRow(fillMaxSize)              // 海报行
+ *   ├─ Row(fillMaxWidth + height(324dp))                          // L12-16：上半区（内容定高）
+ *   │    ├─ KeyboardSection(width=328dp)                          // L17-65：输入行 36 + 8 + 键盘 280
+ *   │    └─ RightContentSection(weight=1f, fillMaxHeight)         // L66-143：历史贴顶 / 建议贴底
+ *   ├─ Spacer(12dp)                                               // L151 marginTop
+ *   └─ if (hasInput) ResultSection(fillMaxWidth + weight(1f))     // L145-207：下半区
+ *        ├─ LazyRow(height=36dp, contentPadding=24dp)             // 站点 Tab
+ *        └─ Box(height=215dp) → LazyRow(fillMaxSize)              // 海报行，整条完整可见
  * ```
  *
  * 三条硬约束（历史 bug 的根因所在）：
- * 1. 根节点只有 [Column]，没有任何根级 [Box] 叠加；上半区恒为 `weight(1f)`，下半区恒为
- *    `wrapContentHeight()`，两者在 Column 里顺序排列，**物理上不可能互相覆盖**。
- * 2. 上半区 `Row` 额外 `clipToBounds()`；左列**不做 verticalScroll**（TV 端滚动会丢遥控器焦点，
- *    实测 720dp 高度下 316dp 键盘完整可见）。高度真不够时由父级裁掉，绝不下压或覆盖下面的海报行。
- * 3. 键盘用 `Column + Row` 手摆，绝不用 LazyGrid：每个键 `size(40.dp)` 写死，间距 6dp，
- *    7 列 = 7×40 + 6×6 = 316dp，任何分辨率下都不会被拉伸。
+ * 1. 根节点只有 [Column]；上半区高度 = 键盘内容高度 [TOP_SECTION_HEIGHT]（324dp，720dp 屏上不到半屏），
+ *    下半区 `weight(1f)` 拿满剩余高度，两者顺序排列，**物理上不可能互相覆盖**。
+ * 2. 上半区 `Row` 额外 `clipToBounds()`；左列**不做 verticalScroll**（TV 端滚动会丢遥控器焦点）。
+ *    键盘 6 行按键完整撑开，末排（WXYZ / 3456789）底边与右侧「热搜 / 建议」底边严格对齐。
+ * 3. 键盘用 `Column + Row` 手摆，绝不用 LazyGrid：键 `size(40.dp)`、间距 **8dp**（逆向
+ *    `SpaceItemDecoration(7, 8)`），7 列 = 7×40 + 6×8 = 328dp，任何分辨率下都不会被拉伸。
+ *    720dp 屏总预算：24 + 324 + 12 + (36 + 12 + 215) = 623dp ≤ 720dp（余 97dp）。
  *
  * 键盘第一行与 `ref_docs/xd1.java` L27 一致：`(占位, <, >, ⌫, 键盘, 房子, A)`，之后 B-Z、0-9，
  * 共 42 格 = 6 行 × 7 列，最右列正是 A / H / O / V / 2 / 9（与 `topbar_search_page.png` 一致）。
@@ -199,7 +198,6 @@ private fun HeroSearchScreen(
     // 用一张「下标 → View」的登记表跨区交接焦点，卡片自带的 2dp 红描边才会亮。
     val posterRegistry = remember { HeroPosterViewRegistry() }
 
-    val rightScroll = rememberScrollState()
     val siteState = rememberLazyListState()
     val posterState = rememberLazyListState()
 
@@ -407,12 +405,13 @@ private fun HeroSearchScreen(
             )
             .padding(start = ROOT_PADDING_H, end = ROOT_PADDING_H, top = ROOT_PADDING_TOP),
     ) {
-        // 上半区：weight(1f) 吃掉「下半区固定高度」之外的全部空间。
-        // clipToBounds 兜底：子节点即使超高也只会被裁掉，绝不可能画到下面的海报行上。
+        // 上半区：高度由键盘自身内容决定（输入行 36 + 8 + 6×40 + 5×8 = 324dp），
+        // 只占屏幕约 45%，绝不吃 weight、绝不会被下半区挤压。
+        // 右侧历史/建议 fillMaxHeight + SpaceBetween 贴着同一条底线 → 末排按键与「建议」底边对齐。
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .weight(1f)
+                .height(TOP_SECTION_HEIGHT)
                 .clipToBounds(),
         ) {
             KeyboardSection(
@@ -432,7 +431,6 @@ private fun HeroSearchScreen(
             Spacer(modifier = Modifier.width(LEFT_COLUMN_MARGIN_END))
 
             RightContentSection(
-                scroll = rightScroll,
                 history = history,
                 words = words,
                 wordTitle = wordTitle,
@@ -449,14 +447,15 @@ private fun HeroSearchScreen(
             )
         }
 
-        // 下半区：只允许 fillMaxWidth + wrapContentHeight + padding(top = 12dp)，
-        // 不吃 weight、不 fillMaxSize，高度恒等于「36dp Tab 行 + 12dp 间隔 + 215dp 海报行」。
+        Spacer(modifier = Modifier.height(RESULT_SECTION_TOP_GAP))
+
+        // 下半区：weight(1f) 吃掉上半区之外的全部高度（720dp 屏上约 360dp），
+        // 内部固定 36dp Tab 行 + 12dp 间隔 + 215dp 海报带 = 263dp，整条海报永远完整可见。
         if (hasInput) {
             ResultSection(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .wrapContentHeight()
-                    .padding(top = RESULT_SECTION_TOP_GAP),
+                    .weight(1f),
                 siteState = siteState,
                 posterState = posterState,
                 selectedSite = selectedSite,
@@ -490,15 +489,24 @@ private fun HeroSearchScreen(
 }
 
 // ---------------------------------------------------------------------------
-// 骨架 2：左侧键盘区（316dp 宽，Column + Row 手摆，绝不用 LazyGrid）
+// 骨架 2：左侧键盘区（328dp = 7×40 + 6×8，Column + Row 手摆，绝不用 LazyGrid）
 // ---------------------------------------------------------------------------
 
 /**
  * 左列：输入框行 + 虚拟键盘。
  *
- * 宽度锁死 316dp = 7 × 40dp + 6 × 6dp（`ref_docs/adapter_keyboard_text.xml` L10 的 40dp；
- * 间距 6dp 由本版需求指定）。**不做 verticalScroll**：TV 端滚动会让遥控器焦点帧丢失，
- * 高度不足时交给父级 `clipToBounds` 裁掉，绝不越界到下面的海报行。
+ * 尺寸全部来自逆向数据，没有一条是估计的：
+ * - 键：**40dp × 40dp**（`adapter_keyboard_text.xml` L5-6、`adapter_keyboard_icon.xml` L7-8）；
+ * - 间距：**8dp**（`CustomKeyboard.java` L25 `new SpaceItemDecoration(7, 8)`；`SpaceItemDecoration`
+ *   L22 用 `ResUtil.dp2px(8)` 换算，单位是 dp；L31-35 相邻两格的 right+left 恒等于 8dp，
+ *   L35 行间距 `outRect.top = spacing` 同样是 8dp）；
+ * - 容器：`wrap_content`（`activity_search.xml` L59-60），**原版没有固定宽度**，
+ *   宽度是 7×40dp + 6×8dp = 328dp 算出来的；
+ * - 与输入框行的间距：**8dp**（`activity_search.xml` L61 `android:layout_marginTop="8dp"`）。
+ *
+ * 高度不写死：`wrapContentHeight()` 由 6 行按键撑开（6×40 + 5×8 = 280dp），
+ * 加输入框行 36dp 与 8dp 间隔 = 324dp = [TOP_SECTION_HEIGHT]；父级 `Row` 用的就是这个高度，
+ * 所以最后一排（WXYZ / 3456789）绝不会被裁，且与右侧「热搜 / 建议」底边齐平。
  */
 @Composable
 private fun KeyboardSection(
@@ -517,10 +525,12 @@ private fun KeyboardSection(
     Column(
         modifier = Modifier
             .width(LEFT_COLUMN_WIDTH)
-            .fillMaxHeight(),
+            // 高度不写死：不再 fillMaxHeight，由 6 行按键自然撑开，
+            // 最后一排不会被父级的固定高度压掉。
+            .wrapContentHeight(),
         verticalArrangement = Arrangement.spacedBy(KEY_SPACING),
     ) {
-        // 输入框行：mic 36dp + 12dp + 只读输入框(weight 1f) + 12dp + 搜索 40dp
+        // 输入框行：mic 36dp + 12dp + 只读输入框(weight 1f) + 12dp + 搜索 36dp（整行 36dp）
         Row(verticalAlignment = Alignment.CenterVertically) {
             HeroGlyphIcon(glyph = HeroGlyph.Mic, modifier = Modifier.size(MIC_SIZE))
             Spacer(modifier = Modifier.width(MIC_MARGIN_END))
@@ -539,7 +549,7 @@ private fun KeyboardSection(
             )
         }
 
-        // 键盘：6 行 × 7 列 = 42 格，每格 40dp 写死，行/列间距 6dp。
+        // 键盘：6 行 × 7 列 = 42 格，每格 40dp 写死，行/列间距 8dp（SpaceItemDecoration(7, 8)）。
         Column(verticalArrangement = Arrangement.spacedBy(KEY_SPACING)) {
             for (row in 0 until KEY_ROWS) {
                 Row(horizontalArrangement = Arrangement.spacedBy(KEY_SPACING)) {
@@ -654,7 +664,7 @@ private fun HeroKeyPlaceholder() {
  *
  * - 文字 24sp、字距 0.02（`activity_search.xml` L37/L53），hint 白（L39）；
  * - 焦点态 2dp 红框（`selector_tmdb_input.xml` 的 focused 态 + `topbar_search_page.png`）；
- * - 高度与 40dp 键盘键对齐，圆角 13dp。
+ * - 高度压到 36dp（与 mic 同高，原版 24sp 文字放得下），圆角 13dp。
  */
 @Composable
 private fun HeroSearchInput(
@@ -727,7 +737,7 @@ private fun HeroSearchInput(
     }
 }
 
-/** 放大镜按钮：40dp 圆（与键盘键同尺寸），配色复用键盘键两态。 */
+/** 放大镜按钮：36dp 圆（与输入框、mic 同高，压缩上半区），配色复用键盘键两态。 */
 @Composable
 private fun HeroSearchSubmit(
     requester: FocusRequester,
@@ -782,12 +792,13 @@ private fun HeroSearchSubmit(
 /**
  * 右列：历史 + 热搜（无输入）/ 建议（有输入）。
  *
- * 自己是 `RowScope` 扩展，所以 `weight(1f)` 是合法的；内部再挂独立 `verticalScroll`，
- * 标签再多也只在自己区域内滚动，不会撑破上半区的 `weight(1f)`。
+ * 自己是 `RowScope` 扩展，所以 `weight(1f)` 是合法的。
+ * `fillMaxHeight()` + `Arrangement.SpaceBetween`：整列高度 = 上半区高度（[TOP_SECTION_HEIGHT]），
+ * 「历史」贴顶、最后一块（热搜 / 建议）贴底 → **它的底边和键盘最后一排按键的底边在同一条水平线**。
+ * 因此这里不能再挂 `verticalScroll`（滚动后底边会漂移，对齐就失效了）。
  */
 @Composable
 private fun RowScope.RightContentSection(
-    scroll: ScrollState,
     history: List<String>,
     words: List<String>,
     wordTitle: String,
@@ -802,8 +813,8 @@ private fun RowScope.RightContentSection(
     Column(
         modifier = Modifier
             .weight(1f)
-            .fillMaxHeight()
-            .verticalScroll(scroll),
+            .fillMaxHeight(),
+        verticalArrangement = Arrangement.SpaceBetween,
     ) {
         HeroWordSection(
             title = TITLE_HISTORY,
@@ -984,12 +995,18 @@ private fun HeroWordChip(
 // ---------------------------------------------------------------------------
 
 /**
- * 结果区：`fillMaxWidth + wrapContentHeight + padding(top = 12dp)`，高度只由内容决定，
- * 永远不参与上半区的高度分配，所以不会挤压键盘、也不会被键盘压住。
+ * 结果区（下半区）：`fillMaxWidth + weight(1f)`，占满上半区之外的全部高度
+ * （720dp 屏约 360dp），内部内容固定 36dp Tab 行 + 12dp 间隔 + 215dp 海报带 = 263dp，
+ * 所以整条海报永远完整显示，不会被裁掉一截。
  *
- * 两条 LazyRow 的 `contentPadding` 取 [RESULT_CONTENT_PADDING] = 0dp：
- * 根 `Column` 已经有 24dp 横向 padding，再缩进会让第一个「全部」和第一张海报
- * 与上方「历史」标题、左侧键盘左边缘错位。保留这个参数是为了以后一键调整。
+ * 两条 LazyRow 的 `contentPadding` 取 [RESULT_CONTENT_PADDING] = 24dp：
+ * 站点 Tab 与海报行各自再让出 24dp 呼吸空间，第一个「全部」不会贴着屏幕边缘，
+ * 焦点态的 1.08 放大与红描边也完整落在可视区内。
+ *
+ * 关于 `clipToPadding(false)`：这是 View 的 `ViewGroup` 参数；Compose 的 `LazyRow` 只按
+ * 自身外框裁剪、**不按 contentPadding 裁剪**，所以这里的 24dp 内容内边距天然等价于
+ * View 侧 `padding + clipToPadding=false` 的效果（原版 `activity_search.xml` L154-156/L170-171
+ * 正是 `paddingBottom=2dp` + `clipChildren=false` + `clipToPadding=false`）。
  */
 @Composable
 private fun ResultSection(
@@ -1495,26 +1512,33 @@ private fun suggestionsFor(keyword: String): List<String> {
 private val ROOT_PADDING_H = 24.dp
 private val ROOT_PADDING_TOP = 24.dp
 
-// 键盘：7 列 × 40dp + 6 × 6dp = 316dp（adapter_keyboard_text.xml L10）。
+// 键盘（逐条对应逆向数据，不是估值）：
+//   键 40dp × 40dp   adapter_keyboard_text.xml L5-6 / adapter_keyboard_icon.xml L7-8
+//   间距 8dp        CustomKeyboard.java L25 `new SpaceItemDecoration(7, 8)`（SpaceItemDecoration L22 dp2px）
+//   容器 wrap_content activity_search.xml L59-60，原版无固定宽度；宽度 = 7×40 + 6×8 = 328dp
 private val KEY_SIZE = 40.dp
-private val KEY_SPACING = 6.dp
-private val LEFT_COLUMN_WIDTH = 316.dp
+private val KEY_SPACING = 8.dp
+private val LEFT_COLUMN_WIDTH = 328.dp
 private val LEFT_COLUMN_MARGIN_END = 24.dp          // activity_search.xml L21
 
-// 输入框行：mic 36dp + 间距 12dp；搜索按钮 40dp；图标 24dp。
+// 输入框行：mic 36dp + 间距 12dp；搜索按钮与输入框同高 36dp（压缩上半区高度）；图标 24dp。
 private val MIC_SIZE = 36.dp
 private val MIC_MARGIN_END = 12.dp
-private val SEARCH_BUTTON_SIZE = 40.dp
+private val SEARCH_BUTTON_SIZE = 36.dp
 private val SEARCH_BUTTON_MARGIN_START = 12.dp
 private val KEY_ICON_SIZE = 24.dp
 
-// 输入框：24sp、字距 0.02（L37/L53）；红框 2dp、圆角 13dp。
+// 输入框：24sp、字距 0.02（L37/L53）；红框 2dp、圆角 13dp；高度压到 36dp 与 mic 对齐。
 private const val INPUT_TEXT_SP = 24f
 private const val INPUT_LETTER_SPACING = 0.02f
-private val INPUT_HEIGHT = 40.dp
+private val INPUT_HEIGHT = 36.dp
 private val INPUT_STROKE = 2.dp
 private val INPUT_SHAPE = RoundedCornerShape(13.dp)
 private val INPUT_PADDING_H = 12.dp
+
+// 上半区总高 = 输入行 36 + 8(activity_search.xml L61 的 marginTop) + 6×40 + 5×8 = 324dp。
+// 720dp 屏上 24 + 324 = 348dp ≈ 48%，不超过半屏；下半区 weight(1f) 拿满剩下的 372dp。
+private val TOP_SECTION_HEIGHT = INPUT_HEIGHT + KEY_SPACING + KEY_SIZE * 6 + KEY_SPACING * 5
 
 // 键盘键：40dp / 16sp / 4dp 圆角（adapter_keyboard_text.xml）。
 private val KEY_SHAPE = RoundedCornerShape(4.dp)
@@ -1553,7 +1577,7 @@ private const val SITE_SCALE_DURATION_MS = 140
 private val SITE_ROW_HEIGHT = 36.dp
 private val SITE_ITEM_SPACING = 12.dp
 private val SITE_POSTER_GAP = 12.dp
-private val RESULT_CONTENT_PADDING = 0.dp          // 根 Column 已有 24dp padding，再缩进会与「历史」标题错位
+private val RESULT_CONTENT_PADDING = 24.dp          // 站点 Tab / 海报行统一 24dp 呼吸空间，第一个「全部」不再贴边
 private val RESULT_SECTION_TOP_GAP = 12.dp         // activity_search.xml L151
 
 // 海报行：215dp（activity_search.xml L167）+ 12dp 间距。
