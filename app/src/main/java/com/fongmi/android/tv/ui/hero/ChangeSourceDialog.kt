@@ -6,6 +6,7 @@ import android.graphics.Color
 import android.graphics.drawable.ColorDrawable
 import android.os.Bundle
 import android.view.Gravity
+import android.view.KeyEvent
 import android.view.View
 import android.view.ViewGroup
 import android.view.ViewTreeObserver
@@ -113,6 +114,9 @@ internal class ChangeSourceDialog private constructor(
 
     /** 布局可能尚未完成，重试几次保证焦点落在标签上。 */
     private fun focusSite(position: Int, attempt: Int = 0) {
+        // 从结果卡片按 ↑ 回来时目标标签可能已被横向滚出可视区，
+        // 先把它滚进来，否则 findViewHolderForAdapterPosition 会一直取不到。
+        if (attempt == 0) siteRecycler.scrollToPosition(position)
         val holder = siteRecycler.findViewHolderForAdapterPosition(position)
         if (holder != null && holder.itemView.requestFocus()) return
         if (attempt < FOCUS_RETRY_COUNT) {
@@ -324,6 +328,18 @@ internal class ChangeSourceDialog private constructor(
             holder.card.setOnClickListener {
                 onSourceSelected(result)
                 dismiss()
+            }
+            // 卡片按 ↑ 必须回到**当前选中的站点标签**（《焦点总结》规则 ④的同一条思路）。
+            // 弹窗布局里 recycler 的 nextFocusUp 指向整个 siteRecycler，焦点只会落到
+            // RecyclerView 容器上，标签本身既不高亮也不滚动，用户看不出自己回到了哪个站点；
+            // 所以在这里拦一次，直接点名请求那个标签的焦点。
+            holder.card.setOnKeyListener { _, keyCode, event ->
+                if (event.action == KeyEvent.ACTION_DOWN && keyCode == KeyEvent.KEYCODE_DPAD_UP) {
+                    focusSite(selectedSite)
+                    true
+                } else {
+                    false
+                }
             }
         }
 

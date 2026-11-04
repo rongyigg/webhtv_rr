@@ -1,6 +1,34 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 勾选圈：已勾选（实心）。圆形（oval），品牌红 #E50914。 -->
-<shape xmlns:android="http://schemas.android.com/apk/res/android"
-    android:shape="oval">
-    <solid android:color="@color/red" />
-</shape>
+<!--
+  勾选圈「已勾选」态（行未聚焦）：2dp 白圆环 + 居中白色对勾，环内透明。
+  严格照搬 ref_docs/shape_check_circle_on.xml —— 不再用红色实心，勾选与否靠「√」表达。
+  外层 20dp 圆环、内层 14dp 对勾（viewport 24、线宽 3、圆头圆角），
+  与未勾选的 shape_check_circle_off 尺寸完全一致，勾选切换时圆环不跳动。
+-->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item>
+        <shape android:shape="oval">
+            <solid android:color="#00000000" />
+            <stroke
+                android:width="2dp"
+                android:color="@color/white" />
+            <size
+                android:width="20dp"
+                android:height="20dp" />
+        </shape>
+    </item>
+    <item android:gravity="center">
+        <vector
+            android:width="14dp"
+            android:height="14dp"
+            android:viewportWidth="24"
+            android:viewportHeight="24">
+            <path
+                android:pathData="M5,12 L10,17 L19,7"
+                android:strokeColor="@color/white"
+                android:strokeWidth="3"
+                android:strokeLineCap="round"
+                android:strokeLineJoin="round" />
+        </vector>
+    </item>
+</layer-list>

@@ -1,25 +1,30 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  接口源侧边栏列表行（单列 / 多选共用同一套行布局）。
+  接口源侧边栏列表行（单选 / 多选共用同一套行布局）。
 
-  尺寸取自 ref_docs/adapter_site.xml：40dp 行高、24dp 勾选圈（marginStart 12dp）；
-  文字按需求改为 **13sp（与首页分类 Tab 的 HERO_LABEL_SP 一致）且整行居中**，
+  尺寸取自 ref_docs/adapter_site.xml：40dp 行高、24dp 勾选圈；
+  文字按需求改为 **13sp（与首页分类 Tab 的 HERO_LABEL_SP 一致）并整行居中**，
   不再沿用原版 18sp 的左对齐 —— 侧边栏是窄条竖排，居中后长短源名不会参差不齐。
 
   **根节点就是可聚焦的行本体**：原版是「外层容器 + 内层 @id/item」两层，
   adapter 通过 itemView 设置 isSelected / 焦点，若背景和 focusable 在内层，
   选中态就落不到画背景的 View 上，行永远没有高亮。合并成一层后状态必然生效。
 
+  为什么从 LinearLayout 改成 FrameLayout：
+  LinearLayout 里勾选圈会占掉真实宽度（24dp + 间距），居中的其实是「文字 + 圈」这个整体，
+  文字本身被挤偏左。改成 FrameLayout 后圈脱离文档流（右端对齐），
+  文字左右各留 28dp（= 圈宽 24 + 4 的对称留白）后仍在**整行正中**，
+  长源名也绝不会压到圈上。
+
   颜色（按需求指定）：
   - focused：白底 #FFFFFF + 黑字 #000000，圆角矩形（selector_source_site_item_background
     → shape_source_site_item_focused，inset 8dp/4dp + 28dp 圆角，取自 ref_docs）
   - normal：透明底 + 白字（shape_source_chip_round_normal 无 solid）
-  - 勾选圈用 selector_check_circle 四态；SingleChoice 模式由代码置 GONE。
+  - 勾选圈用 selector_check_circle 四态：未勾选 = 空圆环，已勾选 = 圆环 + √（照搬 ref_docs，
+    不再用红色实心块）；SingleChoice 模式由代码置 INVISIBLE 留位。
 -->
-<androidx.appcompat.widget.LinearLayoutCompat xmlns:android="http://schemas.android.com/apk/res/android"
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/item"
-    android:gravity="center"
-    android:orientation="horizontal"
     android:background="@drawable/selector_source_site_item_background"
     android:focusable="true"
     android:focusableInTouchMode="true"
@@ -27,23 +32,28 @@
     android:layout_height="40dp"
     android:paddingStart="8dp"
     android:paddingEnd="8dp">
+
     <com.google.android.material.textview.MaterialTextView
+        android:id="@+id/text"
         android:textSize="13sp"
         android:textColor="@color/selector_source_site_item_text"
         android:ellipsize="marquee"
         android:gravity="center"
-        android:id="@+id/text"
         android:focusable="false"
         android:duplicateParentState="true"
+        android:layout_gravity="center"
         android:layout_width="wrap_content"
-        android:layout_height="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="28dp"
+        android:layout_marginEnd="28dp"
         android:singleLine="true"
-        android:includeFontPadding="false"/>
+        android:includeFontPadding="false" />
+
     <androidx.appcompat.widget.AppCompatImageView
         android:id="@+id/check"
         android:duplicateParentState="true"
+        android:layout_gravity="end|center_vertical"
         android:layout_width="24dp"
         android:layout_height="24dp"
-        android:layout_marginStart="12dp"
-        android:background="@drawable/selector_check_circle"/>
-</androidx.appcompat.widget.LinearLayoutCompat>
+        android:background="@drawable/selector_check_circle" />
+</FrameLayout>

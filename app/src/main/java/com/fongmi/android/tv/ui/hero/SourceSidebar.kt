@@ -38,7 +38,8 @@ internal enum class SourceSidebarMode {
  * 颜色按需求固定：
  * - 行 focused → 白底（`shape_source_site_item_focused`，取自 ref_docs：inset 8dp/4dp + 28dp 圆角）+ 黑字；
  * - 行 normal → 透明底（`shape_source_chip_round_normal` 无 solid）+ 白字；
- * - 勾选圈 → `selector_check_circle` 的四态（实心 / 空心 / 焦点态）。
+ * - 勾选圈 → `selector_check_circle` 四态：未勾选是 2dp 空圆环，已勾选是圆环 + √
+ *   （照搬 `ref_docs/shape_check_circle_on*.xml`，**不再用红色实心圆**）；行底色为白时自动换深色环。
  *
  * 行布局的 `@id/item` 就是根节点，因此 `ViewHolder.itemView` 与画背景的 View 是同一个，
  * `isSelected` / 焦点态一定作用在可见的背景上（旧版是「外层容器 + 内层 item」两层，状态打在外层，永远不显示）。

@@ -1,12 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  勾选圈：行处于焦点 + 未勾选。行背景此时是白底，
-  白色描边会看不见，所以改用深色描边（空心）。
+  勾选圈「未勾选」态（行正在聚焦、行底为白色）：2dp 黑圆环，环内透明。
+  照搬 ref_docs/shape_check_circle_off_focused.xml：白底上黑环才看得见。
 -->
 <shape xmlns:android="http://schemas.android.com/apk/res/android"
     android:shape="oval">
-    <solid android:color="@android:color/transparent" />
+    <solid android:color="#00000000" />
     <stroke
         android:width="2dp"
-        android:color="@color/black_40" />
+        android:color="#ff000000" />
+    <size
+        android:width="20dp"
+        android:height="20dp" />
 </shape>

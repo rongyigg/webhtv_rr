@@ -1,12 +1,33 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  勾选圈：行处于焦点 + 已勾选。行背景此时是白底，
-  所以用红色实心 + 白色描边，保证在白底和深底上都看得见（实心）。
+  勾选圈「已勾选」态（行正在聚焦、行底为白色）：2dp 黑圆环 + 居中黑色对勾，环内透明。
+  照搬 ref_docs/shape_check_circle_on_focused.xml：白底焦点块上必须换成深色，
+  否则白环白勾在白色胶囊上完全看不见。
 -->
-<shape xmlns:android="http://schemas.android.com/apk/res/android"
-    android:shape="oval">
-    <solid android:color="@color/red" />
-    <stroke
-        android:width="2dp"
-        android:color="@color/white" />
-</shape>
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item>
+        <shape android:shape="oval">
+            <solid android:color="#00000000" />
+            <stroke
+                android:width="2dp"
+                android:color="#ff000000" />
+            <size
+                android:width="20dp"
+                android:height="20dp" />
+        </shape>
+    </item>
+    <item android:gravity="center">
+        <vector
+            android:width="14dp"
+            android:height="14dp"
+            android:viewportWidth="24"
+            android:viewportHeight="24">
+            <path
+                android:pathData="M5,12 L10,17 L19,7"
+                android:strokeColor="#ff000000"
+                android:strokeWidth="3"
+                android:strokeLineCap="round"
+                android:strokeLineJoin="round" />
+        </vector>
+    </item>
+</layer-list>

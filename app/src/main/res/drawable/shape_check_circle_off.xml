@@ -1,9 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 勾选圈：未勾选（空心）。圆形（oval），半透明白描边。 -->
+<!--
+  勾选圈「未勾选」态（行未聚焦）：2dp 白圆环，环内透明，无任何填充色。
+  照搬 ref_docs/shape_check_circle_off.xml，只保留一圈细环，和已勾选的「环 + √」区分。
+-->
 <shape xmlns:android="http://schemas.android.com/apk/res/android"
     android:shape="oval">
-    <solid android:color="@android:color/transparent" />
+    <solid android:color="#00000000" />
     <stroke
-        android:width="1dp"
-        android:color="@color/white_40" />
+        android:width="2dp"
+        android:color="@color/white" />
+    <size
+        android:width="20dp"
+        android:height="20dp" />
 </shape>
