@@ -72,6 +72,19 @@ class HeroPosterCard @JvmOverloads constructor(
             bindPoster()
         }
 
+    /**
+     * 剧名字号（sp）。默认 [TITLE_SP] = 16sp，即全局海报卡基准（`adapter_search.xml` L56）。
+     *
+     * 只有 TMDB 手动匹配弹窗需要更小的字号：原版 `adapter_tmdb_match.xml` L59 就是 **12sp**，
+     * 而且那张卡整体比全局海报卡小一号（110dp 宽 / 102×153 海报）。卡片宽高、圆角、焦点描边
+     * 仍然写死不可改，本字段只影响剧名这一行文字。
+     */
+    var titleTextSizeSp: Float = TITLE_SP
+        set(value) {
+            field = value
+            titleView.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, value)
+        }
+
     /** 左上角标签：「MM-dd | 来源」，13sp + `shape_vod_site`，单行省略。 */
     var topStartTag: String = ""
         set(value) {

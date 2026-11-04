@@ -70,15 +70,19 @@ import kotlinx.coroutines.launch
  * 1. **结果卡只允许用全局唯一组件 [HeroPosterCard]**（120×214dp、四角 8dp 全圆、
  *    2dp 纯红焦点框只包 120×180 海报、34dp 剧名栏）。`AndroidView` 里**绝不加任何尺寸 Modifier**，
  *    容器高度直接取 [HeroPosterCard.CARD_HEIGHT_DP]，否则会把 34dp 剧名栏裁掉。
+ *    唯一允许改的是剧名字号：原版这张卡是 12sp（`adapter_tmdb_match.xml` L59），
+ *    用 [HeroPosterCard.titleTextSizeSp] 调成 [TMDB_RESULT_CARD_TITLE_SP]，不碰全局默认值。
  * 2. **键盘不复制第二份**：直接复用 `ui/hero/HeroKeyboard.kt` 的 [KeyboardSection]
  *    （输入框行 + 6 行 × 7 列键位），再在弹窗内部用 `CompositionLocalProvider(LocalDensity)`
  *    把整棵键盘子树等比缩到原版左列的 217dp 宽（[TMDB_KEYBOARD_SCALE]），不改共享组件的常量。
+ *    弹窗没有换源侧边栏，所以 `hideHouseKey = true` 把无行为的小房子键隐藏成空槽。
  * 3. **第一段零网络**：结果全部来自 [TMDB_MOCK_RESULTS]，放大镜按钮只按关键字过滤这份假数据。
  *    TODO(第二段)：`TmdbApi.searchMulti(keyword)` 真实请求 + Gson 解析 + API Key 输入。
  *
  * 焦点契约：
  * - 进弹窗 → 输入框；输入框 / 放大镜 ↓ → 键盘第一行；
  * - 键盘最后一行 ↓ → 结果区第一张卡；结果卡 ↑ → 键盘第一行；
+ * - **结果卡 ← 到第一张再往左 → 放大镜**（否则焦点会卡在第一张卡上出不来）；
  * - 键盘最右列 → 不消费（交原生 2D 焦点搜索）；返回键 → 关闭弹窗，焦点由首页还回长按的那张卡。
  */
 @Composable
@@ -184,7 +188,8 @@ internal fun TmdbMatchDialog(
                 HeroKeyAction.Backspace -> backspace()
                 // 原版这个位置是「键盘布局切换键」；本弹窗没有符号键盘页，改为清空输入。
                 HeroKeyAction.Keyboard -> field = TextFieldValue("")
-                // TODO(季度匹配)：TMDB 弹窗没有侧边栏，小房子键第一段不接任何行为。
+                // 小房子键在弹窗里已被 hideHouseKey 隐藏（索引 5 变成空槽），
+                // 这个分支只为让 when 覆盖完整，永远不会被触发。
                 HeroKeyAction.House -> Unit
             }
 
@@ -193,13 +198,22 @@ internal fun TmdbMatchDialog(
         }
     }
 
+    /**
+     * 索引 [HOUSE_KEY_INDEX]（小房子）在弹窗里是隐藏空槽，四向移动经过它时必须再跨一格：
+     * 否则 `requestFocus` 会落到一个没有组合的 FocusRequester 上，焦点卡在原地不动。
+     */
+    fun skipHiddenKey(target: Int, step: Int): Int =
+        if (target == HOUSE_KEY_INDEX) target + step else target
+
     fun onKeyMove(index: Int, key: Key): Boolean {
         val row = index / KEY_COLUMNS
         val column = index % KEY_COLUMNS
         return when (key) {
             Key.DirectionLeft -> {
                 // 最左列（含第一行占位格右侧的 `<`）不再左移，就地消费。
-                if (column > 0 && index - 1 > PLACEHOLDER_INDEX) requestFocus(keyRequesters, index - 1)
+                // 从 A 左移要跨过隐藏的小房子，落到「键盘布局」键。
+                val target = skipHiddenKey(index - 1, -1)
+                if (column > 0 && target > PLACEHOLDER_INDEX) requestFocus(keyRequesters, target)
                 true
             }
 
@@ -208,19 +222,23 @@ internal fun TmdbMatchDialog(
                 if (column == KEY_COLUMNS - 1) {
                     false
                 } else {
-                    requestFocus(keyRequesters, index + 1)
+                    requestFocus(keyRequesters, skipHiddenKey(index + 1, 1))
                     true
                 }
             }
 
             Key.DirectionUp -> {
-                if (row > 0) requestFocus(keyRequesters, index - KEY_COLUMNS) else focusInput()
+                if (row > 0) {
+                    requestFocus(keyRequesters, skipHiddenKey(index - KEY_COLUMNS, -1))
+                } else {
+                    focusInput()
+                }
                 true
             }
 
             Key.DirectionDown -> {
                 if (row < KEY_ROWS - 1) {
-                    requestFocus(keyRequesters, index + KEY_COLUMNS)
+                    requestFocus(keyRequesters, skipHiddenKey(index + KEY_COLUMNS, 1))
                 } else {
                     // 最后一行继续下按：落到结果区第一张卡（XML L92 keyboard nextFocusDown=candidate）。
                     focusResult(0)
@@ -304,6 +322,8 @@ internal fun TmdbMatchDialog(
                             onSearchLeft = { focusInput() },
                             onKeyClick = { key -> onKeyClick(key) },
                             onKeyMove = { index, key -> onKeyMove(index, key) },
+                            // 弹窗没有换源侧边栏，小房子键点了没反应，直接隐藏（索引 5 变空槽）。
+                            hideHouseKey = true,
                         )
                     }
                 }
@@ -378,6 +398,9 @@ internal fun TmdbMatchDialog(
                                 AndroidView(
                                     factory = { context ->
                                         HeroPosterCard(context).also { card ->
+                                            // 原版这张卡的剧名就是 12sp（`adapter_tmdb_match.xml` L59），
+                                            // 而全局海报卡基准是 16sp，直接复用会明显偏大、盖过左侧键盘。
+                                            card.titleTextSizeSp = TMDB_RESULT_CARD_TITLE_SP
                                             resultRegistry.bind(index, card)
                                         }
                                     },
@@ -398,6 +421,8 @@ internal fun TmdbMatchDialog(
                                         }
                                         // 卡片 ↑ 回键盘第一行；←/→ 在结果行内移动（卡是 Android View，
                                         // Compose 原生 2D 搜索摸不到兄弟卡，所以这里显式交接）。
+                                        // 第一张卡再往左：回到放大镜（原版结果区 nextFocusLeft 指回搜索列），
+                                        // 否则焦点会卡在第一张卡上出不来。
                                         card.setOnKeyListener { _, keyCode, event ->
                                             if (event.action != KeyEvent.ACTION_DOWN) return@setOnKeyListener false
                                             when (keyCode) {
@@ -407,7 +432,7 @@ internal fun TmdbMatchDialog(
                                                 }
 
                                                 KeyEvent.KEYCODE_DPAD_LEFT -> {
-                                                    if (index > 0) focusResult(index - 1)
+                                                    if (index > 0) focusResult(index - 1) else requestFocus(searchRequester)
                                                     true
                                                 }
 
@@ -480,6 +505,15 @@ private const val TMDB_DIALOG_WIDTH_FRACTION = 0.82f
  * 高度约 216dp，和右侧「标题行 + 214dp 结果卡」基本齐平，弹窗恢复原版的扁长比例。
  */
 private const val TMDB_KEYBOARD_SCALE = 0.66f
+
+/**
+ * 结果卡剧名字号 **12sp**。
+ *
+ * 全局海报卡 [HeroPosterCard] 的剧名基准是 16sp（`adapter_search.xml` L56），
+ * 但原版 TMDB 匹配结果卡是更小的一号卡（110dp 宽 / 102×153 海报），剧名只有 12sp
+ * （`adapter_tmdb_match.xml` L59）。这里按原版取值，和左列缩小后的键盘（键 10.6sp）视觉齐平。
+ */
+private const val TMDB_RESULT_CARD_TITLE_SP = 12f
 
 /** 顶部行高 24dp（dialog_tmdb_match.xml L21 `tmdbBadge` layout_height="24dp"）。 */
 private val TMDB_HEADER_HEIGHT = 24.dp

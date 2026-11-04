@@ -72,6 +72,8 @@ import com.fongmi.android.tv.R
  * - 输入框行：mic 36dp + 12dp + 输入框 200dp + 12dp + 搜索按钮 40dp；
  * - 输入框：24sp、字距 0.02、2dp 红框、13dp 圆角、高 40dp（`activity_search.xml` L37/L53）；
  * - 42 格 = 第一行 `(占位, <, >, ⌫, 键盘, 房子, A)` + B-Z + 0-9，最右列是 A / H / O / V / 2 / 9。
+ *   小房子是**可选**的：`hideHouseKey = true` 时索引 [HOUSE_KEY_INDEX] 变成不可聚焦空槽
+ *   （TMDB 匹配弹窗用，那里没有换源侧边栏），格子宽度保留，列对齐不变。
  *
  * 焦点契约（与原搜索页完全一致）：
  * - 输入框 ↓ / 放大镜 ↓ → 键盘第一行；键盘内四向移动由 [FocusRequester] 精确控制；
@@ -116,6 +118,14 @@ internal fun KeyboardSection(
     onSearchLeft: () -> Unit,
     onKeyClick: (HeroKey) -> Unit,
     onKeyMove: (Int, Key) -> Boolean,
+    /**
+     * 是否隐藏第一行的「小房子」键（索引 [HOUSE_KEY_INDEX]）。
+     *
+     * 默认 `false` = 搜索页原样（那里点小房子会打开换源侧边栏）。
+     * TMDB 手动匹配弹窗没有侧边栏，小房子无行为，传 `true` 把它变成不可聚焦空槽；
+     * 调用方需要在自己的 `onKeyMove` 里跳过 [HOUSE_KEY_INDEX]。
+     */
+    hideHouseKey: Boolean = false,
 ) {
     Column(
         // 宽度完全由内容撑开（最宽的是键盘 7×40 + 6×8 = 328dp），绝不写死、绝不拉伸。
@@ -150,10 +160,12 @@ internal fun KeyboardSection(
                 Row(horizontalArrangement = Arrangement.spacedBy(KEY_SPACING)) {
                     for (column in 0 until KEY_COLUMNS) {
                         val index = row * KEY_COLUMNS + column
-                        if (index == PLACEHOLDER_INDEX) {
-                            HeroKeyPlaceholder()
-                        } else {
-                            KeyboardKey(
+                        when {
+                            index == PLACEHOLDER_INDEX -> HeroKeyPlaceholder()
+                            // 隐藏小房子时保留这一格的宽度：A 仍在最右列，B..H 与它上下对齐，
+                            // 只是这一格不可聚焦、不画任何东西。
+                            hideHouseKey && index == HOUSE_KEY_INDEX -> HeroKeyBlank()
+                            else -> KeyboardKey(
                                 key = HERO_KEYS[index],
                                 requester = keyRequesters[index],
                                 onMove = { key -> onKeyMove(index, key) },
@@ -250,6 +262,17 @@ internal fun HeroKeyPlaceholder() {
     ) {
         HeroGlyphIcon(glyph = HeroGlyph.Grid, modifier = Modifier.size(KEY_ICON_SIZE))
     }
+}
+
+/**
+ * 隐藏某个键之后留下的空槽：与普通键同尺寸、**不画任何东西、不可聚焦**。
+ *
+ * 只用于 [KeyboardSection] 的 `hideHouseKey = true` 分支，目的是让第一行继续占满 7 列，
+ * 后面的 A 仍然落在最右列、和 B..H 上下对齐。
+ */
+@Composable
+internal fun HeroKeyBlank() {
+    Box(modifier = Modifier.size(KEY_SIZE))
 }
 
 // ---------------------------------------------------------------------------
