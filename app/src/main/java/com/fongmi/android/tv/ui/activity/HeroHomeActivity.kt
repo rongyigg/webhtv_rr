@@ -52,6 +52,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -227,6 +228,8 @@ private fun HeroHomeScreen(onOpenDetail: (String) -> Unit) {
     // 《焦点总结》第 ②③ 条的分界线：只有还在模块内，选中的 Tab 才挂红框；
     // 一旦 ↑ 回顶栏，选中态整体休眠，不留任何红框。
     var moduleFocused by remember { mutableStateOf(false) }
+    // 长按卡片呼出的搜索弹窗：null = 未打开；非空 = 要预填进搜索框的关键字。
+    var searchQuery by remember { mutableStateOf<String?>(null) }
 
     // 换分类时用同一批假数据做轮转，视觉上列表确实换了，但不需要第二套资源。
     val posters = remember(selectedTabIndex) { postersForTab(selectedTabIndex.coerceAtLeast(0)) }
@@ -239,12 +242,15 @@ private fun HeroHomeScreen(onOpenDetail: (String) -> Unit) {
         requestFocus(topBarRequesters, 0)
     }
 
-    // 任意一排 → Tab：落在“记忆中的上一次选中项”，而不是第一项。
+    // 任意一排 → Tab：
+    // - 从卡片按 ↑ 上来时必须回到**当前选中的分类**（红框那一个），
+    //   而不是「焦点上一次路过的 Tab」——那个只是实心红块，用户根本没按确定键，
+    //   回到它等于把用户选好的分类换成别的（图 1 标注的 bug）；
+    // - 还没按过任何分类（-1）时退回「焦点上次停留项」，再不行落第一项。
     // 注意：这里只移动焦点，**绝不改 selectedTabIndex**。
-    // 旧实现把「焦点经过的 Tab」也写进选中态，于是焦点一离开，那个 Tab 仍然保持红色 ——
-    // 正是「没有任何焦点却仍有红底」的根因。
-    fun focusTab(index: Int = rememberedTabIndex) {
-        val target = index.coerceIn(0, HERO_TABS.lastIndex)
+    fun focusTab(index: Int? = null) {
+        val fallback = if (selectedTabIndex >= 0) selectedTabIndex else rememberedTabIndex
+        val target = (index ?: fallback).coerceIn(0, HERO_TABS.lastIndex)
         rememberedTabIndex = target
         scope.launch { tabState.animateScrollToItem(target) }
         if (!requestFocus(tabRequesters, target)) requestFocus(tabRequesters, 0)
@@ -367,11 +373,29 @@ private fun HeroHomeScreen(onOpenDetail: (String) -> Unit) {
                 },
                 // 卡片确定键：不再直接起播，改为拉起详情页（剧本名一并传过去）。
                 onClick = onOpenDetail,
-                // 海报行 ↑ 回 Tab 栏：落到记忆中的 Tab。
+                // 卡片长按确定键：以弹窗形式呼出搜索页，并带上这张卡的剧名。
+                onLongClick = { title -> searchQuery = title },
+                // 海报行 ↑ 回 Tab 栏：落到**当前选中的分类**（见 focusTab 的注释）。
                 onMoveUp = { focusTab() },
                 onMoveDown = { },
                 onMoveLeft = { index -> focusPosterHorizontal(index, -1) },
                 onMoveRight = { index -> focusPosterHorizontal(index, 1) },
+            )
+        }
+        // 长按卡片呼出的搜索弹窗：整页 UI 复用 HeroSearchActivity 的 HeroSearchScreen，
+        // 只是换成 Dialog 窗口盖在首页上，关闭后焦点自动回到首页。
+        searchQuery?.let { query ->
+            HeroSearchDialog(
+                backdropUrl = heroPoster.backdropUrl,
+                initialKeyword = query,
+                onOpenDetail = onOpenDetail,
+                onDismiss = {
+                    searchQuery = null
+                    scope.launch {
+                        withFrameNanos { }
+                        requestFocus(posterRequesters, focusedPosterIndex)
+                    }
+                },
             )
         }
     }
@@ -851,6 +875,7 @@ private fun PosterArea(
     requesters: List<FocusRequester>,
     onFocused: (Int) -> Unit,
     onClick: (String) -> Unit,
+    onLongClick: (String) -> Unit,
     onMoveUp: (Int) -> Unit,
     onMoveDown: (Int) -> Unit,
     onMoveLeft: (Int) -> Unit,
@@ -871,6 +896,8 @@ private fun PosterArea(
                 requester = requesters[index],
                 onFocused = { onFocused(index) },
                 onClick = { onClick(poster.title) },
+                // 长按确定键 = 用这张卡的剧名呼出搜索弹窗。
+                onLongClick = { onLongClick(poster.title) },
                 // 把“从哪一张发起”带回上层：滚动锚点与左右边界都在上层统一处理。
                 onMoveUp = { onMoveUp(index) },
                 onMoveDown = { onMoveDown(index) },
@@ -900,6 +927,7 @@ private fun PosterCard(
     requester: FocusRequester,
     onFocused: () -> Unit,
     onClick: () -> Unit,
+    onLongClick: () -> Unit,
     onMoveUp: () -> Unit,
     onMoveDown: () -> Unit,
     onMoveLeft: () -> Unit,
@@ -930,6 +958,9 @@ private fun PosterCard(
         ),
         label = "posterElevation",
     )
+    // 长按确认键自己计时：遥控器不发 View/Compose 的 long-click，只能靠按下时刻自己算。
+    // `pressAt == 0L` 表示当前没有按着（长按时系统会重复发 KeyDown，用它去重）。
+    var pressAt by remember { mutableLongStateOf(0L) }
 
     Column(
         modifier = Modifier
@@ -937,9 +968,25 @@ private fun PosterCard(
             .focusRequester(requester)
             .onFocusChanged {
                 // 这里只负责把“焦点换到哪一张”通知给上层，焦点样式统一走 interactionSource。
-                if (it.isFocused) onFocused()
+                if (it.isFocused) onFocused() else pressAt = 0L
             }
             .onPreviewKeyEvent { event ->
+                // 确定键 / 回车完全由卡片接管（见下方 when 的前两个分支），
+                // 这样「短按 = 单击、长按 ≥ 500ms = 呼出搜索弹窗」才不会和 clickable 冲突。
+                when (event.key) {
+                    Key.DirectionCenter, Key.Enter -> {
+                        if (event.type == KeyEventType.KeyDown) {
+                            if (pressAt == 0L) pressAt = System.currentTimeMillis()
+                        } else {
+                            val held = if (pressAt == 0L) 0L else System.currentTimeMillis() - pressAt
+                            pressAt = 0L
+                            if (held >= POSTER_LONG_PRESS_MS) onLongClick() else onClick()
+                        }
+                        return@onPreviewKeyEvent true
+                    }
+
+                    else -> Unit
+                }
                 if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
                 // 四个方向都由卡片自己接管：左右决定行滚动锚点，上回分类条、下留在原地。
                 when (event.key) {
@@ -1185,6 +1232,9 @@ private val POSTER_FOCUS_BORDER = 2.dp
 // styles.xml:12-14 —— `Vod.Grid.Large` 的 cornerSize 精确值就是 8dp（父样式 `Vod.Grid` 同为 8dp 圆角）。
 private val POSTER_SHAPE = RoundedCornerShape(8.dp)
 private val POSTER_PLACEHOLDER = Color(0xFF161616)
+
+// 长按阈值：与历史页卡片的长按计时（500ms）保持一致，超过就当成「长按确定键」。
+private const val POSTER_LONG_PRESS_MS = 500L
 
 // ---------------------------------------------------------------------------
 // 全局主题色统一在 HeroCommonUi 定义：

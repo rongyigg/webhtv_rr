@@ -12,6 +12,7 @@ import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -72,10 +73,12 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
@@ -97,11 +100,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
-import coil3.compose.AsyncImage
-import coil3.request.ImageRequest
 import com.fongmi.android.tv.R
 import com.fongmi.android.tv.setting.Setting
 import com.fongmi.android.tv.ui.hero.HERO_SOURCE_ENTRIES
@@ -219,16 +222,63 @@ class HeroSearchActivity : ComponentActivity() {
     }
 }
 
+/**
+ * 搜索弹窗（首页卡片长按确定键呼出）。
+ *
+ * 内容与全屏搜索页**完全同一份** [HeroSearchScreen]：同一个键盘、同一套三态焦点、
+ * 同一个多选侧边栏，只是把它装进一个 Dialog 窗口里盖在首页上（92% × 92%、16dp 圆角）。
+ * 这样「弹窗」和「全屏页」不会各写一套慢慢漂移 —— 以后改搜索页，弹窗自动跟着变。
+ *
+ * 关闭走 `onDismissRequest`（返回键），调用方负责把焦点还给首页卡片。
+ */
 @Composable
-private fun HeroSearchScreen(
+internal fun HeroSearchDialog(
+    backdropUrl: String?,
+    initialKeyword: String,
+    onOpenDetail: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(
+            dismissOnBackPress = true,
+            dismissOnClickOutside = false,
+            // 关掉平台默认宽度，才由下面的 fillMaxWidth(fraction) 决定弹窗大小。
+            usePlatformDefaultWidth = false,
+        ),
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth(SEARCH_DIALOG_WIDTH_FRACTION)
+                .fillMaxHeight(SEARCH_DIALOG_HEIGHT_FRACTION)
+                .clip(SEARCH_DIALOG_SHAPE)
+                .background(Color.Black),
+        ) {
+            MaterialTheme(colorScheme = darkColorScheme()) {
+                HeroSearchScreen(
+                    backdropUrl = backdropUrl,
+                    onOpenDetail = onOpenDetail,
+                    initialKeyword = initialKeyword,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+internal fun HeroSearchScreen(
     backdropUrl: String?,
     onOpenDetail: (String) -> Unit,
+    initialKeyword: String = "",
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
     // 输入内容用 TextFieldValue 维护：readOnly 只吃自己的虚拟键盘，光标由键盘 < / > 驱动。
-    var field by remember { mutableStateOf(TextFieldValue("")) }
+    // [initialKeyword]：首页卡片长按呼出时把剧名带进来，光标直接落到末尾，接着打字即可。
+    var field by remember {
+        mutableStateOf(TextFieldValue(initialKeyword, TextRange(initialKeyword.length)))
+    }
     var history by remember { mutableStateOf(HERO_HISTORY.toList()) }
     var selectedSite by remember { mutableIntStateOf(0) }
     var focusedSite by remember { mutableIntStateOf(0) }
@@ -612,33 +662,52 @@ private fun HeroSearchScreen(
  * 图2 里能看见海报的色块轮廓却完全看不出细节，正是模糊后的结果；
  * 如果只是半透明蒙版，下面的海报和文字会是清晰的。
  *
- * 这里的实现等价但更省：把图**解码到 48×27** 再拉伸铺满整屏。
- * 双线性放大天然就是高斯模糊的效果，所有 Android 版本表现一致，
- * 既不需要 `RenderEffect`（API 31+，且电视盒子 GPU 开销高），
- * 也不需要已废弃的 RenderScript，实际绘制成本只有一张 48×27 的小图。
+ * 这里做**真正的模糊**，不依赖 API 级别：
+ * 1. Coil 把图解码到 [BACKDROP_SAMPLE_WIDTH]×[BACKDROP_SAMPLE_HEIGHT]（160×90）；
+ * 2. [HeroImageLoader.blurredBackdrop] 在这张小图上跑分离式盒式模糊（两趟 ≈ 高斯）；
+ * 3. 放大铺满整屏时双线性插值再做一次平滑。
+ *
+ * 之前只做「解码到 48×27 再拉伸」：等价于 40 倍最近邻放大，横向残影会变成一条条硬色带
+ * （图3 就是那个样子），既不像模糊也压不住背景，反而更干扰看字。
+ * 纯 Kotlin 模糊在所有 Android 版本上表现一致，不需要 `RenderEffect`（API 31+）
+ * 或已废弃的 RenderScript，绘制成本仍然只是一张小图。
  *
  * 没有大图时（例如从别处直接打开本页）退回原来的纯色渐变。
  */
 @Composable
 private fun HeroSearchBackground(backdropUrl: String?) {
+    val context = LocalContext.current
+    // 模糊底图是异步算出来的：算完之前先显示纯黑，避免闪一下未模糊的原图。
+    var backdrop by remember(backdropUrl) { mutableStateOf<ImageBitmap?>(null) }
+    LaunchedEffect(backdropUrl) {
+        backdrop = null
+        if (backdropUrl.isNullOrBlank()) return@LaunchedEffect
+        backdrop = HeroImageLoader.blurredBackdrop(
+            context = context,
+            url = backdropUrl,
+            width = BACKDROP_SAMPLE_WIDTH,
+            height = BACKDROP_SAMPLE_HEIGHT,
+            blurRadius = BACKDROP_BLUR_RADIUS,
+        )?.asImageBitmap()
+    }
+
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(Color.Black),
     ) {
-        if (backdropUrl.isNullOrBlank()) {
+        val bitmap = backdrop
+        if (bitmap == null) {
             Box(modifier = Modifier.fillMaxSize().background(FALLBACK_BACKGROUND))
         } else {
-            AsyncImage(
-                model = ImageRequest.Builder(LocalContext.current)
-                    .data(backdropUrl)
-                    .size(BACKDROP_SAMPLE_WIDTH, BACKDROP_SAMPLE_HEIGHT)
-                    .build(),
+            Image(
+                bitmap = bitmap,
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize(),
             )
-            // ① 整体半透明黑：原版 0x33000000，这里加深一点保证白字在浅色背景上也够清楚。
+            // ① 整体压黑：原版 0x33000000（20%）在真机白色字幕上根本不够，
+            //    这里用 60% —— 保留色块与氛围，但压在底下的内容不会跟文字抢注意力（图2 的观感）。
             Box(modifier = Modifier.fillMaxSize().background(BACKDROP_SCRIM))
             // ② 底部压黑：海报行下方是白字标题，必须有深底托住。
             Box(modifier = Modifier.fillMaxSize().background(BACKDROP_BOTTOM_FADE))
@@ -1713,10 +1782,18 @@ private fun suggestionsFor(keyword: String): List<String> {
 // 尺寸常量（每一条都能在 ref_docs 里找到出处，见对应注释）
 // ---------------------------------------------------------------------------
 
-// 背景：首页大图按 48×27 解码后拉伸铺满 = 等价高斯模糊（见 HeroSearchBackground）。
-private const val BACKDROP_SAMPLE_WIDTH = 48
-private const val BACKDROP_SAMPLE_HEIGHT = 27
-private val BACKDROP_SCRIM = Color(0x4D000000)      // 30% 黑：压住高光、保留色块
+// 背景：首页大图先解码到 160×90，再做盒式模糊（两趟 ≈ 高斯），最后放大铺满。
+// 160×90 足够保留「大面积色块 / 明暗分布」，又小到模糊一帧就能算完（见 HeroSearchBackground）。
+private const val BACKDROP_SAMPLE_WIDTH = 160
+private const val BACKDROP_SAMPLE_HEIGHT = 90
+// 模糊半径（单位 = 采样图上的像素）。8 × (1920/160 ≈ 12) ≈ 屏幕上 96px 的模糊，符合图2 的观感。
+private const val BACKDROP_BLUR_RADIUS = 8
+private val BACKDROP_SCRIM = Color(0x99000000)      // 60% 黑：压住背景细节，只留氛围色块
+
+// 搜索弹窗（首页长按卡片呼出）的窗口占比与圆角：留出四周边距，看得出是「盖在上面的一层」。
+private const val SEARCH_DIALOG_WIDTH_FRACTION = 0.92f
+private const val SEARCH_DIALOG_HEIGHT_FRACTION = 0.92f
+private val SEARCH_DIALOG_SHAPE = RoundedCornerShape(16.dp)
 private val BACKDROP_BOTTOM_FADE = Brush.verticalGradient(
     0.0f to Color.Transparent,
     0.55f to Color.Black.copy(alpha = 0.35f),
