@@ -1,10 +1,12 @@
 package com.fongmi.android.tv.ui.activity
 
+import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.graphics.Color as AndroidColor
 import android.graphics.drawable.ColorDrawable
 import android.os.Bundle
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.animation.core.animateFloatAsState
@@ -40,6 +42,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -80,10 +83,14 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import androidx.lifecycle.Observer
 import androidx.lifecycle.ViewModelProvider
 import coil3.compose.AsyncImage
 import com.fongmi.android.tv.R
 import com.fongmi.android.tv.api.config.VodConfig
+import com.fongmi.android.tv.bean.Episode
+import com.fongmi.android.tv.bean.Flag
+import com.fongmi.android.tv.bean.Result
 import com.fongmi.android.tv.bean.Site
 import com.fongmi.android.tv.bean.Vod
 import com.fongmi.android.tv.model.SiteViewModel
@@ -101,8 +108,12 @@ import kotlinx.coroutines.withContext
 /**
  * HeroUI（Compose）详情页。
  *
- * 本阶段仍是假数据骨架，不触碰 PlayerManager / VideoActivity 等既有播放链路：
- * 按钮点击只做 UI 反馈，没有任何播放器调用。
+ * 数据链路：
+ * - 进页用 Intent 里的 `extra_vod_id` 调 `SiteViewModel.detailContent(siteKey, vodId)`，
+ *   观察 `SiteViewModel.result` 拿真实 [Vod]：简介 / 年份 / 地区 / 分类 / 导演 / 主演全部用真实字段，
+ *   `Vod.flags[].episodes` 是 [HeroPlayDialog] 与起播的唯一数据源。
+ * - 起播只调用原版公开入口 [VideoActivity.startDirect]（不碰 PlayerManager / PlaybackActivity，
+ *   也不自己拼 Intent）；线路 / 集名 / 集地址直接来自真实 [Flag] / [Episode]。
  *
  * 主页面（从下往上）：
  * 1. [HeroDetailBackdrop]：全屏背景大图。
@@ -148,35 +159,50 @@ class HeroDetailActivity : ComponentActivity() {
         val siteKey = intent.getStringExtra(EXTRA_SITE_KEY).orEmpty().ifBlank {
             VodConfig.get().getHome().key
         }
+        // 真实详情主键：首页海报卡 / 换源弹窗已经把它塞进 Intent；旧入口（只有剧名）为空。
+        val vodId = intent.getStringExtra(EXTRA_VOD_ID).orEmpty()
+        val siteName = intent.getStringExtra(EXTRA_SITE_NAME).orEmpty()
         // 换源弹窗需要 Activity 作用域的 SiteViewModel（构造函数里就建了两个单线程 executor，
         // 绝不能按弹窗 new）。详情页自己持有一份，和首页互不影响。
         val siteViewModel = ViewModelProvider(this)[SiteViewModel::class.java]
+        // 【真实详情】进页就请求：结果写 `SiteViewModel.result`，由 Compose 侧的观察者接收。
+        // 详情接口返回的 `Vod.flags[].episodes` 是选集弹窗与起播的唯一数据源。
+        if (vodId.isNotBlank()) {
+            Log.d(TAG_DETAIL, "请求详情: site=$siteKey id=$vodId")
+            siteViewModel.detailContent(siteKey, vodId)
+        }
         setContent {
             MaterialTheme(colorScheme = darkColorScheme()) {
                 HeroDetailScreen(
+                    activity = this@HeroDetailActivity,
                     detail = detail,
-                    siteViewModel = siteViewModel,
+                    vodId = vodId,
                     siteKey = siteKey,
+                    siteName = siteName,
+                    siteViewModel = siteViewModel,
                 )
             }
         }
     }
 
     /**
-     * Intent → 页面数据。
+     * Intent → 首帧页面数据。
      *
      * 有 `EXTRA_PIC` 就说明是从首页 / 换源弹窗进来的真实条目：
-     * 剧名、海报、元数据、简介全部取真实值；
-     * **演职员、线路、选集仍取 [DEMO_DETAIL]** —— 详情接口（`SiteViewModel.detailContent`）尚未接入，
-     * 那是下一个单元的事。
+     * 剧名、海报、元数据、简介先按 Intent 直出，详情接口回来后再由
+     * [mergeDetail] 用真实 [Vod] 整体覆盖（含年份 / 地区 / 分类 / 简介 / 导演 / 主演）。
+     *
+     * 演职员头像行仍取 [DEMO_DETAIL]（TMDB 刮削尚未接入），线路与选集则完全来自
+     * `SiteViewModel.detailContent` 返回的 `Vod.flags`，不再有假数据。
      */
     private fun readDetail(): HeroDetail {
         val title = intent.getStringExtra(EXTRA_TITLE).orEmpty().ifBlank { return DEMO_DETAIL }
         val pic = intent.getStringExtra(EXTRA_PIC).orEmpty()
         if (pic.isBlank()) return DEMO_DETAIL.copy(title = title)
-        // 元数据：年份 · 分类 · 备注 · 接口源，空字段自动省略，不留多余的 `·`。
+        // 元数据：年份 · 地区 · 分类 · 备注 · 接口源，空字段自动省略，不留多余的 `·`。
         val meta = listOf(
             intent.getStringExtra(EXTRA_YEAR).orEmpty(),
+            intent.getStringExtra(EXTRA_AREA).orEmpty(),
             intent.getStringExtra(EXTRA_TYPE).orEmpty(),
             intent.getStringExtra(EXTRA_REMARKS).orEmpty(),
             intent.getStringExtra(EXTRA_SITE_NAME).orEmpty(),
@@ -193,9 +219,11 @@ class HeroDetailActivity : ComponentActivity() {
 
     companion object {
 
+        private const val EXTRA_VOD_ID = "extra_vod_id"
         private const val EXTRA_TITLE = "extra_title"
         private const val EXTRA_PIC = "extra_pic"
         private const val EXTRA_YEAR = "extra_year"
+        private const val EXTRA_AREA = "extra_area"
         private const val EXTRA_TYPE = "extra_type"
         private const val EXTRA_REMARKS = "extra_remarks"
         private const val EXTRA_CONTENT = "extra_content"
@@ -208,14 +236,17 @@ class HeroDetailActivity : ComponentActivity() {
          * [Vod] 不是 Parcelable，所以逐字段塞进 Intent；[Site] 只带 key + 名称
          * （详情页只需要它做「排除当前源」和元数据展示，不需要完整站点配置）。
          *
-         * 演职员 / 线路 / 选集仍来自 [DEMO_DETAIL]，详情接口是下一个单元。
+         * `extra_vod_id` 是详情接口的主键：进页后用它调 `SiteViewModel.detailContent`，
+         * 拿回真实的 `flags / episodes`；线路与选集不再有假数据。
          */
         fun start(context: Context, vod: Vod, site: Site) {
             context.startActivity(
                 Intent(context, HeroDetailActivity::class.java)
+                    .putExtra(EXTRA_VOD_ID, vod.id)
                     .putExtra(EXTRA_TITLE, vod.name)
                     .putExtra(EXTRA_PIC, vod.pic)
                     .putExtra(EXTRA_YEAR, vod.year)
+                    .putExtra(EXTRA_AREA, vod.area)
                     .putExtra(EXTRA_TYPE, vod.typeName)
                     .putExtra(EXTRA_REMARKS, vod.remarks)
                     .putExtra(EXTRA_CONTENT, vod.content)
@@ -237,11 +268,49 @@ class HeroDetailActivity : ComponentActivity() {
 }
 
 @Composable
-private fun HeroDetailScreen(detail: HeroDetail, siteViewModel: SiteViewModel, siteKey: String) {
+private fun HeroDetailScreen(
+    activity: Activity,
+    detail: HeroDetail,
+    vodId: String,
+    siteKey: String,
+    siteName: String,
+    siteViewModel: SiteViewModel,
+) {
     val context = LocalContext.current
+    // ------------------------------------------------------------------
+    // 真实详情（`SiteViewModel.result`）
+    // ------------------------------------------------------------------
+    // 本项目没有 `runtime-livedata`（没有 observeAsState），沿用首页 / 搜索页的
+    // observeForever + onDispose 写法：销毁时一定摘除观察者，同时保留 LiveData
+    // 「立刻重放上一次值」的特性 —— Activity 重建时详情不会闪回骨架。
+    var detailResult by remember { mutableStateOf<Result?>(null) }
+    DisposableEffect(siteViewModel, vodId) {
+        val observer = Observer<Result?> { result ->
+            if (result == null) return@Observer
+            val incoming = result.vod
+            // 只接收本次条目的详情：换源弹窗走的是 `search` 通道，不会写 `result`；
+            // 这里再按 id 过滤，避免其它入口（例如首页 result）串台。
+            if (incoming.id.isNotBlank() && incoming.id != vodId) return@Observer
+            detailResult = result
+            Log.d(
+                TAG_DETAIL,
+                "详情到达: id=${incoming.id} 线路=${incoming.flags.size} " +
+                    "集数=${incoming.flags.sumOf { it.episodes.orEmpty().size }}",
+            )
+        }
+        siteViewModel.result.observeForever(observer)
+        onDispose { siteViewModel.result.removeObserver(observer) }
+    }
+    val vod = detailResult?.vod
+    // 详情还没回来：播放按钮先不弹空选集，改为提示 + 转圈占位。
+    val loadingDetail = vodId.isNotBlank() && vod == null
+    // 只保留真正有集数的线路：部分源的占位线路（如「请选择」）没有任何 episode。
+    val flags = remember(detailResult) { vod?.flags.orEmpty().filter { !it.episodes.isNullOrEmpty() } }
+    // Intent 字段用于首帧直出；详情到达后整体换成真实 Vod（年份 / 地区 / 分类 / 简介 / 导演 / 主演）。
+    val page = remember(detail, detailResult, siteName) { detail.mergeDetail(vod, siteName) }
     // 两组可聚焦区域：按钮组 + 演职员行。跨区移动全部显式 requestFocus，不依赖 2D 焦点搜索。
     val actionRequesters = remember { List(DETAIL_ACTIONS.size) { FocusRequester() } }
-    val castRequesters = remember(detail.cast.size) { List(detail.cast.size) { FocusRequester() } }
+    val castRequesters = remember(page.cast.size) { List(page.cast.size) { FocusRequester() } }
     var focusedAction by remember { mutableIntStateOf(DETAIL_ACTION_PLAY) }
     var focusedCast by remember { mutableIntStateOf(0) }
     var showPlayDialog by remember { mutableStateOf(false) }
@@ -286,13 +355,13 @@ private fun HeroDetailScreen(detail: HeroDetail, siteViewModel: SiteViewModel, s
 
     Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
         // ---- 底层：全屏背景 + 两层遮罩（顺序：背景 → 横向遮罩 → 纵向遮罩）----
-        HeroDetailBackdrop(url = detail.backdropUrl)
+        HeroDetailBackdrop(url = page.backdropUrl)
         HeroDetailMaskHorizontal()
         HeroDetailMaskVertical()
 
         // ---- 右上角浮动小海报：150dp × 210dp（XML posterCard L30-48）----
         HeroDetailPoster(
-            url = detail.posterUrl,
+            url = page.posterUrl,
             modifier = Modifier
                 .align(Alignment.TopEnd)
                 .padding(top = POSTER_TOP_GAP, end = POSTER_END_GAP),
@@ -310,7 +379,7 @@ private fun HeroDetailScreen(detail: HeroDetail, siteViewModel: SiteViewModel, s
                 ),
         ) {
             // 1. 剧名：有 Logo 显示艺术字，没有则 32sp 文字跑马灯（纯展示，不可聚焦）。
-            HeroDetailTitle(detail = detail)
+            HeroDetailTitle(detail = page)
             Spacer(modifier = Modifier.height(DETAIL_TITLE_META_GAP))
 
             // 2. 元数据固定 20dp、文字贴底（XML L90-102）。
@@ -321,7 +390,7 @@ private fun HeroDetailScreen(detail: HeroDetail, siteViewModel: SiteViewModel, s
                 contentAlignment = Alignment.BottomStart,
             ) {
                 Text(
-                    text = detail.meta,
+                    text = page.meta,
                     color = DETAIL_META_COLOR,
                     fontSize = DETAIL_META_SP.sp,
                     maxLines = 1,
@@ -333,7 +402,7 @@ private fun HeroDetailScreen(detail: HeroDetail, siteViewModel: SiteViewModel, s
 
             // 3. 简介：最宽 440dp、最多 4 行、超出省略（纯展示，不可聚焦）。
             Text(
-                text = detail.synopsis,
+                text = page.synopsis,
                 modifier = Modifier.widthIn(max = DETAIL_DESC_MAX_WIDTH),
                 color = DETAIL_DESC_COLOR,
                 fontSize = DETAIL_DESC_SP.sp,
@@ -343,6 +412,41 @@ private fun HeroDetailScreen(detail: HeroDetail, siteViewModel: SiteViewModel, s
                 style = TextStyle(shadow = DETAIL_DESC_SHADOW),
             )
 
+            // 3.1 真实导演 / 主演：详情接口给了才显示，单行省略（纯展示，不可聚焦）。
+            val credit = page.creditLine()
+            if (credit.isNotBlank()) {
+                Spacer(modifier = Modifier.height(DETAIL_CREDIT_TOP_GAP))
+                Text(
+                    text = credit,
+                    modifier = Modifier.widthIn(max = DETAIL_DESC_MAX_WIDTH),
+                    color = DETAIL_META_COLOR,
+                    fontSize = DETAIL_CREDIT_SP.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    style = TextStyle(shadow = DETAIL_META_SHADOW),
+                )
+            }
+
+            // 3.2 详情加载中：播放按钮先不弹空选集，用转圈占位告诉用户「线路还在路上」。
+            if (loadingDetail) {
+                Spacer(modifier = Modifier.height(DETAIL_CREDIT_TOP_GAP))
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(DETAIL_LOADING_GAP),
+                ) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(DETAIL_LOADING_SIZE),
+                        color = HeroAccentColor,
+                        strokeWidth = DETAIL_LOADING_STROKE,
+                    )
+                    Text(
+                        text = "正在加载剧集…",
+                        color = DETAIL_META_COLOR,
+                        fontSize = DETAIL_CREDIT_SP.sp,
+                    )
+                }
+            }
+
             // 4. 按钮组：紧跟在简介下方，默认焦点「播放」。
             Spacer(modifier = Modifier.height(DETAIL_ACTIONS_TOP_GAP))
             HeroDetailActionRow(
@@ -351,7 +455,11 @@ private fun HeroDetailScreen(detail: HeroDetail, siteViewModel: SiteViewModel, s
                 // 「播放」拉起选集弹窗；「换源」拉起换源弹窗（收藏仍是占位）。
                 onConfirm = { index ->
                     when (index) {
-                        DETAIL_ACTION_PLAY -> showPlayDialog = true
+                        DETAIL_ACTION_PLAY -> when {
+                            loadingDetail -> Notify.show("正在加载剧集，请稍候")
+                            flags.isEmpty() -> Notify.show("该资源暂无可用剧集")
+                            else -> showPlayDialog = true
+                        }
                         DETAIL_ACTION_CHANGE_SOURCE -> {
                             // 候选源规则与首页完全一致：
                             // isSearchable + isChangeable + 非隐藏 + 未被屏蔽 + 非当前源，再按站点健康度排序。
@@ -368,7 +476,7 @@ private fun HeroDetailScreen(detail: HeroDetail, siteViewModel: SiteViewModel, s
                                     viewModel = siteViewModel,
                                     sites = candidates,
                                     // 详情页的剧名现在是真实值（来自首页 / 上一次换源），直接用它检索。
-                                    keyword = detail.title,
+                                    keyword = page.title,
                                     // 与 TmdbDetailActivity 一致：只搜 quick 源。
                                     quick = true,
                                     onSourceSelected = { vod, site ->
@@ -396,7 +504,7 @@ private fun HeroDetailScreen(detail: HeroDetail, siteViewModel: SiteViewModel, s
             // 5. 演职员行（最底部）：可横向浏览、可点击，↑ 回按钮组。
             Spacer(modifier = Modifier.height(DETAIL_CAST_TOP_GAP))
             HeroCastSection(
-                cast = detail.cast,
+                cast = page.cast,
                 requesters = castRequesters,
                 onFocused = { index -> focusedCast = index },
                 // 点击瞬间先记下「要回到哪个头像」，再同步打开弹窗（不等网络）。
@@ -415,13 +523,16 @@ private fun HeroDetailScreen(detail: HeroDetail, siteViewModel: SiteViewModel, s
 
     if (showPlayDialog) {
         HeroPlayDialog(
-            detail = detail,
-            // 假数据阶段：手动传 14 = 第 15 集，模拟「上次看到第 15 集」；
-            // 接入本地库后改成 History 里的真实索引（-1 表示没看过）。
-            lastWatchedEpisodeIndex = DEMO_LAST_WATCHED_INDEX,
-            // 预留接口：这里就是未来写 History 的地方（参数量纲 = 0 基升序索引）。
-            // TODO(接入历史库)：History.push(detail.title, index)，目前只占位、不改播放链路。
-            onEpisodeSelected = { _ -> },
+            // 真实线路：`Vod.flags` 里只保留真正带剧集的线路（见上面的 `flags`）。
+            flags = flags,
+            // 历史进度还没接本地库：-1 = 没看过，焦点落第 1 集。
+            lastWatchedEpisodeIndex = -1,
+            // 选中真实 (线路, 集) 后直接走原版起播入口，不自己拼 Intent。
+            onEpisodeSelected = { flag, episode ->
+                // 先关弹窗再起播：VideoActivity 是另一个页面，弹窗留在背后会闪一下。
+                showPlayDialog = false
+                startEpisode(activity, siteKey, vod, vodId, flag, episode)
+            },
             onDismiss = { showPlayDialog = false },
         )
     }
@@ -429,7 +540,7 @@ private fun HeroDetailScreen(detail: HeroDetail, siteViewModel: SiteViewModel, s
     // 演员详情：点击即弹出，数据在弹窗内部异步加载。
     actorDialogIndex?.let { index ->
         HeroActorDialog(
-            actor = detail.cast[index],
+            actor = page.cast[index],
             onDismiss = { actorDialogIndex = null },
         )
     }
@@ -939,13 +1050,13 @@ private fun HeroDetailActionButton(
  * 所以不管剧集总数是 50 还是几百集，网格永远只有 4 排，翻页全靠边缘按键，绝不滚动。
  *
  * 历史记忆（本阶段用参数注入，接库后只换数据来源、不动这里的逻辑）：
- * - [lastWatchedEpisodeIndex] 是**0 基集索引**（14 = 第 15 集），-1 表示新剧。
+ * - [lastWatchedEpisodeIndex] 是**0 基集索引**（0 = 第 1 集），-1 表示新剧。
  * - 新剧：焦点落第 1 集；老剧：分组先自动切到该集所在组，再把焦点落到该集本身。
- * - 用户按确定键时回调 [onEpisodeSelected]，参数量纲与 [lastWatchedEpisodeIndex] 完全一致。
+ * - 用户按确定键时回调 [onEpisodeSelected]，直接带出真实的 `(Flag, Episode)` 组合。
  *
  * 焦点契约：
  * - 打开落在历史集（`lastWatchedEpisodeIndex`）；新剧落第 1 集。
- * - 线路栏 ←/→ 在站点间移动，端点消费；↓ 进控制栏；↑ 消费。
+ * - 线路栏 ←/→ 在线路间移动，端点消费；↓ 进控制栏；↑ 消费。
  * - 控制栏 ←/→ 在「列数 / 排序 / 分组」之间滑动；↓ 进网格（尽量落回同一集）；↑ 回线路栏。
  * - 网格组内 ←/→/↑/↓ 正常移动；**任意一行**的最右一列按 → 切下一组（普通行落同行第 1 列，
  *   最后一行落新组最后一集），**任意一行**的最左一列按 ← 切上一组（落上一组同行最右一列）。
@@ -953,11 +1064,14 @@ private fun HeroDetailActionButton(
  */
 @Composable
 private fun HeroPlayDialog(
-    detail: HeroDetail,
+    flags: List<Flag>,
     lastWatchedEpisodeIndex: Int = -1,
-    onEpisodeSelected: (Int) -> Unit = {},
+    onEpisodeSelected: (Flag, Episode) -> Unit = { _, _ -> },
     onDismiss: () -> Unit,
 ) {
+    // 没有可用线路时不弹空壳（调用方已过滤掉没有剧集的线路，这里只是兜底）。
+    if (flags.isEmpty()) return
+
     // 列数 / 排序本地持久化：换剧、关弹窗、杀进程后再进来仍是上次的选择。
     val context = LocalContext.current
     val prefs = remember(context) {
@@ -968,8 +1082,14 @@ private fun HeroPlayDialog(
     // 列数只有「多列(4) / 少列(2)」两态：默认多列。
     var fewColumns by remember { mutableStateOf(prefs.getBoolean(DIALOG_PREF_FEW_COLUMNS, false)) }
 
-    // 集号升序基准表：历史索引、排序镜像都以它为坐标原点，和外部的 History 完全对齐。
-    val ascending = remember(detail.episodes) { detail.episodes.sortedBy { it.number } }
+    // 当前线路：线路栏「焦点即选中」，网格始终只渲染它的 `episodes`。
+    var selectedFlag by remember { mutableIntStateOf(0) }
+    val currentFlag = flags[selectedFlag.coerceIn(0, flags.lastIndex)]
+
+    // 基准表直接用源站返回的 `Episode` 顺序：**不再按集号重排**。
+    // 很多源的集名根本没有数字（`Episode.number` 全是 0），按 number 排序会把顺序打乱；
+    // 源站顺序本身就是正序，历史索引 / 倒序镜像都以它为坐标原点。
+    val ascending = remember(currentFlag.episodes) { currentFlag.episodes.orEmpty().toList() }
     val ordered = remember(descending, ascending) { if (descending) ascending.asReversed() else ascending }
     val columns = if (fewColumns) EPISODE_COLUMNS_FEW else EPISODE_COLUMNS_MANY
     // 组容量 = 4 排 × 当前列数：多列 16 集 / 少列 8 集，永远刚好填满 4 排。
@@ -982,16 +1102,17 @@ private fun HeroPlayDialog(
     }
     // 升序下标 → 当前排序下的显示下标（倒序时整体镜像），据此算初始分组。
     val initialIndex = remember(watchedIndex, descending, ascending) {
-        if (descending) ascending.lastIndex - watchedIndex else watchedIndex
+        (if (descending) ascending.lastIndex - watchedIndex else watchedIndex).coerceAtLeast(0)
     }
-    val initialNumber = remember(ordered, initialIndex) { ordered.getOrNull(initialIndex)?.number ?: 0 }
+    val initialEpisode = remember(ordered, initialIndex) { ordered.getOrNull(initialIndex) }
 
     var page by remember { mutableIntStateOf(initialIndex / pageSize) }
     /** 焦点集在「当前组内」的下标；焦点不在网格时保留最后一次有效值。 */
     var anchorCell by remember { mutableIntStateOf(initialIndex % pageSize) }
-    var anchorNumber by remember { mutableIntStateOf(initialNumber) }
-    var playingNumber by remember { mutableIntStateOf(initialNumber) }
-    var selectedFlag by remember { mutableIntStateOf(0) }
+    /** 焦点 / 当前集直接用 `Episode` 对象本身做锚点（不同线路的集数互不干扰）。 */
+    var anchorEpisode by remember { mutableStateOf(initialEpisode) }
+    /** 正在播放的集：只做红字高亮，切线路后按该线路的集数重置。 */
+    var playingEpisode by remember { mutableStateOf(initialEpisode) }
     var focusedFlag by remember { mutableIntStateOf(0) }
     // 焦点是否还在「线路 / 控制栏 / 选集网格」的下半区。
     // 只在线路栏上时为 false；一旦进入控制栏或网格就为 true ——
@@ -1010,7 +1131,20 @@ private fun HeroPlayDialog(
     var pendingControl by remember { mutableIntStateOf(-1) }
     var controlSerial by remember { mutableIntStateOf(0) }
 
-    val flagRequesters = remember { List(detail.flags.size) { FocusRequester() } }
+    // 切线路：集数长度 / 顺序都可能不同，分组与焦点回到新线路第 1 集。
+    // 首次组合不重置（保留上面的历史集落点），只在 selectedFlag 真正变化时执行。
+    var lastFlagIndex by remember { mutableIntStateOf(selectedFlag) }
+    LaunchedEffect(selectedFlag) {
+        if (lastFlagIndex == selectedFlag) return@LaunchedEffect
+        lastFlagIndex = selectedFlag
+        page = 0
+        anchorCell = 0
+        anchorEpisode = ordered.firstOrNull()
+        playingEpisode = anchorEpisode
+        pendingCell = -1
+    }
+
+    val flagRequesters = remember(flags.size) { List(flags.size) { FocusRequester() } }
     val columnsRequester = remember { FocusRequester() }
     val sortRequester = remember { FocusRequester() }
     // 分组按钮走 LazyRow（剧集多时分组会溢出），requesters 随页数重建。
@@ -1036,16 +1170,16 @@ private fun HeroPlayDialog(
         if (pageItems.isEmpty()) return
         val target = if (index < 0) 0 else index.coerceAtMost(pageItems.lastIndex)
         anchorCell = target
-        anchorNumber = pageItems[target].number
+        anchorEpisode = pageItems[target]
         pendingCell = target
         cellSerial++
     }
 
     /** 换组落焦：写入新组状态并把目标格排进请求队列。 */
-    fun landOnPage(target: Int, items: List<HeroEpisode>, index: Int) {
+    fun landOnPage(target: Int, items: List<Episode>, index: Int) {
         page = target
         anchorCell = index
-        anchorNumber = items[index].number
+        anchorEpisode = items[index]
         pendingCell = index
         cellSerial++
     }
@@ -1080,7 +1214,8 @@ private fun HeroPlayDialog(
 
     /** 从控制栏进入网格：优先落回当前集，找不到就落第 1 格。 */
     fun enterGrid() {
-        focusCell(pageItems.indexOfFirst { it.number == anchorNumber })
+        val index = pageItems.indexOfFirst { it === anchorEpisode }
+        focusCell(if (index >= 0) index else 0)
     }
 
     /** 点分组按钮：只换组，焦点留在按钮上（不抢进网格）。 */
@@ -1090,18 +1225,18 @@ private fun HeroPlayDialog(
         if (items.isEmpty()) return
         page = target
         anchorCell = 0
-        anchorNumber = items.first().number
+        anchorEpisode = items.first()
         pendingCell = -1
     }
 
-    /** 排序翻转：按集号重新定位分组；焦点留在 Toggle 上，不把焦点抢进网格。 */
+    /** 排序翻转：按「集对象」重新定位分组；焦点留在 Toggle 上，不把焦点抢进网格。 */
     fun toggleSort() {
-        val number = anchorNumber
+        val current = anchorEpisode
         val next = !descending
-        val reordered = detail.episodes.sortedBy { it.number }.let { if (next) it.asReversed() else it }
+        val reordered = ascending.let { if (next) it.asReversed() else it }
         descending = next
         prefs.edit().putBoolean(DIALOG_PREF_DESCENDING, next).apply()
-        val index = reordered.indexOfFirst { it.number == number }
+        val index = reordered.indexOfFirst { it === current }
         if (index >= 0) {
             page = index / pageSize
             anchorCell = index % pageSize
@@ -1226,9 +1361,13 @@ private fun HeroPlayDialog(
                     horizontalArrangement = Arrangement.spacedBy(DIALOG_FLAG_GAP),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    itemsIndexed(items = detail.flags, key = { index, _ -> index }) { index, label ->
+                    itemsIndexed(
+                        items = flags,
+                        // 线路名可能重复（不同解析线路都叫「线路一」），key 里带上稳定下标。
+                        key = { index, flag -> Flag.stableKey(flag, index) },
+                    ) { index, flag ->
                         HeroFlagChip(
-                            label = label,
+                            label = flag.getShow(),
                             selected = index == selectedFlag,
                             moduleFocused = contentFocused,
                             requester = flagRequesters[index],
@@ -1246,7 +1385,7 @@ private fun HeroPlayDialog(
                             onMoveUp = { },
                             onMoveDown = { focusControl(focusedControl) },
                             onMoveLeft = { if (index > 0) focusFlag(index - 1) },
-                            onMoveRight = { if (index < detail.flags.lastIndex) focusFlag(index + 1) },
+                            onMoveRight = { if (index < flags.lastIndex) focusFlag(index + 1) },
                         )
                     }
                 }
@@ -1346,24 +1485,21 @@ private fun HeroPlayDialog(
                     pageItems.forEachIndexed { index, episode ->
                         item(key = index) {
                             HeroEpisodeCell(
-                                label = episode.label,
-                                playing = episode.number == playingNumber,
+                                // 原版推荐文案：`desc + name`（TMDB 刮削后是「S01E02 标题」，普通源就是集名）。
+                                label = episode.getDisplayName(),
+                                playing = episode === playingEpisode,
                                 requester = cellRequesters[index],
                                 onFocused = {
                                     anchorCell = index
-                                    anchorNumber = episode.number
+                                    anchorEpisode = episode
                                     // 焦点进网格：线路 / 分组保持红框（规则 ②）。
                                     contentFocused = true
                                 },
                                 onConfirm = {
-                                    playingNumber = episode.number
-                                    // 显示下标 → 升序绝对索引，作为历史记录的稳定键。
-                                    val orderedIndex = page * pageSize + index
-                                    val episodeIndex =
-                                        if (descending) ordered.lastIndex - orderedIndex else orderedIndex
-                                    // TODO(接入历史库)：这里换成原版的记录接口，例如
-                                    //  History.push(detail.title, episodeIndex)
-                                    onEpisodeSelected(episodeIndex)
+                                    playingEpisode = episode
+                                    // 直接把真实 (线路, 集) 交给详情页，由它调用原版起播入口。
+                                    // TODO(接入历史库)：这里补 History.push，目前只负责起播。
+                                    onEpisodeSelected(currentFlag, episode)
                                 },
                             )
                         }
@@ -1643,12 +1779,6 @@ private data class HeroDetailAction(
 /** 演职员：TMDB person id + 姓名 + 头像地址（picsum 稳定图，不依赖 TMDB）。 */
 private data class HeroCast(val id: String, val name: String, val avatarUrl: String)
 
-/**
- * 单集：`number` 是稳定集号（排序、历史进度都按它对齐），`label` 是显示文案。
- * 用集号而不是列表下标做记忆，切排序 / 切列数后焦点不会漂移。
- */
-private data class HeroEpisode(val number: Int, val label: String)
-
 private data class HeroDetail(
     val title: String,
     val meta: String,
@@ -1658,9 +1788,83 @@ private data class HeroDetail(
     /** TMDB 艺术字 Logo；null / 空串时回落 32sp 纯文字标题。 */
     val logoUrl: String?,
     val cast: List<HeroCast>,
-    val flags: List<String>,
-    val episodes: List<HeroEpisode>,
-)
+    /** 真实详情里的导演 / 主演；旧入口或接口没返回时为空，UI 自动隐藏这一行。 */
+    val director: String = "",
+    val actor: String = "",
+) {
+    /** 导演 / 主演单行文案；两者都为空时返回空串（不占位、不显示）。 */
+    fun creditLine(): String = buildString {
+        if (director.isNotBlank()) append("导演：").append(director)
+        if (actor.isNotBlank()) {
+            if (isNotEmpty()) append("　")
+            append("主演：").append(actor)
+        }
+    }
+}
+
+/**
+ * 详情接口返回后，用真实 [Vod] 覆盖首帧的 Intent 数据。
+ *
+ * 只覆盖接口真的给了的字段：空字段保留 Intent 里的值，避免「接口缺 year 就把年份抹掉」。
+ * 演职员头像行仍走 TMDB 占位数据（尚未接入），导演 / 主演先以文字行展示真实值。
+ */
+private fun HeroDetail.mergeDetail(vod: Vod?, siteName: String): HeroDetail {
+    if (vod == null || vod.id.isBlank()) return this
+    val realMeta = listOf(
+        vod.year,
+        vod.area,
+        vod.typeName,
+        vod.remarks,
+        vod.siteName.orEmpty().ifBlank { siteName },
+    ).filter { it.isNotBlank() }.joinToString(" · ")
+    return copy(
+        title = vod.name.ifBlank { title },
+        meta = realMeta.ifBlank { meta },
+        synopsis = vod.content.ifBlank { synopsis },
+        posterUrl = vod.pic.ifBlank { posterUrl },
+        backdropUrl = vod.pic.ifBlank { backdropUrl },
+        director = vod.director,
+        actor = vod.actor,
+    )
+}
+
+/**
+ * 真实起播：只调用原版公开入口 [VideoActivity.startDirect]，绝不自己拼 Intent、
+ * 也不碰 PlayerManager / PlaybackActivity。
+ *
+ * 签名已按源码核对（`app/src/leanback/.../VideoActivity.java`）：
+ * `startDirect(activity, key, id, name, pic, mark, playFlag, playEpisodeName, playEpisodeUrl)`。
+ */
+private fun startEpisode(
+    activity: Activity,
+    siteKey: String,
+    vod: Vod?,
+    vodId: String,
+    flag: Flag,
+    episode: Episode,
+) {
+    val id = vodId.ifBlank { vod?.id.orEmpty() }
+    if (id.isBlank()) {
+        Notify.show("缺少剧集 ID，无法播放")
+        return
+    }
+    if (episode.getUrl().isBlank()) {
+        Notify.show("该集暂无播放地址")
+        return
+    }
+    Log.d(TAG_DETAIL, "起播: site=$siteKey id=$id flag=${flag.getFlag()} 集=${episode.getName()}")
+    VideoActivity.startDirect(
+        activity,
+        siteKey,
+        id,
+        vod?.name.orEmpty(),
+        vod?.pic.orEmpty(),
+        vod?.remarks.orEmpty(),
+        flag.getFlag(),
+        episode.getName(),
+        episode.getUrl(),
+    )
+}
 
 /** 假数据：picsum 按 seed 返回稳定图片，不依赖 TMDB Key 即可验证 Coil 链路。 */
 private val DEMO_DETAIL = HeroDetail(
@@ -1685,24 +1889,10 @@ private val DEMO_DETAIL = HeroDetail(
             avatarUrl = "https://picsum.photos/seed/hero-cast-$index/120/120",
         )
     },
-    flags = listOf("线路一", "线路二", "线路三"),
-    // 极限测试数据：整 50 集，第 15 集故意用超长名字验证格子内跑马灯；
-    // 分组按「4 排 × 列数」动态切：多列 1-16 / 17-32 / 33-48 / 49-50（末组只有 2 集，右切越界重点），
-    // 少列 1-8 / 9-16 / … / 49-50，两组都覆盖「不满一组」的边界。
-    episodes = (1..50).map { number ->
-        HeroEpisode(
-            number = number,
-            label = if (number == 15) "第15集_超长名字测试跑马灯效果" else "第${number}集",
-        )
-    },
-    // 历史进度改由弹窗参数注入（见 DEMO_LAST_WATCHED_INDEX），详情数据本身不再携带进度。
+    // 线路 / 选集不再有假数据：真实数据由 `SiteViewModel.detailContent` 的 `Vod.flags` 提供。
+    director = "",
+    actor = "",
 )
-
-/**
- * 假数据阶段的历史进度：14 = 第 15 集（0 基索引）。
- * 接入本地库后换成 History 查询结果，-1 表示没看过、焦点落第 1 集。
- */
-private const val DEMO_LAST_WATCHED_INDEX = 14
 
 /** 按钮顺序按需求固定为 播放 | 换源 | 收藏。 */
 private val DETAIL_ACTIONS = listOf(
@@ -1713,6 +1903,9 @@ private val DETAIL_ACTIONS = listOf(
 
 /** 全局左侧基准线：内容区左侧 padding 严格 24dp（原版详情页同值）。 */
 private val HERO_PADDING = 24.dp
+
+/** 详情页日志标签（请求 / 到达 / 起播各一条，排查「点了没反应」时先看这里）。 */
+private const val TAG_DETAIL = "HeroDetail"
 
 /** 「播放」在按钮组里的固定下标。 */
 private const val DETAIL_ACTION_PLAY = 0
@@ -1743,6 +1936,13 @@ private const val DETAIL_DESC_LINE_HEIGHT_SP = 17f
 private val DETAIL_DESC_COLOR = Color(0xBBFFFFFF)
 private val DETAIL_ACTIONS_TOP_GAP = 12.dp
 private val DETAIL_CAST_TOP_GAP = 16.dp
+/** 真实导演 / 主演文字行：与简介同一视觉层级，字号略小于元数据。 */
+private val DETAIL_CREDIT_TOP_GAP = 8.dp
+private const val DETAIL_CREDIT_SP = 12f
+/** 详情加载态转圈：小尺寸，不抢按钮组的视觉重心。 */
+private val DETAIL_LOADING_SIZE = 16.dp
+private val DETAIL_LOADING_GAP = 8.dp
+private val DETAIL_LOADING_STROKE = 2.dp
 
 // XML 阴影参数是 px 值，Compose 的 Shadow 同样按 px 解释，因此直接照抄。
 private val DETAIL_TITLE_SHADOW = Shadow(
