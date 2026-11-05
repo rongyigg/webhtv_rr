@@ -51,16 +51,16 @@ import kotlin.math.roundToInt
  * `topStartTag` = `Vod.getSiteName()`（13sp）、`bottomStartTag` = `Vod.getRemarks()`（14sp）、
  * `title` = `Vod.getName()`（16sp）。
  *
- * ## 数据（第二阶段：真实换源）
+ * ## 数据（全局并发搜索，与原版 WebHTV 点卡片进搜索一致）
  * - 候选源由 [candidates] 统一给出，规则与 `TmdbDetailActivity.isChangeSourceCandidate` 等价：
  *   `isSearchable()` + `isChangeable()` + 非隐藏 + 未被用户屏蔽 + 不是当前源，最后按
  *   [SiteHealthStore.sortSites] 的站点健康度排序。
  * - 检索走 [SiteViewModel.searchContent] 的 **List 重载**（写 `search` LiveData），
  *   **绝不能用** 4 参单源重载 —— 那个写的是 `result` LiveData，会和首页 `homeContent()` 抢同一条通道。
- * - `quick = false`：`SiteViewModel.searchContent(List)` 在 `quick=true` 时会跳过
- *   `isQuickSearch()==false` 的源（很多源都是这种），换源会整屏「该源暂无此剧」。
- * - Tab 栏是**静态**的（= 传入的候选源），切到哪个才搜哪个；每个源的结果缓存在 [resultsBySite]，
- *   来回切 Tab 不会重复请求。侧边栏里没勾的源**根本不发请求**。
+ * - **一次性并发搜全部启用源**（`VideoActivity.startSearch` 同款，`quick = true`），
+ *   不再「切到哪个 Tab 才搜哪个」；哪个源先回结果，哪个源就先出现在顶部 Tab 里。
+ * - Tab 是**动态**的：只有出过结果的源才有 Tab（空结果拿不到 siteKey，无法归因）。
+ *   每个源的结果缓存在 [resultsBySite]，来回切 Tab 只换缓存、不再发请求。
  * - 结果里每条 [Vod] 都已由 `SiteApi.searchContent` 盖过 `setSite(site)`，
  *   所以确定键回传的 `(vod, site)` 是同一来源，不需要再按剧名二次搜索。
  *
@@ -80,7 +80,7 @@ internal class ChangeSourceDialog private constructor(
     private val onClosed: () -> Unit,
 ) : Dialog(context, R.style.SourceDialogTheme) {
 
-    /** 当前站点栏下标。Tab 是静态的，所以它同时就是 [sites] 的下标。 */
+    /** 当前站点栏下标（[tabSites] 的下标；Tab 是动态的，只有出过结果的源才会在里面）。 */
     private var selectedSite: Int = 0
 
     /**
@@ -111,19 +111,30 @@ internal class ChangeSourceDialog private constructor(
     /**
      * 每个源搜到过的结果（含空结果），避免来回切 Tab 时重复请求。
      *
-     * 用 `containsKey` 而不是单独的 `searchedSites` 集合：`searchContent(List)` 每次都会先
-     * `stopSearchLocked()` 取消上一轮在途请求，被取消的源不会有任何回调，
-     * 只有「结果已经落到这里」才算真的搜过。
+     * 全局并发搜索下每个源只会回调一次，这里就是「按 siteKey 归档的结果表」，
+     * 切 Tab 只是换一份缓存渲染，绝不会再发请求。
      */
     private val resultsBySite = LinkedHashMap<String, List<Vod>>()
 
     /**
-     * 当前在途请求属于哪个源；`null` = 没有在途请求。
+     * 顶部站点栏：**只包含已经返回结果的源**，按结果到达顺序追加。
      *
-     * `observeForever` 会**立刻重放**上一次搜索的旧值，所以它同时是旧值闸门：
-     * 回调里一律 `pendingSiteKey ?: return`，只有我们自己发起的那一轮才被接受。
+     * 与原版 `VideoActivity.startSearch` 一致：弹窗一打开就把全部候选源并发丢进
+     * `searchContent(List)`，哪个源先回结果哪个先出 Tab，不再「切到哪个才搜哪个」。
+     * 0 条命中的源不会出现在这里（`search` 回调里空结果拿不到 siteKey，无法归因）。
      */
-    private var pendingSiteKey: String? = null
+    private val tabSites = ArrayList<Site>()
+
+    /** 最近一次进度（只用于头部「Searching… x/y」）。 */
+    private var progressInfo: SearchProgress? = null
+
+    /**
+     * `observeForever` 会**同步重放**上一次搜索的旧值；注册瞬间先把它拦掉。
+     *
+     * 真正的搜索结果都是 `App.post` 异步回来的，`decorView.post` 清标志一定排在它们前面，
+     * 所以这里既不会吞掉本轮结果，也不会把上一轮的旧结果当成新结果。
+     */
+    private var ignoreReplay = false
 
     /**
      * 「焦点即选中」的防抖目标：焦点停稳后要切到的站点下标；-1 = 没有待切换项。
@@ -179,18 +190,21 @@ internal class ChangeSourceDialog private constructor(
         // 焦点进出结果区时同步站点标签的红框（规则 ②③）。
         // 与 onStop 的移除成对，保证弹窗被复用/重新显示时监听不会丢也不会重复添加。
         window?.decorView?.viewTreeObserver?.addOnGlobalFocusChangeListener(focusListener)
-        // 先清在途标记，再挂观察者：observeForever 的首次重放必须被 pendingSiteKey 拦掉。
-        pendingSiteKey = null
+        // 先立「忽略重放」标志再挂观察者：observeForever 的首次同步重放必须被拦掉。
+        ignoreReplay = true
         viewModel.search.observeForever(searchObserver)
         viewModel.searchProgress.observeForever(progressObserver)
-        // 默认焦点落在当前站点标签；必须等 ViewHolder 布局完成再请求，
+        window?.decorView?.post { ignoreReplay = false }
+        // 兜底：decorView 还没挂上时 post 可能不执行，用站点栏再挂一次（同一主线程队列，顺序无所谓）。
+        siteRecycler.post { ignoreReplay = false }
+        // 打开即**全局并发**检索：一次性把所有候选源丢进去，谁先回结果谁先出 Tab。
+        startGlobalSearch()
+        // 默认焦点落在第一个站点标签；必须等 ViewHolder 布局完成再请求，
         // 否则焦点会停在 RecyclerView 上，标签的 focused 红底就不会出现。
         siteRecycler.post {
             siteRecycler.scrollToPosition(selectedSite)
             focusSite(selectedSite)
         }
-        // 打开即搜第一个候选源（Tab 是静态的，所以「切到哪个才搜哪个」的第一个就是它）。
-        refreshCurrent()
     }
 
     override fun onStop() {
@@ -200,7 +214,7 @@ internal class ChangeSourceDialog private constructor(
         // 关窗即作废待切换的焦点任务，避免弹窗消失后还发一次检索。
         pendingSiteFocus = -1
         siteRecycler.removeCallbacks(siteFocusRunnable)
-        pendingSiteKey = null
+        ignoreReplay = false
         // 关闭弹窗就取消在途检索：蜘蛛实现可能忽略中断，stopSearch 至少让旧一轮结果不再回到 UI。
         viewModel.stopSearch()
         super.onStop()
@@ -291,28 +305,36 @@ internal class ChangeSourceDialog private constructor(
     private fun render() {
         resultAdapter.notifyDataSetChanged()
         val hasResult = visibleResults.isNotEmpty()
-        progress.visibility = if (searching) View.VISIBLE else View.GONE
-        resultRecycler.visibility = if (!searching && hasResult) View.VISIBLE else View.GONE
+        // 进度条只在「当前 Tab 还没有内容」时显示：已经有卡片时再盖一个转圈会挡住海报。
+        progress.visibility = if (searching && !hasResult) View.VISIBLE else View.GONE
+        resultRecycler.visibility = if (hasResult) View.VISIBLE else View.GONE
         empty.visibility = if (!searching && !hasResult) View.VISIBLE else View.GONE
-        resultCount.visibility = if (searching) View.INVISIBLE else View.VISIBLE
-        resultCount.text = context.getString(R.string.play_change_count, visibleResults.size)
+        val info = progressInfo
+        resultCount.visibility = View.VISIBLE
+        resultCount.text = if (searching && info != null && info.total() > 0) {
+            context.getString(R.string.search_loading) + " ${info.current()}/${info.total()}"
+        } else {
+            context.getString(R.string.play_change_count, visibleResults.size)
+        }
     }
 
-    private fun currentSite(): Site? = sites.getOrNull(selectedSite)
+    private fun currentSite(): Site? = tabSites.getOrNull(selectedSite)
 
     /**
-     * 站点栏切源（点击 / 确定键 / 焦点停稳）：切到该源并保证它有结果（没搜过就补搜）。
+     * 站点栏切源（点击 / 确定键 / 焦点停稳）：**只换一份缓存渲染，不再发请求**。
+     *
+     * 全局并发搜索已经把每个源都搜过了，切 Tab 只是把 [resultsBySite] 里对应那一份拿出来。
      *
      * 注意这里**不能** `notifyDataSetChanged()`：焦点即选中时这次调用可能正好发生在
      * 焦点移动过程中，全量重绑会让 RecyclerView 重建子 View、把刚拿到的焦点丢掉。
      * 改为只同步现有子 View 的 `isSelected`（`syncSiteSelection()`）。
      */
     private fun selectSite(position: Int) {
-        if (position !in sites.indices) return
+        if (position !in tabSites.indices) return
         if (position == selectedSite) return
         selectedSite = position
         syncSiteSelection()
-        refreshCurrent()
+        showCurrentResults()
     }
 
     /** 把 `isSelected` 打到「当前站点」的那一个标签上；焦点态由 drawable 自己管。 */
@@ -324,126 +346,114 @@ internal class ChangeSourceDialog private constructor(
         }
     }
 
-    /**
-     * 让「当前选中的站点」与 UI 保持一致：
-     * - 该源被侧边栏取消勾选 → 不发请求，直接空态；
-     * - 该源已有结果 → 直接渲染缓存；
-     * - 该源正在搜 → 保持进度条；
-     * - 其余情况 → 发起检索。
-     */
-    private fun refreshCurrent() {
-        val site = currentSite() ?: return
-        val key = site.key
-        when {
-            keyword.isBlank() -> {
-                // 【致命日志】关键词为空时根本不会发请求，这里必须留下证据，
-                // 否则只会看到整屏「该源暂无此剧」，误以为是源里没有这部剧。
-                Log.e(TAG, "换源搜索跳过: keyword 为空，无法检索")
-                pendingSiteKey = null
-                searching = false
-                visibleResults = emptyList()
-                render()
-            }
-
-            key !in enabledSiteKeys -> {
-                pendingSiteKey = null
-                searching = false
-                viewModel.stopSearch()
-                visibleResults = emptyList()
-                render()
-            }
-
-            pendingSiteKey == key -> Unit
-
-            resultsBySite.containsKey(key) -> {
-                searching = false
-                visibleResults = resultsBySite[key].orEmpty()
-                render()
-            }
-
-            else -> startSearch(site)
-        }
+    /** 把当前 Tab 的缓存结果铺到下方列表（找不到 = 该源还没回结果 = 空）。 */
+    private fun showCurrentResults() {
+        visibleResults = currentSite()?.let { resultsBySite[it.key] }.orEmpty()
+        render()
     }
 
-    /** 只搜一个源：走 List 重载（写 `search`），和首页 `homeContent()` 的 `result` 通道互不干扰。 */
-    private fun startSearch(site: Site) {
-        pendingSiteKey = site.key
-        searching = true
+    /**
+     * 全局并发检索：**一次性**把所有启用中的候选源丢给 `searchContent(List)`。
+     *
+     * 与原版 `VideoActivity.startSearch` / `TmdbDetailActivity.startInlineSourceSearch` 完全一致：
+     * 不是一个个 Tab 懒加载，而是所有源同时搜；哪个源先回结果，哪个源就先长出 Tab。
+     * 弹窗打开、侧边栏勾选变化都走这里（重搜必须整轮重来，Tab 是动态的，不能只增不减）。
+     */
+    private fun startGlobalSearch() {
+        // 清空上一轮：Tab 从 0 个重新长出来。
+        tabSites.clear()
+        resultsBySite.clear()
+        selectedSite = 0
         visibleResults = emptyList()
-        render()
-        // 【致命日志 1】换源搜索入参：keyword 为空 / 源被 quick 过滤，都会让结果永远为空。
-        // `SiteViewModel.searchContent(List)` 在 `quick && !site.isQuickSearch()` 时直接跳过该源，
-        // 所以这里同时打印 quickSearch，能一眼看出「是没搜」还是「搜了没结果」。
-        // keyword 用 `[...]` 包起来：首尾空格在日志里肉眼不可见，却是搜不到的最常见原因。
+        progressInfo = null
+        siteAdapter.notifyDataSetChanged()
+        val targets = sites.filter { it.key in enabledSiteKeys }
+        // 【致命日志】入参为空 = 不会有任何结果，必须留下证据；
+        // quickSearch=false 的源会被 `SearchTask` 直接跳过，也在这里一并打出来。
         Log.e(
             TAG,
-            "发起搜索: site=${site.key}, keyword=[$keyword], quick=$quick, " +
-                "name=${site.displayName}, searchable=${site.isSearchable}, " +
-                "quickSearch=${site.isQuickSearch}",
+            "发起全局并发搜索: keyword=[$keyword], quick=$quick, " +
+                "候选源=${sites.size}, 启用=${targets.size}, " +
+                "quickSearch=false=${targets.count { !it.isQuickSearch }}, " +
+                "keys=${targets.joinToString { it.key }}",
         )
-        viewModel.searchContent(listOf(site), keyword, quick)
+        if (keyword.isBlank() || targets.isEmpty()) {
+            searching = false
+            render()
+            return
+        }
+        searching = true
+        render()
+        viewModel.searchContent(targets, keyword, quick)
     }
 
     /**
      * `search` LiveData 回调：**一个源一条结果**。
      *
-     * 结果里的每条 [Vod] 已由 `SiteApi.searchContent` 盖过 `setSite(site)`，不需要再补。
+     * 结果里的每条 [Vod] 已由 `SiteApi.searchContent` 盖过 `setSite(site)`，
+     * 所以这里用第一条的 `site.key` 归因，并把这个源**动态加进顶部 Tab**。
+     * 空结果拿不到 siteKey（`Result` 不带源信息），无法归因，直接跳过 —— 它本来也没有卡可展示。
      */
     private fun onSearchResult(result: Result?) {
-        val siteKey = pendingSiteKey ?: return
-        val items = result?.list.orEmpty()
-        // 【致命日志 2】结果形状：listSize=0 且 code/msg 正常，说明源确实没搜到；
-        // 如果这里根本没有日志，说明请求被 quick 过滤掉了（见 startSearch 的入参日志）。
+        if (ignoreReplay || result == null) return
+        val items = result.list
+        val site = items.firstOrNull()?.site
+        if (site == null) {
+            Log.e(TAG, "收到结果但无法归因（空结果或没有 site 标记）: listSize=${items.size}")
+            return
+        }
+        val siteKey = site.key
+        // 迟到结果（侧边栏刚取消勾选 / 上一轮遗留）一律丢弃。
+        if (siteKey !in enabledSiteKeys) {
+            Log.e(TAG, "收到结果但该源已不在启用列表，丢弃: site=$siteKey listSize=${items.size}")
+            return
+        }
         Log.e(
             TAG,
             "收到结果: site=$siteKey, listSize=${items.size}, " +
-                "code=${result?.code}, msg=${result?.msg}",
+                "code=${result.code}, msg=${result.msg}",
         )
-        if (items.isEmpty()) {
-            // 【对照日志】0 条时把「当前所有可搜索源」整表打出来：
-            // 目标源如果不在这个列表里，问题就与这部剧无关（源没加载 / 被禁用 / 不可搜索）。
-            val searchable = VodConfig.get().sites.filter { it.isSearchable }
-            Log.e(
-                TAG,
-                "收到结果为空，当前可搜索源(${searchable.size}): " +
-                    searchable.joinToString { "${it.key}:${it.displayName}" },
-            )
+        val merged = resultsBySite.getOrElse(siteKey) { emptyList() } + items
+        resultsBySite[siteKey] = merged.distinctBy { it.id }
+        val existing = tabSites.indexOfFirst { it.key == siteKey }
+        if (existing < 0) {
+            tabSites.add(site)
+            // 用插入通知而不是全量重绑：结果是一个个回来的，全量重绑会把焦点打飞。
+            siteAdapter.notifyItemInserted(tabSites.lastIndex)
+            if (tabSites.size == 1) {
+                // 第一个 Tab 出现：把它设为当前 Tab 并接管焦点（此刻焦点通常还停在空站点栏上）。
+                selectedSite = 0
+                visibleResults = resultsBySite[siteKey].orEmpty()
+                val focused = window?.decorView?.findFocus()
+                if (focused == null || focused === siteRecycler) {
+                    siteRecycler.post { focusSite(0) }
+                }
+            }
         }
-        if (items.isNotEmpty()) {
-            val merged = resultsBySite.getOrElse(siteKey) { emptyList() } + items
-            resultsBySite[siteKey] = merged.distinctBy { it.id }
-        } else if (!resultsBySite.containsKey(siteKey)) {
-            resultsBySite[siteKey] = emptyList()
-        }
-        if (siteKey == currentSite()?.key) {
+        if (currentSite()?.key == siteKey) {
             visibleResults = resultsBySite[siteKey].orEmpty()
-            render()
         }
+        render()
     }
 
     /**
-     * `searchProgress` LiveData 回调：只认 [pendingSiteKey] 那一轮，`finished()` 时才收尾。
+     * `searchProgress` LiveData 回调：全局并发检索的收尾。
      *
      * `total == 0` 表示所有源都被 `quick` 过滤掉（`Site.isQuickSearch() == false`），
      * 这种情况不会有任何结果回调，必须在这里手动结束，否则进度条会一直转。
      */
     private fun onSearchProgress(progress: SearchProgress?) {
-        if (progress == null || !progress.finished()) return
-        val siteKey = pendingSiteKey ?: return
-        // 【致命日志 3】收尾：total=0 表示这个源被 quick 过滤（根本没发请求），
-        // 不是「源里没有这部剧」。换源现在统一 quick=false，正常情况下 total 应为 1。
-        Log.e(
-            TAG,
-            "换源搜索结束: site=$siteKey current=${progress.current()} total=${progress.total()}",
-        )
-        pendingSiteKey = null
-        searching = false
-        // 搜完但没有结果（含失败 / 被 quick 过滤）也记一条空结果，避免每次切回这个 Tab 都重搜。
-        if (!resultsBySite.containsKey(siteKey)) resultsBySite[siteKey] = emptyList()
-        if (siteKey == currentSite()?.key) {
-            visibleResults = resultsBySite[siteKey].orEmpty()
-            render()
+        if (progress == null) return
+        progressInfo = progress
+        if (progress.finished()) {
+            searching = false
+            Log.e(
+                TAG,
+                "全局搜索结束: current=${progress.current()} total=${progress.total()} " +
+                    "出结果的源=${tabSites.size}(${tabSites.joinToString { it.key }})",
+            )
         }
+        render()
     }
 
     /** 当前焦点是否还在下方结果区。只在状态真的变化时刷新标签背景，避免无谓重绘。 */
@@ -491,14 +501,14 @@ internal class ChangeSourceDialog private constructor(
         )
     }
 
-    /** 多选联动：勾选集合 → 允许检索的源集合，然后让当前站点重新对账（该补搜就补搜）。 */
+    /** 多选联动：勾选集合 → 允许检索的源集合，然后整轮重搜（全局并发，Tab 动态长出来）。 */
     private fun applySiteFilter(flags: BooleanArray) {
         checkedFlags = flags.copyOf()
         enabledSiteKeys = sites
             .filterIndexed { index, _ -> flags.getOrElse(index) { false } }
             .map { it.key }
             .toSet()
-        refreshCurrent()
+        startGlobalSearch()
     }
 
     private fun dp(value: Int): Int = (value * context.resources.displayMetrics.density).roundToInt()
@@ -523,11 +533,11 @@ internal class ChangeSourceDialog private constructor(
             return Holder(view)
         }
 
-        override fun getItemCount(): Int = sites.size
+        override fun getItemCount(): Int = tabSites.size
 
         override fun onBindViewHolder(holder: Holder, position: Int) {
             // 显示名走 Site.getDisplayName()：尊重用户在站点管理里的改名。
-            holder.name.text = sites[position].displayName
+            holder.name.text = tabSites[position].displayName
             holder.itemView.isSelected = position == selectedSite
             // 规则 ②：当前站点 + 焦点在结果区 → 红框（drawable 的 state_activated 分支）。
             holder.itemView.isActivated = contentFocused && position == selectedSite
@@ -688,10 +698,10 @@ internal class ChangeSourceDialog private constructor(
          * 打开换源弹窗。
          *
          * @param viewModel Activity 作用域的 [SiteViewModel]（**必须复用**，不能在这里 new）。
-         * @param sites 候选源，直接用 [candidates] 的返回值；顺序即站点栏顺序。
+         * @param sites 候选源，直接用 [candidates] 的返回值；为空时自动退回「所有可搜索源」。
          * @param keyword 检索关键词（首页当前这张卡的剧名）。
-         * @param quick 是否只搜 quick 源。换源必须传 `false`：`SiteViewModel.searchContent(List)`
-         *   在 `quick=true` 时会直接跳过 `isQuickSearch()==false` 的源，表现为整屏「该源暂无此剧」。
+         * @param quick 是否只搜 quick 源。与原版 `VideoActivity.startSearch` 一致传 `true`：
+         *   `SearchTask` 只跳过**显式**配置 `quickSearch=0` 的源（`Site.getQuickSearch()` 默认 1）。
          * @param onSourceSelected 结果卡片确定键回调，回传**真实 `(Vod, Site)`**。
          * @param onClosed 关闭回调，调用方在这里把焦点交还给首页卡片。
          */
@@ -700,12 +710,24 @@ internal class ChangeSourceDialog private constructor(
             viewModel: SiteViewModel,
             sites: List<Site>,
             keyword: String,
-            quick: Boolean = false,
+            quick: Boolean = true,
             onSourceSelected: (Vod, Site) -> Unit = { _, _ -> },
             onClosed: () -> Unit = {},
         ): ChangeSourceDialog {
+            // 【致命日志 + 兜底】候选源为空时不再静默失败：退回「所有可搜索源」，
+            // 让弹窗至少能搜出东西，同时把情况打进日志。
+            val searchSites = if (sites.isEmpty()) {
+                Log.e(TAG, "候选源为空，退回全部可搜索源")
+                VodConfig.get().sites.filter { it.isSearchable }
+            } else {
+                sites
+            }
+            Log.e(
+                "ChangeSource",
+                "呼出换源弹窗: sites=${searchSites.size}, keyword=[$keyword], quick=$quick",
+            )
             val dialog = ChangeSourceDialog(
-                context, viewModel, sites, keyword, quick, onSourceSelected, onClosed,
+                context, viewModel, searchSites, keyword, quick, onSourceSelected, onClosed,
             )
             dialog.show()
             return dialog

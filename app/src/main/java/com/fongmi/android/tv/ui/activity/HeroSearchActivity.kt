@@ -2,6 +2,7 @@ package com.fongmi.android.tv.ui.activity
 
 import android.content.Context
 import android.content.Intent
+import android.app.Activity
 import android.graphics.Color as AndroidColor
 import android.graphics.drawable.ColorDrawable
 import android.os.Bundle
@@ -97,6 +98,7 @@ import com.fongmi.android.tv.App
 import com.fongmi.android.tv.R
 import com.fongmi.android.tv.api.config.VodConfig
 import com.fongmi.android.tv.bean.Result
+import com.fongmi.android.tv.bean.Flag
 import com.fongmi.android.tv.bean.Site
 import com.fongmi.android.tv.bean.Vod
 import com.fongmi.android.tv.bean.Word
@@ -126,6 +128,7 @@ import com.fongmi.android.tv.ui.hero.PLACEHOLDER_INDEX
 import com.fongmi.android.tv.ui.hero.SourceSidebar
 import com.fongmi.android.tv.ui.hero.SourceSidebarMode
 import com.fongmi.android.tv.ui.hero.requestFocus
+import com.fongmi.android.tv.utils.Notify
 import com.fongmi.android.tv.utils.SearchSuggest
 import com.github.catvod.net.OkHttp
 import com.google.gson.reflect.TypeToken
@@ -237,9 +240,6 @@ class HeroSearchActivity : ComponentActivity() {
                 HeroSearchScreen(
                     backdropUrl = backdropUrl,
                     siteViewModel = siteViewModel,
-                    // 普通卡片 → Hero 详情页。folder 条目在页面内部拦截成「页内下钻」，
-                    // 根本不会走到这里（见 HeroSearchScreen 的 `isDrillDownFolder` 分支）。
-                    onOpenDetail = { vod, site -> HeroDetailActivity.start(this, vod, site) },
                 )
             }
         }
@@ -288,7 +288,6 @@ class HeroSearchActivity : ComponentActivity() {
 private fun HeroSearchScreen(
     backdropUrl: String?,
     siteViewModel: SiteViewModel,
-    onOpenDetail: (Vod, Site) -> Unit,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -325,6 +324,16 @@ private fun HeroSearchScreen(
     var drillResults by remember { mutableStateOf<List<Vod>>(emptyList()) }
     var drillLoading by remember { mutableStateOf(false) }
     val drillActive = drillStack.isNotEmpty()
+
+    // ---- 点卡片直达选集（不再先跳详情页）----
+    // 搜索 / 下钻结果里，`vod.flags` 非空 = 已经带着真实线路 → 直接弹选集；
+    // 没有 flags 才去请求一次 `detailContent`，结果回来后同样直接弹选集。
+    var showPlayDialog by remember { mutableStateOf(false) }
+    var playFlags by remember { mutableStateOf<List<Flag>>(emptyList()) }
+    var playVod by remember { mutableStateOf<Vod?>(null) }
+    var playSite by remember { mutableStateOf<Site?>(null) }
+    // 非空 = 正在等这条 id 的详情结果；用来区分「选集请求」和「下钻请求」。
+    var pendingPlayId by remember { mutableStateOf<String?>(null) }
 
     // ---- 真实热搜 / 建议 ----
     // 热搜：先用本地缓存（Prefers("hot")）秒出，再异步刷一次网络（同 `X1()` 的两步）。
@@ -521,6 +530,38 @@ private fun HeroSearchScreen(
         } else {
             drillLoading = true
             siteViewModel.categoryContent(parent.site.key, parent.vod.id, "1", true, hashMapOf())
+        }
+    }
+
+    /**
+     * 点卡片直达选集：**不再先跳详情页**。
+     *
+     * - `vod.flags` 非空（下钻 / 分类结果常常直接带线路）→ 立刻弹 [HeroPlayDialog]；
+     * - 没有 flags → 先请求一次 `detailContent`，结果回来后由 `result` 观察者直接弹选集。
+     */
+    fun openPlayDialog(vod: Vod, site: Site) {
+        if (vod.id.isBlank()) {
+            Notify.show("缺少剧集 ID，无法选集")
+            return
+        }
+        playVod = vod
+        playSite = site
+        val inline = vod.flags
+        if (inline.isNotEmpty()) {
+            playFlags = inline
+            pendingPlayId = null
+            showPlayDialog = true
+            Log.e(
+                TAG_SEARCH,
+                "点卡片直达选集: id=${vod.id} site=${site.key} flags=${inline.size} " +
+                    "集数=${inline.sumOf { it.episodes.orEmpty().size }}",
+            )
+        } else {
+            playFlags = emptyList()
+            pendingPlayId = vod.id
+            showPlayDialog = false
+            Log.e(TAG_SEARCH, "点卡片无线路，请求详情后直达选集: id=${vod.id} site=${site.key}")
+            siteViewModel.detailContent(site.key, vod.id)
         }
     }
 
@@ -779,17 +820,41 @@ private fun HeroSearchScreen(
     }
 
     // ------------------------------------------------------------------
-    // 真实数据 1.5：folder 下钻的分类结果（`SiteViewModel.result`）
+    // 真实数据 1.5：`SiteViewModel.result`（详情 / 分类共用这条通道）
     // ------------------------------------------------------------------
-    // `SiteApi.categoryContent` 写的是 `result` 通道（搜索写的是 `search`），两条互不干扰。
-    // 只有**当前确实处于下钻层级**时才接受回调：返回上一级之后残留的旧结果绝不能覆盖原搜索结果。
+    // `SiteApi.categoryContent` / `detailContent` 写的是 `result` 通道（搜索写的是 `search`），
+    // 两条互不干扰。这里按优先级分流：
+    //   1. `pendingPlayId != null` → 这是「点卡片后补详情」，拿到线路直接弹选集；
+    //   2. 否则且处于下钻层级 → 这是目录结果，替换下方海报行。
     DisposableEffect(siteViewModel) {
         val observer = Observer<Result?> { result ->
             if (result == null) return@Observer
+            // ---- 优先级 1：点卡片后补详情 → 直达选集 ----
+            if (pendingPlayId != null) {
+                val incoming = result.vod
+                val incomingFlags = incoming?.flags.orEmpty()
+                Log.e(
+                    TAG_SEARCH,
+                    "详情返回(直达选集): id=${incoming?.id} flags=${incomingFlags.size} " +
+                        "集数=${incomingFlags.sumOf { it.episodes.orEmpty().size }} " +
+                        "code=${result.code} msg=${result.msg}",
+                )
+                pendingPlayId = null
+                if (incomingFlags.isEmpty()) {
+                    Notify.show("该剧暂无可用线路")
+                } else {
+                    // 详情结果比搜索结果完整：剧名 / 海报 / 线路都以它为准。
+                    if (incoming != null && incoming.name.isNotBlank()) playVod = incoming
+                    playFlags = incomingFlags
+                    showPlayDialog = true
+                }
+                return@Observer
+            }
+            // ---- 优先级 2：folder 下钻的分类结果 ----
             if (drillStack.isEmpty()) return@Observer
             val current = drillStack.last().site
             // 分类接口不会给每条结果盖 site（原版整页共用一个 key），这里补上：
-            // 卡片左上角的站点标签、点开后的详情页都要靠它。
+            // 卡片左上角的站点标签、点开后的选集弹窗都要靠它。
             drillResults = result.list.map { vod ->
                 if (vod.site == null) vod.apply { site = current } else vod
             }
@@ -1077,8 +1142,8 @@ private fun HeroSearchScreen(
                         recordHistory(keyword)
                         // 分类结果已经补过 site；下钻层级里再用当前目录的源兜底，最后才回首页源。
                         val site = vod.site ?: drillStack.lastOrNull()?.site ?: VodConfig.get().getHome()
-                        // folder 条目（网盘聚合壳）留在本页展开目录；其余照旧进详情页。
-                        if (vod.isDrillDownFolder()) openDrillDown(vod, site) else onOpenDetail(vod, site)
+                        // folder 条目（网盘聚合壳）留在本页展开目录；其余**直达选集**，不再先跳详情页。
+                        if (vod.isDrillDownFolder()) openDrillDown(vod, site) else openPlayDialog(vod, site)
                     },
                     onPosterUp = { focusSite(focusedSite) },
                     onPosterLeft = { index -> if (index > 0) focusPoster(index - 1, visibleResults.size) },
@@ -1087,6 +1152,36 @@ private fun HeroSearchScreen(
                     },
                 )
             }
+        }
+
+        // 点卡片直达选集：线路到手就弹这里，不再先跳详情页。
+        // HeroPlayDialog 自己是一个 Dialog 窗口，放在 Column 里也不占任何布局。
+        if (showPlayDialog && playFlags.isNotEmpty()) {
+            val episodeVod = playVod
+            val episodeSite = playSite
+            HeroPlayDialog(
+                flags = playFlags,
+                // 搜索页还没有接历史库：-1 = 新剧，焦点落第 1 集。
+                lastWatchedEpisodeIndex = -1,
+                onEpisodeSelected = { flag, episode ->
+                    showPlayDialog = false
+                    val activity = context as? Activity
+                    if (activity == null) {
+                        Notify.show("缺少 Activity，无法起播")
+                    } else if (episodeSite != null) {
+                        // 起播复用详情页那一个公开入口（只调 VideoActivity.startDirect）。
+                        startEpisode(
+                            activity,
+                            episodeSite.key,
+                            episodeVod,
+                            episodeVod?.id.orEmpty(),
+                            flag,
+                            episode,
+                        )
+                    }
+                },
+                onDismiss = { showPlayDialog = false },
+            )
         }
     }
 }

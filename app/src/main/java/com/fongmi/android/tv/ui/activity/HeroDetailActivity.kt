@@ -722,37 +722,51 @@ private fun HeroDetailScreen(
                             DetailState.Ready -> showPlayDialog = true
                         }
                         DETAIL_ACTION_CHANGE_SOURCE -> {
+                            // 【排查日志】换源按钮到底有没有点进来：没有这一行 = 点击事件没到。
+                            Log.e("ChangeSource", "详情页换源按钮点击，准备呼出换源弹窗")
                             // 候选源规则与首页完全一致：
                             // isSearchable + isChangeable + 非隐藏 + 未被屏蔽 + 非当前源，再按站点健康度排序。
                             // 「当前源」= 这条数据自己的源（首页带过来的 site.key），不是首页源。
                             val candidates = ChangeSourceDialog.candidates(siteKey)
+                            Log.e(
+                                "ChangeSource",
+                                "详情页换源候选源: size=${candidates.size}, keyword=[${page.title}], current=$siteKey",
+                            )
                             if (candidates.isEmpty()) {
+                                Log.e("ChangeSource", "详情页换源候选源为空 → 不弹窗，直接提示")
                                 Notify.show(context.getString(R.string.play_change_empty))
                             } else {
                                 pendingActionFocus = DETAIL_ACTION_CHANGE_SOURCE
                                 showSourceDialog = true
                                 // 换源弹窗改为 View 体系独立 Dialog；showSourceDialog 只用于关闭后的焦点交还。
-                                ChangeSourceDialog.show(
-                                    context = context,
-                                    viewModel = siteViewModel,
-                                    sites = candidates,
-                                    // 详情页的剧名现在是真实值（来自首页 / 上一次换源），直接用它检索。
-                                    keyword = page.title,
-                                    // 换源必须 quick = false：quick=true 会跳过不支持 quick 的源。
-                                    quick = false,
-                                    onSourceSelected = { vod, site ->
-                                        Notify.show(
-                                            context.getString(
-                                                R.string.source_sidebar_switched,
-                                                "${site.displayName} · ${vod.name}",
-                                            ),
-                                        )
-                                        // 换源结果和首页点卡片完全一致：folder 条目走分类页，其余进详情页。
-                                        // 选中条目已经带好 site，不再按剧名二次搜索。
-                                        openHeroDetailOrFolder(activity, vod, site)
-                                    },
-                                    onClosed = { showSourceDialog = false },
-                                )
+                                try {
+                                    ChangeSourceDialog.show(
+                                        context = context,
+                                        viewModel = siteViewModel,
+                                        sites = candidates,
+                                        // 详情页的剧名现在是真实值（来自首页 / 上一次换源），直接用它检索。
+                                        keyword = page.title,
+                                        // 与原版 VideoActivity.startSearch 一致：全局并发搜，quick = true。
+                                        quick = true,
+                                        onSourceSelected = { vod, site ->
+                                            Notify.show(
+                                                context.getString(
+                                                    R.string.source_sidebar_switched,
+                                                    "${site.displayName} · ${vod.name}",
+                                                ),
+                                            )
+                                            // 换源结果和首页点卡片完全一致：folder 条目走分类页，其余进详情页。
+                                            // 选中条目已经带好 site，不再按剧名二次搜索。
+                                            openHeroDetailOrFolder(activity, vod, site)
+                                        },
+                                        onClosed = { showSourceDialog = false },
+                                    )
+                                } catch (e: Throwable) {
+                                    // 【排查日志】弹窗构造 / show() 抛异常时不再静默闪退。
+                                    Log.e("ChangeSource", "详情页呼出换源弹窗失败", e)
+                                    showSourceDialog = false
+                                    Notify.show("换源弹窗打开失败: ${e.message}")
+                                }
                             }
                         }
                     }
@@ -1327,7 +1341,7 @@ private fun HeroDetailActionButton(
  * - 列数 / 排序写进 SharedPreferences，下次打开弹窗沿用上次选择；返回键关闭弹窗。
  */
 @Composable
-private fun HeroPlayDialog(
+internal fun HeroPlayDialog(
     flags: List<Flag>,
     lastWatchedEpisodeIndex: Int = -1,
     onEpisodeSelected: (Flag, Episode) -> Unit = { _, _ -> },
@@ -2152,7 +2166,7 @@ private fun HeroDetail.mergeDetail(vod: Vod?, siteName: String): HeroDetail {
  * 签名已按源码核对（`app/src/leanback/.../VideoActivity.java`）：
  * `startDirect(activity, key, id, name, pic, mark, playFlag, playEpisodeName, playEpisodeUrl)`。
  */
-private fun startEpisode(
+internal fun startEpisode(
     activity: Activity,
     siteKey: String,
     vod: Vod?,

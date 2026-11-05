@@ -575,38 +575,56 @@ private fun HeroHomeScreen(
     // 长按卡片确定键 → 换源弹窗（View 体系独立 Dialog，见 [ChangeSourceDialog]，层级盖在首页之上）。
     // 打开期间用 [showSourceDialog] 占位，关闭后由下面的 LaunchedEffect 把焦点还给长按的那张卡。
     fun changeSource() {
+        // 【排查日志】长按到底有没有触发：没有这一行 = 按键事件根本没进来。
+        Log.e("ChangeSource", "长按触发，准备呼出换源弹窗")
         // 关键词 = 当前这张卡对应的**真实剧名**（`Vod.getName()`）。
         // 还没有数据时换源没有意义，直接忽略这次长按。
-        val poster = heroPoster ?: return
+        val poster = heroPoster
+        if (poster == null) {
+            Log.e("ChangeSource", "长按忽略: 当前没有海报数据（heroPoster=null）")
+            return
+        }
         val keyword = poster.title
         val currentSiteKey = VodConfig.get().getHome().key
         // 候选源规则集中在 ChangeSourceDialog.candidates：
         // isSearchable + isChangeable + 非隐藏 + 未被屏蔽 + 非当前源，最后按站点健康度排序，
         // 与 TmdbDetailActivity 的换源完全一致。
         val candidates = ChangeSourceDialog.candidates(currentSiteKey)
+        Log.e(
+            "ChangeSource",
+            "换源候选源: size=${candidates.size}, keyword=[$keyword], current=$currentSiteKey",
+        )
         if (candidates.isEmpty()) {
+            // 候选源为空时不弹空壳，但必须留下证据（不是「弹窗崩了」）。
+            Log.e("ChangeSource", "换源候选源为空 → 不弹窗，直接提示")
             Notify.show(context.getString(R.string.play_change_empty))
             return
         }
         pendingPosterFocus = focusedPosterIndex
         showSourceDialog = true
-        ChangeSourceDialog.show(
-            context = context,
-            // 必须复用 Activity 作用域的 ViewModel：它自带两个单线程 executor，不能按弹窗 new。
-            viewModel = siteViewModel,
-            sites = candidates,
-            keyword = keyword,
-            // 换源必须 quick = false：quick=true 会跳过 isQuickSearch()==false 的源，
-            // 大部分源都不支持 quick 搜索，表现就是整屏「该源暂无此剧」。
-            quick = false,
-            onSourceSelected = { vod, site ->
-                // 用户在弹窗里选中了另一部剧：vod 已由 SiteApi.searchContent 盖过 site，
-                // 两者同源，直接用它俩打开该源的真实详情页，不再按剧名二次搜索。
-                Log.d(TAG_HOME, "换源选中: ${site.displayName} / ${vod.name}")
-                onOpenDetail(vod, site)
-            },
-            onClosed = { showSourceDialog = false },
-        )
+        try {
+            ChangeSourceDialog.show(
+                context = context,
+                // 必须复用 Activity 作用域的 ViewModel：它自带两个单线程 executor，不能按弹窗 new。
+                viewModel = siteViewModel,
+                sites = candidates,
+                keyword = keyword,
+                // 与原版 VideoActivity.startSearch 一致：全局并发搜，quick = true。
+                quick = true,
+                onSourceSelected = { vod, site ->
+                    // 用户在弹窗里选中了另一部剧：vod 已由 SiteApi.searchContent 盖过 site，
+                    // 两者同源，直接用它俩打开该源的真实详情页，不再按剧名二次搜索。
+                    Log.d(TAG_HOME, "换源选中: ${site.displayName} / ${vod.name}")
+                    onOpenDetail(vod, site)
+                },
+                onClosed = { showSourceDialog = false },
+            )
+        } catch (e: Throwable) {
+            // 【排查日志】弹窗构造 / show() 抛异常时不再静默闪退：打全栈 + 复位占位状态。
+            Log.e("ChangeSource", "呼出换源弹窗失败", e)
+            showSourceDialog = false
+            Notify.show("换源弹窗打开失败: ${e.message}")
+        }
     }
 
     // 换源弹窗关闭后再抢焦点：Dialog 消失时首页窗口要过一帧才重新拿到焦点，
@@ -1478,8 +1496,23 @@ private fun PosterCard(
     // 长按确认键自己计时：遥控器不发 View/Compose 的 long-click，只能靠按下时刻自己算。
     // `pressAt == 0L` 表示当前没有按着（长按时系统会重复发 KeyDown，用它去重）。
     var pressAt by remember { mutableLongStateOf(0L) }
+    // 这一次按下是否已经由「长按」消费：KeyUp 时据此决定「不再触发点击」。
+    var longPressFired by remember { mutableStateOf(false) }
     // 方向下键同样自己计时：短按仍是「下移」，按住 ≥ [TMDB_LONG_PRESS_MS] 再松手才呼出 TMDB 匹配弹窗。
     var downPressAt by remember { mutableLongStateOf(0L) }
+
+    // 【长按 = 换源】按下瞬间 pressAt 变为非 0 → 本 effect 启动；1s 后按键仍按着就呼出换源。
+    // KeyUp / 失焦把 pressAt 归零会直接取消本 effect，不需要手工管理 Job。
+    // 不用 Compose 的 onLongClick：遥控器长按会重复发 KeyDown，clickable 的 long-click 在 TV 上不可靠。
+    LaunchedEffect(pressAt) {
+        if (pressAt == 0L) return@LaunchedEffect
+        delay(POSTER_LONG_PRESS_MS)
+        // 先复位再呼出：弹窗会抢走后续的 KeyUp，这里不能停在「按着」的状态。
+        pressAt = 0L
+        longPressFired = true
+        Log.e("ChangeSource", "卡片长按 ${POSTER_LONG_PRESS_MS}ms 触发换源")
+        onLongPress()
+    }
 
     Column(
         modifier = Modifier
@@ -1493,19 +1526,25 @@ private fun PosterCard(
                     // 焦点离开时把两个计时都清零，避免下次进来用上一次的按下时刻算出假长按。
                     pressAt = 0L
                     downPressAt = 0L
+                    longPressFired = false
                 }
             }
             .onPreviewKeyEvent { event ->
                 // 确定键 / 回车完全由卡片接管（见下方 when 的前两个分支），
-                // 这样「短按 = 进详情、长按 ≥ 500ms = 呼出换源弹窗」才不会和 clickable 冲突。
+                // 这样「短按 = 进详情、长按 ≥ 1s = 呼出换源弹窗」才不会和 clickable 冲突。
                 when (event.key) {
                     Key.DirectionCenter, Key.Enter -> {
                         if (event.type == KeyEventType.KeyDown) {
-                            if (pressAt == 0L) pressAt = System.currentTimeMillis()
+                            // 系统长按会重复发 KeyDown：只有第一次按下才起计时，重复事件直接吞掉。
+                            if (pressAt == 0L) {
+                                longPressFired = false
+                                pressAt = System.currentTimeMillis()
+                            }
                         } else {
-                            val held = if (pressAt == 0L) 0L else System.currentTimeMillis() - pressAt
                             pressAt = 0L
-                            if (held >= POSTER_LONG_PRESS_MS) onLongPress() else onClick()
+                            // 长按已经呼出过弹窗 → 这次 KeyUp 必须被消费，绝不能再触发一次点击。
+                            if (!longPressFired) onClick()
+                            longPressFired = false
                         }
                         return@onPreviewKeyEvent true
                     }
@@ -1805,8 +1844,9 @@ private val POSTER_FOCUS_BORDER = 2.dp
 private val POSTER_SHAPE = RoundedCornerShape(8.dp)
 private val POSTER_PLACEHOLDER = Color(0xFF161616)
 
-// 长按阈值：与历史页卡片的长按计时（500ms）保持一致，超过就当成「长按确定键」。
-private const val POSTER_LONG_PRESS_MS = 500L
+// 长按阈值：按住 1s 才当成「长按确定键 = 换源」，短按仍是进详情。
+// 用 1s 而不是 500ms：遥控器长按会先重复发 KeyDown，阈值太短容易在「想短按」时误触发换源。
+private const val POSTER_LONG_PRESS_MS = 1000L
 
 // 方向下键的长按阈值：按住 1.5s 才呼出 TMDB 手动匹配弹窗，短按仍是原来的下移。
 private const val TMDB_LONG_PRESS_MS = 1500L
