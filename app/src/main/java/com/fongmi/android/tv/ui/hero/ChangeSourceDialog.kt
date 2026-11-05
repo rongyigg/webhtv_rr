@@ -5,6 +5,7 @@ import android.content.Context
 import android.graphics.Color
 import android.graphics.drawable.ColorDrawable
 import android.os.Bundle
+import android.util.Log
 import android.view.Gravity
 import android.view.KeyEvent
 import android.view.View
@@ -56,7 +57,8 @@ import kotlin.math.roundToInt
  *   [SiteHealthStore.sortSites] 的站点健康度排序。
  * - 检索走 [SiteViewModel.searchContent] 的 **List 重载**（写 `search` LiveData），
  *   **绝不能用** 4 参单源重载 —— 那个写的是 `result` LiveData，会和首页 `homeContent()` 抢同一条通道。
- * - `quick = true`，与 `TmdbDetailActivity` L11261 的换源检索完全一致。
+ * - `quick = false`：`SiteViewModel.searchContent(List)` 在 `quick=true` 时会跳过
+ *   `isQuickSearch()==false` 的源（很多源都是这种），换源会整屏「该源暂无此剧」。
  * - Tab 栏是**静态**的（= 传入的候选源），切到哪个才搜哪个；每个源的结果缓存在 [resultsBySite]，
  *   来回切 Tab 不会重复请求。侧边栏里没勾的源**根本不发请求**。
  * - 结果里每条 [Vod] 都已由 `SiteApi.searchContent` 盖过 `setSite(site)`，
@@ -334,6 +336,9 @@ internal class ChangeSourceDialog private constructor(
         val key = site.key
         when {
             keyword.isBlank() -> {
+                // 【致命日志】关键词为空时根本不会发请求，这里必须留下证据，
+                // 否则只会看到整屏「该源暂无此剧」，误以为是源里没有这部剧。
+                Log.e(TAG, "换源搜索跳过: keyword 为空，无法检索")
                 pendingSiteKey = null
                 searching = false
                 visibleResults = emptyList()
@@ -366,6 +371,15 @@ internal class ChangeSourceDialog private constructor(
         searching = true
         visibleResults = emptyList()
         render()
+        // 【致命日志 1】换源搜索入参：keyword 为空 / 源被 quick 过滤，都会让结果永远为空。
+        // `SiteViewModel.searchContent(List)` 在 `quick && !site.isQuickSearch()` 时直接跳过该源，
+        // 所以这里同时打印 quickSearch，能一眼看出「是没搜」还是「搜了没结果」。
+        Log.e(
+            TAG,
+            "换源搜索入参: site=${site.key}, keyword=$keyword, quick=$quick, " +
+                "name=${site.displayName}, searchable=${site.isSearchable}, " +
+                "quickSearch=${site.isQuickSearch}",
+        )
         viewModel.searchContent(listOf(site), keyword, quick)
     }
 
@@ -377,6 +391,13 @@ internal class ChangeSourceDialog private constructor(
     private fun onSearchResult(result: Result?) {
         val siteKey = pendingSiteKey ?: return
         val items = result?.list.orEmpty()
+        // 【致命日志 2】结果形状：listSize=0 且 code/msg 正常，说明源确实没搜到；
+        // 如果这里根本没有日志，说明请求被 quick 过滤掉了（见 startSearch 的入参日志）。
+        Log.e(
+            TAG,
+            "换源搜索结果: site=$siteKey listSize=${items.size}, " +
+                "code=${result?.code}, msg=${result?.msg}",
+        )
         if (items.isNotEmpty()) {
             val merged = resultsBySite.getOrElse(siteKey) { emptyList() } + items
             resultsBySite[siteKey] = merged.distinctBy { it.id }
@@ -398,6 +419,12 @@ internal class ChangeSourceDialog private constructor(
     private fun onSearchProgress(progress: SearchProgress?) {
         if (progress == null || !progress.finished()) return
         val siteKey = pendingSiteKey ?: return
+        // 【致命日志 3】收尾：total=0 表示这个源被 quick 过滤（根本没发请求），
+        // 不是「源里没有这部剧」。换源现在统一 quick=false，正常情况下 total 应为 1。
+        Log.e(
+            TAG,
+            "换源搜索结束: site=$siteKey current=${progress.current()} total=${progress.total()}",
+        )
         pendingSiteKey = null
         searching = false
         // 搜完但没有结果（含失败 / 被 quick 过滤）也记一条空结果，避免每次切回这个 Tab 都重搜。
@@ -568,6 +595,8 @@ internal class ChangeSourceDialog private constructor(
 
     companion object {
 
+        private const val TAG = "ChangeSourceDialog"
+
         /** 结果区空态：当前源没搜到这部剧。 */
         private const val EMPTY_RESULT_TEXT = "该源暂无此剧"
 
@@ -650,7 +679,8 @@ internal class ChangeSourceDialog private constructor(
          * @param viewModel Activity 作用域的 [SiteViewModel]（**必须复用**，不能在这里 new）。
          * @param sites 候选源，直接用 [candidates] 的返回值；顺序即站点栏顺序。
          * @param keyword 检索关键词（首页当前这张卡的剧名）。
-         * @param quick 是否只搜 quick 源；与 `TmdbDetailActivity` 一致传 `true`。
+         * @param quick 是否只搜 quick 源。换源必须传 `false`：`SiteViewModel.searchContent(List)`
+         *   在 `quick=true` 时会直接跳过 `isQuickSearch()==false` 的源，表现为整屏「该源暂无此剧」。
          * @param onSourceSelected 结果卡片确定键回调，回传**真实 `(Vod, Site)`**。
          * @param onClosed 关闭回调，调用方在这里把焦点交还给首页卡片。
          */
@@ -659,7 +689,7 @@ internal class ChangeSourceDialog private constructor(
             viewModel: SiteViewModel,
             sites: List<Site>,
             keyword: String,
-            quick: Boolean = true,
+            quick: Boolean = false,
             onSourceSelected: (Vod, Site) -> Unit = { _, _ -> },
             onClosed: () -> Unit = {},
         ): ChangeSourceDialog {

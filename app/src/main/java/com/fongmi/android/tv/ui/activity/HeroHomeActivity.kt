@@ -594,8 +594,9 @@ private fun HeroHomeScreen(
             viewModel = siteViewModel,
             sites = candidates,
             keyword = keyword,
-            // 与 TmdbDetailActivity L11261 的换源检索一致：只搜 quick 源。
-            quick = true,
+            // 换源必须 quick = false：quick=true 会跳过 isQuickSearch()==false 的源，
+            // 大部分源都不支持 quick 搜索，表现就是整屏「该源暂无此剧」。
+            quick = false,
             onSourceSelected = { vod, site ->
                 // 用户在弹窗里选中了另一部剧：vod 已由 SiteApi.searchContent 盖过 site，
                 // 两者同源，直接用它俩打开该源的真实详情页，不再按剧名二次搜索。

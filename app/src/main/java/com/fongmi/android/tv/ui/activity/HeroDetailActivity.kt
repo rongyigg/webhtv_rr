@@ -169,6 +169,14 @@ class HeroDetailActivity : ComponentActivity() {
         // 传下来的整条 Vod：如果它自己已经带 flags（WebHome 内联源 / 聚合结果），就不用再请求。
         val passedVod = readVod()
         val inlinePlayable = passedVod != null && passedVod.hydrateInlineEpisodes()
+        // 【致命日志】传进来的 Vod 形状：搜索 / 首页通常是轻量结果（flagsSize=0），必须走详情请求；
+        // 只有 flagsSize>0 才轮到「要不要跳过请求」。siteKey / vodId 也一起打，便于核对站点是否查错。
+        Log.e(
+            TAG_DETAIL,
+            "收到的 Vod: id=${passedVod?.id}, site=$siteKey, flagsSize=${passedVod?.flags?.size ?: 0}, " +
+                "playableLines=${passedVod?.flags?.count { !it.episodes.isNullOrEmpty() } ?: 0}, " +
+                "playUrlLen=${passedVod?.playUrl?.length ?: 0}, vodId=$vodId, inlinePlayable=$inlinePlayable",
+        )
         // 换源弹窗需要 Activity 作用域的 SiteViewModel（构造函数里就建了两个单线程 executor，
         // 绝不能按弹窗 new）。详情页自己持有一份，和首页互不影响。
         val siteViewModel = ViewModelProvider(this)[SiteViewModel::class.java]
@@ -333,10 +341,31 @@ private fun needsSpecialParse(vodId: String): Boolean =
  * 绝不能直接对整个 Vod 调 `setFlags()`。
  */
 private fun Vod.hydrateInlineEpisodes(): Boolean {
+    val flagCount = flags.size
     flags.forEach { flag ->
-        if (flag.episodes.isNullOrEmpty() && flag.urls.isNotBlank()) flag.setEpisodes(flag.urls)
+        if (flag.episodes.isNullOrEmpty() && flag.urls.isNotBlank()) {
+            // `Flag.setEpisodes()` 内部直接操作 `getEpisodes()`，若该字段为 null 会 NPE；
+            // 这里兜住异常并打日志，绝不让详情页因为一条坏线路崩溃。
+            runCatching { flag.setEpisodes(flag.urls) }
+                .onSuccess {
+                    Log.e(
+                        TAG_DETAIL,
+                        "hydrate: flag=${flag.flag} urlsLen=${flag.urls.length} -> " +
+                            "episodes=${flag.episodes.orEmpty().size}",
+                    )
+                }
+                .onFailure {
+                    Log.e(TAG_DETAIL, "hydrate 失败: flag=${flag.flag} urlsLen=${flag.urls.length}", it)
+                }
+        }
     }
-    return flags.any { !it.episodes.isNullOrEmpty() }
+    val playable = flags.count { !it.episodes.isNullOrEmpty() }
+    Log.e(
+        TAG_DETAIL,
+        "hydrateInlineEpisodes: flags=$flagCount playableLines=$playable, " +
+            "playUrlLen=${playUrl.length}（playableLines=0 时详情页会走网络请求）",
+    )
+    return playable > 0
 }
 
 @Composable
@@ -371,6 +400,13 @@ private fun HeroDetailScreen(
                 "获取到详情: listSize=${result.list.size}, code=${result.code}, msg=${result.msg}",
             )
             val incoming = result.vod
+            // 【致命日志】详情请求回来的线路 / 集数：
+            // flagsSize=0 → 接口没给播放字段；flagsSize>0 但 episodesSize=0 → 有线路没拆出集。
+            Log.e(
+                TAG_DETAIL,
+                "请求回来的 flagsSize=${incoming.flags.size}, " +
+                    "episodesSize=${incoming.flags.firstOrNull()?.episodes?.size ?: 0}",
+            )
             Log.d(
                 TAG_DETAIL,
                 "Vod详情: name=${incoming.name}, id=${incoming.id}, flagsSize=${incoming.flags.size}",
@@ -396,11 +432,11 @@ private fun HeroDetailScreen(
             } else {
                 Log.e(TAG_DETAIL, "【严重】未解析出任何线路，请检查请求 key 和 id 是否正确！")
             }
-            // 只接收本次条目的详情：换源弹窗走的是 `search` 通道，不会写 `result`；
-            // 这里再按 id 过滤，避免其它入口（例如首页 result）串台。
+            // 详情结果只来自本页的 `detailContent`（换源弹窗写的是 `search` 通道）。
+            // 即使源站返回的 id 与请求 id 不完全一致，只要结果到了就必须接收：
+            // 这里再按 id 丢弃，会把一次成功的详情请求误判成「无可用剧集」。
             if (incoming.id.isNotBlank() && incoming.id != vodId) {
-                Log.w(TAG_DETAIL, "忽略非本次详情: resultId=${incoming.id} 期望=$vodId")
-                return@Observer
+                Log.w(TAG_DETAIL, "详情 id 与请求不一致，仍然接收: resultId=${incoming.id} 期望=$vodId")
             }
             detailResult = result
         }
@@ -408,16 +444,18 @@ private fun HeroDetailScreen(
         onDispose { siteViewModel.result.removeObserver(observer) }
     }
     val vod = detailResult?.vod
-    // 只保留真正有集数的线路：部分源的占位线路（如「请选择」）没有任何 episode。
-    val flags = remember(detailResult) { vod?.flags.orEmpty().filter { !it.episodes.isNullOrEmpty() } }
+    // 【严格判定】只要 flags 非空就算有线路，**不再按 episodes 过滤**：
+    // 某条线路确实没有集数时，选集弹窗显示「该线路暂无集数」，
+    // 绝不能因为第一条线路是空占位就把整部剧判成「无可用剧集」。
+    val flags = remember(detailResult) { vod?.flags.orEmpty() }
     // 先落到局部 val：`detailResult` 是委托属性，Kotlin 不对它做智能转换。
     val result = detailResult
     val special = needsSpecialParse(vodId)
     // 【关键】「加载中」「请求失败」「确实没有剧集」「需要特殊解析」是四种完全不同的状态：
     // 请求失败时 `Result` 的 list 为空（`SiteViewModel` 失败时会 post `Result.empty()`），
     // 以前这种情况会被误判成「该资源暂无可用剧集」，把失败说成没有资源。
-    // `flags` 优先判定：传入 Vod 自带线路、以及 csp_PianDan 这类只有 4 集正常数据的源，
-    // 只要 episodes 非空就一定是 Ready，不能被其它条件抢走。
+    // `flags` 优先判定：只要接口返回了线路（哪怕某条线路 episodes 为空），就算 Ready；
+    // 选集弹窗负责把空线路显示成「该线路暂无集数」，绝不把整部剧误判成「无可用剧集」。
     val detailState = when {
         flags.isNotEmpty() -> DetailState.Ready
         vodId.isBlank() -> DetailState.Empty
@@ -634,8 +672,8 @@ private fun HeroDetailScreen(
                                     sites = candidates,
                                     // 详情页的剧名现在是真实值（来自首页 / 上一次换源），直接用它检索。
                                     keyword = page.title,
-                                    // 与 TmdbDetailActivity 一致：只搜 quick 源。
-                                    quick = true,
+                                    // 换源必须 quick = false：quick=true 会跳过不支持 quick 的源。
+                                    quick = false,
                                     onSourceSelected = { vod, site ->
                                         Notify.show(
                                             context.getString(
@@ -683,7 +721,7 @@ private fun HeroDetailScreen(
 
     if (showPlayDialog) {
         HeroPlayDialog(
-            // 真实线路：`Vod.flags` 里只保留真正带剧集的线路（见上面的 `flags`）。
+            // 真实线路：`Vod.flags` 原样传入，某条线路没集数时弹窗内部显示「该线路暂无集数」。
             flags = flags,
             // 历史进度还没接本地库：-1 = 没看过，焦点落第 1 集。
             lastWatchedEpisodeIndex = -1,
@@ -1229,7 +1267,7 @@ private fun HeroPlayDialog(
     onEpisodeSelected: (Flag, Episode) -> Unit = { _, _ -> },
     onDismiss: () -> Unit,
 ) {
-    // 没有可用线路时不弹空壳（调用方已过滤掉没有剧集的线路，这里只是兜底）。
+    // 一条线路都没有时不弹空壳；有线路但某条没集数，由下面的网格区显示「该线路暂无集数」。
     if (flags.isEmpty()) return
 
     // 列数 / 排序本地持久化：换剧、关弹窗、杀进程后再进来仍是上次的选择。
@@ -1604,7 +1642,8 @@ private fun HeroPlayDialog(
                             val end = minOf((index + 1) * pageSize, ordered.size)
                             val controlIndex = CONTROL_GROUP_START + index
                             HeroToggleButton(
-                                label = "$start-$end",
+                                // 空线路（episodes 为空）时只有一个分组，别显示成「1-0」。
+                                label = if (ordered.isEmpty()) "0" else "$start-$end",
                                 selected = index == page,
                                 moduleFocused = contentFocused,
                                 requester = groupRequesters[index],
@@ -1629,39 +1668,55 @@ private fun HeroPlayDialog(
                 Spacer(modifier = Modifier.height(DIALOG_CONTROL_GAP))
 
                 // ---- 固定 4 排网格：高度写死、userScrollEnabled = false，翻组只走边缘按键 ----
-                LazyVerticalGrid(
-                    columns = GridCells.Fixed(columns),
-                    userScrollEnabled = false,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(EPISODE_GRID_HEIGHT)
-                        // 边界切组统一在网格层拦截：格子本身不处理方向键。
-                        .onKeyEvent { event ->
-                            event.type == KeyEventType.KeyDown && handleGridKey(event.key)
-                        },
-                    horizontalArrangement = Arrangement.spacedBy(EPISODE_GRID_GAP),
-                    verticalArrangement = Arrangement.spacedBy(EPISODE_GRID_GAP),
-                ) {
-                    pageItems.forEachIndexed { index, episode ->
-                        item(key = index) {
-                            HeroEpisodeCell(
-                                // 原版推荐文案：`desc + name`（TMDB 刮削后是「S01E02 标题」，普通源就是集名）。
-                                label = episode.getDisplayName(),
-                                playing = episode === playingEpisode,
-                                requester = cellRequesters[index],
-                                onFocused = {
-                                    anchorCell = index
-                                    anchorEpisode = episode
-                                    // 焦点进网格：线路 / 分组保持红框（规则 ②）。
-                                    contentFocused = true
-                                },
-                                onConfirm = {
-                                    playingEpisode = episode
-                                    // 直接把真实 (线路, 集) 交给详情页，由它调用原版起播入口。
-                                    // TODO(接入历史库)：这里补 History.push，目前只负责起播。
-                                    onEpisodeSelected(currentFlag, episode)
-                                },
-                            )
+                if (pageItems.isEmpty()) {
+                    // 线路存在但没有任何集数：显示提示，不弹空网格，也绝不把整部剧判成「无可用剧集」。
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(EPISODE_GRID_HEIGHT),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            text = "该线路暂无集数",
+                            color = Color(0x99FFFFFF),
+                            fontSize = DIALOG_SECTION_TITLE_SP.sp,
+                        )
+                    }
+                } else {
+                    LazyVerticalGrid(
+                        columns = GridCells.Fixed(columns),
+                        userScrollEnabled = false,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(EPISODE_GRID_HEIGHT)
+                            // 边界切组统一在网格层拦截：格子本身不处理方向键。
+                            .onKeyEvent { event ->
+                                event.type == KeyEventType.KeyDown && handleGridKey(event.key)
+                            },
+                        horizontalArrangement = Arrangement.spacedBy(EPISODE_GRID_GAP),
+                        verticalArrangement = Arrangement.spacedBy(EPISODE_GRID_GAP),
+                    ) {
+                        pageItems.forEachIndexed { index, episode ->
+                            item(key = index) {
+                                HeroEpisodeCell(
+                                    // 原版推荐文案：`desc + name`（TMDB 刮削后是「S01E02 标题」，普通源就是集名）。
+                                    label = episode.getDisplayName(),
+                                    playing = episode === playingEpisode,
+                                    requester = cellRequesters[index],
+                                    onFocused = {
+                                        anchorCell = index
+                                        anchorEpisode = episode
+                                        // 焦点进网格：线路 / 分组保持红框（规则 ②）。
+                                        contentFocused = true
+                                    },
+                                    onConfirm = {
+                                        playingEpisode = episode
+                                        // 直接把真实 (线路, 集) 交给详情页，由它调用原版起播入口。
+                                        // TODO(接入历史库)：这里补 History.push，目前只负责起播。
+                                        onEpisodeSelected(currentFlag, episode)
+                                    },
+                                )
+                            }
                         }
                     }
                 }
@@ -1943,7 +1998,7 @@ private data class HeroCast(val id: String, val name: String, val avatarUrl: Str
  * 详情加载状态：四态互斥，UI 与播放按钮都按它分支。
  *
  * - [Loading]：请求还在路上（或正在重试）；
- * - [Ready]：拿到了至少一条带剧集的线路，可以弹选集；
+ * - [Ready]：拿到了至少一条线路（`episodes` 可以为空，选集弹窗会提示「该线路暂无集数」）；
  * - [Empty]：接口成功返回但确实没有可播剧集，或 ID 为空 / 需要特殊解析（临时 ID）；
  * - [Error]：请求失败 / 接口没返回数据（`Result.list` 为空），必须和 [Empty] 区分开。
  */
