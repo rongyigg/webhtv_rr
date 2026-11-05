@@ -123,6 +123,31 @@ internal class ChangeSourceDialog private constructor(
      */
     private var pendingSiteKey: String? = null
 
+    /**
+     * 「焦点即选中」的防抖目标：焦点停稳后要切到的站点下标；-1 = 没有待切换项。
+     *
+     * 电视端按住 ←/→ 时焦点会连续跳格，如果每次 `onFocusChange` 都立刻 `selectSite`，
+     * 滑过 5 个源就是 5 次 `searchContent`（还会互相 `stopSearchLocked` 取消）。
+     * 这里只记最后落点，停稳 [SITE_FOCUS_DEBOUNCE_MS] 后再切。
+     */
+    private var pendingSiteFocus: Int = -1
+
+    /**
+     * 防抖任务：停稳后切到 [pendingSiteFocus]。
+     *
+     * 用「目标标签此刻是否真的还持有焦点」做最后校验，而不是在 `onFocusChange(false)` 里取消：
+     * 焦点在子 View 之间转移时，系统派发 gain / loss 的先后顺序并不固定，
+     * 依赖顺序去取消容易把刚排上的任务误删。这里只认最终持有焦点的那个标签。
+     */
+    private val siteFocusRunnable = Runnable {
+        val target = pendingSiteFocus
+        pendingSiteFocus = -1
+        if (target >= 0) {
+            val holder = siteRecycler.findViewHolderForAdapterPosition(target)
+            if (holder?.itemView?.hasFocus() == true) selectSite(target)
+        }
+    }
+
     private val searchObserver = Observer<Result> { result -> onSearchResult(result) }
 
     private val progressObserver = Observer<SearchProgress> { progress -> onSearchProgress(progress) }
@@ -170,6 +195,9 @@ internal class ChangeSourceDialog private constructor(
         window?.decorView?.viewTreeObserver?.removeOnGlobalFocusChangeListener(focusListener)
         viewModel.search.removeObserver(searchObserver)
         viewModel.searchProgress.removeObserver(progressObserver)
+        // 关窗即作废待切换的焦点任务，避免弹窗消失后还发一次检索。
+        pendingSiteFocus = -1
+        siteRecycler.removeCallbacks(siteFocusRunnable)
         pendingSiteKey = null
         // 关闭弹窗就取消在途检索：蜘蛛实现可能忽略中断，stopSearch 至少让旧一轮结果不再回到 UI。
         viewModel.stopSearch()
@@ -270,12 +298,28 @@ internal class ChangeSourceDialog private constructor(
 
     private fun currentSite(): Site? = sites.getOrNull(selectedSite)
 
-    /** 站点栏确定键 / 点击：切到该源并保证它有结果（没搜过就补搜）。 */
+    /**
+     * 站点栏切源（点击 / 确定键 / 焦点停稳）：切到该源并保证它有结果（没搜过就补搜）。
+     *
+     * 注意这里**不能** `notifyDataSetChanged()`：焦点即选中时这次调用可能正好发生在
+     * 焦点移动过程中，全量重绑会让 RecyclerView 重建子 View、把刚拿到的焦点丢掉。
+     * 改为只同步现有子 View 的 `isSelected`（`syncSiteSelection()`）。
+     */
     private fun selectSite(position: Int) {
+        if (position !in sites.indices) return
         if (position == selectedSite) return
         selectedSite = position
-        siteAdapter.notifyDataSetChanged()
+        syncSiteSelection()
         refreshCurrent()
+    }
+
+    /** 把 `isSelected` 打到「当前站点」的那一个标签上；焦点态由 drawable 自己管。 */
+    private fun syncSiteSelection() {
+        for (index in 0 until siteRecycler.childCount) {
+            val child = siteRecycler.getChildAt(index)
+            val position = siteRecycler.getChildAdapterPosition(child)
+            child.isSelected = position == selectedSite
+        }
     }
 
     /**
@@ -452,6 +496,17 @@ internal class ChangeSourceDialog private constructor(
             // 第一个站点标签向左回到小房子；其余在站点栏内滚动。
             holder.itemView.nextFocusLeftId = if (position == 0) R.id.homeBtn else View.NO_ID
             holder.itemView.setOnClickListener { selectSite(holder.bindingAdapterPosition) }
+            // 【焦点即选中】焦点停稳即切源：电视端不用再按确定键。
+            // - 停稳 [SITE_FOCUS_DEBOUNCE_MS] 才真正 `selectSite`，快速滑过多个源不会连发请求；
+            // - 每次 gain 都重排任务（覆盖上一个），真正执行时再校验「该标签仍持有焦点」；
+            // - 监听器在每次 bind 时重设，旧监听器被覆盖，不会累积。
+            holder.itemView.setOnFocusChangeListener { _, hasFocus ->
+                if (hasFocus) {
+                    pendingSiteFocus = holder.bindingAdapterPosition
+                    siteRecycler.removeCallbacks(siteFocusRunnable)
+                    siteRecycler.postDelayed(siteFocusRunnable, SITE_FOCUS_DEBOUNCE_MS)
+                }
+            }
         }
 
         inner class Holder(view: View) : RecyclerView.ViewHolder(view) {
@@ -549,6 +604,14 @@ internal class ChangeSourceDialog private constructor(
         /** 初始焦点重试：ViewHolder 未布局完成时，焦点会停在 RecyclerView 上，标签就没有红底。 */
         private const val FOCUS_RETRY_COUNT = 6
         private const val FOCUS_RETRY_DELAY_MS = 50L
+
+        /**
+         * 「焦点即选中」的请求防抖窗口（毫秒）。
+         *
+         * 按住 ←/→ 时焦点约每 50ms 跳一格，停留 160ms 才认为用户「停在这个源上」，
+         * 期间滑过的源一个请求都不发；视觉上焦点红底仍然即时跟随（纯 View 状态）。
+         */
+        private const val SITE_FOCUS_DEBOUNCE_MS = 160L
 
         /**
          * 换源候选源：**与 `TmdbDetailActivity.isChangeSourceCandidate`（L11654）等价的规则**。

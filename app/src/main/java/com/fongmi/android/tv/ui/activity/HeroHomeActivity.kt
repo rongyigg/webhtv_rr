@@ -95,9 +95,11 @@ import coil3.compose.AsyncImage
 import com.fongmi.android.tv.R
 import com.fongmi.android.tv.api.SiteApi
 import com.fongmi.android.tv.api.config.VodConfig
+import com.fongmi.android.tv.bean.Class as VodType
 import com.fongmi.android.tv.bean.Result
 import com.fongmi.android.tv.bean.Site
 import com.fongmi.android.tv.bean.Vod
+import com.fongmi.android.tv.impl.Callback
 import com.fongmi.android.tv.model.SiteViewModel
 import com.fongmi.android.tv.setting.Setting
 import com.fongmi.android.tv.setting.SiteBlockSetting
@@ -113,6 +115,7 @@ import com.fongmi.android.tv.ui.hero.TmdbMatchDialog
 import com.fongmi.android.tv.ui.hero.TmdbMatchItem
 import com.fongmi.android.tv.utils.Notify
 import com.fongmi.android.tv.utils.PushParser
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /**
@@ -189,6 +192,9 @@ class HeroHomeActivity : ComponentActivity() {
         }
         installDoubleBackToExit()
         HeroImageLoader.install()
+        // 冷启动自愈：进程重启后 VodConfig 还是空壳（没有任何页面触发过配置加载），
+        // 首页会拿空站点去请求 homeContent，表现就是「接口源全丢了」。
+        ensureVodConfigLoaded()
         // 首页真实化：记录「当前用的是哪个源」。onResume 靠它判断用户是不是刚从设置页换了源。
         loadedHomeSiteKey = VodConfig.get().getHome().key
         setContent {
@@ -222,6 +228,33 @@ class HeroHomeActivity : ComponentActivity() {
         if (site.key == loadedHomeSiteKey) return
         Log.d(TAG_HOME, "接口源已变化: ${loadedHomeSiteKey} -> ${site.key}，重新请求 homeContent")
         refreshHome("设置页返回")
+    }
+
+    /**
+     * 冷启动自愈：如果 [VodConfig] 还没有站点，就从**本地已保存的配置**加载一次。
+     *
+     * 背景：本项目的 `VodConfig` 是纯内存单例，进程重启后是空壳；没有这步的话，
+     * `getHome()` 返回空 [Site]，`homeContent()` 必然失败 —— 用户看到的就是「重启后接口全丢了」。
+     *
+     * - `init()`：把 config 指向 Room 里保存的 `Config.vod()`（用户上次用的接口地址）；
+     * - `load(callback)`：内部 `Task.submit`，异步执行，不卡首帧；成功后回调在主线程；
+     * - 只在 `getHome().isEmpty()` 时触发：已经加载过的页面完全不受影响；
+     * - 失败（例如从没配过源）只记日志，绝不弹窗打扰。
+     */
+    private fun ensureVodConfigLoaded() {
+        if (!VodConfig.get().getHome().isEmpty()) return
+        Log.w(TAG_HOME, "冷启动 VodConfig 为空，尝试从本地已保存配置加载")
+        VodConfig.get().init().load(object : Callback() {
+            override fun success() {
+                Log.d(TAG_HOME, "本地配置加载完成: 站点数=${VodConfig.get().getSites().size}")
+                // 回调已经在主线程（BaseConfig 用 App.post 派发 success）。
+                refreshHome("冷启动配置加载完成")
+            }
+
+            override fun error(msg: String) {
+                Log.w(TAG_HOME, "本地配置加载失败: $msg")
+            }
+        })
     }
 
     /**
@@ -358,6 +391,13 @@ private fun HeroHomeScreen(
     var homeResult by remember { mutableStateOf<Result?>(null) }
     // 已经自动加载过的「站点:分类」。分类结果本身也可能为空，用它挡掉来回死循环。
     var autoCategoryKey by remember { mutableStateOf<String?>(null) }
+    // 当前接口源真实返回的分类（`Result.types`）。分类结果本身可能不带 types，
+    // 所以这里单独缓存，供「Tab 文案 → 真实分类」的映射使用（声明在观察者之前）。
+    var homeTypes by remember { mutableStateOf<List<VodType>>(emptyList()) }
+    // 用户当前是否停在「分类 Tab」上（index > 0）。
+    // 分类请求返回空列表时不能触发下面「首页为空 → 自动加载第一个分类」的兜底，
+    // 否则会把用户明确选中的分类悄悄换成第一个分类；[reloadHome] 会把它复位。
+    var categoryTabActive by remember { mutableStateOf(false) }
 
     /**
      * 重新拉一次首页，并复位「自动分类」标记。
@@ -366,6 +406,7 @@ private fun HeroHomeScreen(
      */
     fun reloadHome() {
         autoCategoryKey = null
+        categoryTabActive = false
         onRefreshHome()
     }
 
@@ -374,6 +415,8 @@ private fun HeroHomeScreen(
         // 所以这里必须按可空接收：null 直接忽略（等价于「还没拿到数据」）。
         val observer = Observer<Result?> { result ->
             if (result == null) return@Observer
+            // 分类只在首页 / 分类首包里带回来：拿到就缓存，供「Tab 文案 → 真实分类」映射。
+            if (result.types.isNotEmpty()) homeTypes = result.types
             val site = VodConfig.get().getHome()
             // 【关键】`SiteApi.homeContent` / `categoryContent` 都不像 `searchContent` 那样给每条 Vod 盖 site。
             // 不补的话 `Vod.getSiteKey()` 是空串：详情页「排除当前源」直接失效、来源标签也是空白。
@@ -383,7 +426,8 @@ private fun HeroHomeScreen(
             // 自动去拉第一个分类的第 1 页。只返回 class、不返回 list 的源靠这一步才有内容，
             // 少了它就是「原版正常、我们空白」。
             val firstType = result.types.firstOrNull()
-            if (result.list.isEmpty() && firstType != null) {
+            // 只在「首页」兜底：用户明确停在分类 Tab 上时不自动改写分类。
+            if (!categoryTabActive && result.list.isEmpty() && firstType != null) {
                 val categoryKey = site.key + ":" + firstType.typeId
                 if (categoryKey != autoCategoryKey) {
                     autoCategoryKey = categoryKey
@@ -409,10 +453,13 @@ private fun HeroHomeScreen(
 
     // Tab 栏的记忆索引：从第一排按“下”或从第三排按“上”进入时，都落回这一项。
     var rememberedTabIndex by remember { mutableIntStateOf(0) }
-    // 真正的“选中分类”：**只有确定键能改**，焦点移动一律不改。
-    // 初值 -1 = 用户还没明确选过任何分类（此时海报用第 0 类数据兜底，但 Tab 一律不涂红）。
-    // 焦点态由每个 Tab 自己用 onFocusChanged 局部管理，不落到这个全局状态里。
+    // 当前选中的分类：**焦点移到哪个 Tab 就选哪个**（电视端少按一次键）。
+    // 初值 -1 = 还没进过 Tab 栏（此时所有 Tab 都不涂红，只有焦点态）。
+    // 确定键仍然保留，作为“确认”语义的兼容入口。
     var selectedTabIndex by remember { mutableIntStateOf(-1) }
+    // 已经为哪个 Tab 拉过数据：焦点在同一项上抖动 / 确定键重复触发时不再发请求。
+    // 初值 0 = 「推荐」的首屏数据由 `LaunchedEffect(Unit) → reloadHome()` 负责。
+    var loadedTabIndex by remember { mutableIntStateOf(0) }
     var focusedPosterIndex by remember { mutableIntStateOf(0) }
     // 焦点是否还在「Tab 栏 + 海报区」这一模块里。
     // 《焦点总结》第 ②③ 条的分界线：只有还在模块内，选中的 Tab 才挂红框；
@@ -456,10 +503,10 @@ private fun HeroHomeScreen(
 
     // 任意一排 → Tab：
     // - 从卡片按 ↑ 上来时必须回到**当前选中的分类**（红框那一个），
-    //   而不是「焦点上一次路过的 Tab」——那个只是实心红块，用户根本没按确定键，
-    //   回到它等于把用户选好的分类换成别的（图 1 标注的 bug）；
-    // - 还没按过任何分类（-1）时退回「焦点上次停留项」，再不行落第一项。
-    // 注意：这里只移动焦点，**绝不改 selectedTabIndex**。
+    //   而不是「焦点上一次路过的 Tab」；
+    // - 焦点即选中之后，选中项 == 最后一次聚焦项，两者天然一致；
+    // - 还没进过 Tab 栏（-1）时退回「焦点上次停留项」，再不行落第一项。
+    // 注意：这里只移动焦点；选中态由 Tab 自己的 onFocused 更新（焦点即选中）。
     fun focusTab(index: Int? = null) {
         val fallback = if (selectedTabIndex >= 0) selectedTabIndex else rememberedTabIndex
         val target = (index ?: fallback).coerceIn(0, HERO_TABS.lastIndex)
@@ -570,6 +617,51 @@ private fun HeroHomeScreen(
         posterState.scrollToItem(0)
     }
 
+    // ------------------------------------------------------------------
+    // 焦点即选中之后的**防抖加载**
+    // ------------------------------------------------------------------
+    // 焦点在 Tab 上快速滑动时，`selectedTabIndex` 会连续变化：
+    // - 红色选中态**立刻**跟着焦点走（纯 UI，零成本，不防抖）；
+    // - 真正发请求放在这里，停稳 [TAB_SWITCH_DEBOUNCE_MS] 才执行，中间的中间态全部被取消。
+    // 再加一层：`loadedTabIndex` 挡住「同一项重复触发」（确定键 / 焦点抖动）。
+    // 即便仍有并发请求，`SiteViewModel.execute` 内部也会 cancel 同一 TaskType 的上一轮。
+    LaunchedEffect(selectedTabIndex, homeTypes) {
+        val index = selectedTabIndex
+        if (index < 0 || index == loadedTabIndex) return@LaunchedEffect
+        // 停稳才继续：快速滑过多个 Tab 时 effect 会被下一次选中立刻取消，只有最后一格走到下面。
+        delay(TAB_SWITCH_DEBOUNCE_MS)
+        // 0 = 「推荐」：回到首页首屏数据。
+        if (index == 0) {
+            loadedTabIndex = 0
+            Log.d(TAG_HOME, "焦点切回「推荐」，重新拉首页")
+            reloadHome()
+            return@LaunchedEffect
+        }
+        val label = HERO_TABS.getOrNull(index) ?: return@LaunchedEffect
+        val site = VodConfig.get().getHome()
+        if (site.key.isEmpty()) return@LaunchedEffect
+        // 分类还没回来（冷启动配置仍在加载 / 首页请求在途）：**不标记 loaded**，
+        // 等 `homeTypes` 变化后本 effect 会自动重跑一次，避免「先滑到 Tab、分类后到」永远匹配不上。
+        if (homeTypes.isEmpty()) {
+            Log.d(TAG_HOME, "分类 Tab「$label」等待分类数据，暂不请求")
+            return@LaunchedEffect
+        }
+        // Tab 文案是固定的设计稿文案，和源里的分类名做双向包含匹配；
+        // 匹配不到就**只切视觉、不乱发请求**（宁可保持现有海报，也不展示错分类的数据）。
+        val type = homeTypes.firstOrNull { item ->
+            item.typeName.isNotEmpty() && (item.typeName.contains(label) || label.contains(item.typeName))
+        }
+        if (type == null) {
+            loadedTabIndex = index
+            Log.d(TAG_HOME, "分类 Tab「$label」在当前源没有同名分类，保持现有海报")
+            return@LaunchedEffect
+        }
+        loadedTabIndex = index
+        categoryTabActive = true
+        Log.d(TAG_HOME, "焦点切分类: $label -> ${type.typeName}(${type.typeId})")
+        siteViewModel.categoryContent(site.key, type.typeId, "1", true, hashMapOf())
+    }
+
     // 数据从「有」变「无」（切到空源 / 接口源返回空）时，海报区的焦点会悬空，
     // 这里统一收回小房子，保证任何时候都有明确的焦点落点。
     LaunchedEffect(posters.isEmpty()) {
@@ -656,16 +748,18 @@ private fun HeroHomeScreen(
             HeroTabBar(
                 state = tabState,
                 requesters = tabRequesters,
-                // -1 = 尚未明确选择任何分类 → 所有 Tab 都不涂红（只有焦点态才红）。
+                // -1 = 还没进过 Tab 栏（此时所有 Tab 都不涂红，只有焦点态才红）。
                 selectedIndex = selectedTabIndex,
                 // 焦点还在模块内：让「选中但失焦」的 Tab 挂红框（规则 ②）。
                 moduleFocused = moduleFocused,
-                // 焦点只记录“上次停留位置”，不改变分类，也不改变选中态。
+                // 【焦点即选中】焦点移到哪个分类 Tab，就立刻选中哪个：
+                // 红色选中态立即跟着焦点走，数据加载由上面的防抖 effect 统一处理。
                 onFocused = { index ->
                     rememberedTabIndex = index
                     moduleFocused = true
+                    selectedTabIndex = index
                 },
-                // 确定键才是「明确被选中」：只有这里会切换分类（红底随之转移）。
+                // 确定键保留（兼容原有按键习惯）：焦点即选中之后这里通常已是同一个值。
                 onConfirm = { index ->
                     rememberedTabIndex = index
                     selectedTabIndex = index
@@ -1173,7 +1267,8 @@ private fun HeroTabChip(
     //   1. isFocused  → HeroFocusBrush 红渐变色块（实心块统一渐变，不再用纯红）
     //   2. selected 且焦点还在 Tab/海报模块内 → 红色描边 + 透明底（规则 ②）
     //   3. 其余（含焦点回顶栏）→ Color.Transparent，绝不能有红块 / 灰块（规则 ③）
-    // selected 只由确定键产生；焦点经过不会改它。
+    // 焦点即选中：selected 会跟着焦点一起走，所以「聚焦」与「选中」通常是同一个 Tab；
+    // 规则 ② 只在焦点离开 Tab 栏（↑ 回顶栏 / ↓ 进海报行）之后才看得到。
     val selectedRing = selected && !focused && moduleFocused
     // 当前分类即使只剩红框，文字也用纯白，和焦点态保持同一层级。
     val chipTextColor = if (focused || (selected && moduleFocused)) Color.White else HERO_TAB_IDLE_TEXT
@@ -1551,6 +1646,15 @@ private const val TOP_BAR_SETTINGS_LABEL = "设置"
 
 // 分类 Tab 顺序对照 ref_docs/home_ui.png 的胶囊分类条。
 private val HERO_TABS = listOf("推荐", "电影", "电视剧", "动漫", "综艺", "纪录片")
+
+/**
+ * 「焦点即选中」的请求防抖窗口（毫秒）。
+ *
+ * 电视端按住方向键时焦点会以 ~50ms 的间隔连续跳格，若每次 `selectedTabIndex` 变化都立刻发请求，
+ * 滑过 6 个 Tab 就是 6 个并发请求。这里只拦**网络请求**：红色选中态是纯 UI，仍然立刻跟随焦点。
+ * 220ms 略大于系统长按连发间隔，用户停手后到请求发出几乎无感。
+ */
+private const val TAB_SWITCH_DEBOUNCE_MS = 220L
 
 // ---------------------------------------------------------------------------
 // 全局边距：activity_home_v2.xml 里 navBar(L208-209) / heroInfo(L69-70) /

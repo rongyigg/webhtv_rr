@@ -278,6 +278,11 @@ private fun HeroSearchScreen(
     var searchedKeyword by remember { mutableStateOf("") }
     var searching by remember { mutableStateOf(false) }
     var searchProgress by remember { mutableStateOf<SearchProgress?>(null) }
+    // 搜索请求序号：点热词 / 点历史 / 放大镜 / 键盘搜索键都只改这个序号，
+    // 真正的请求统一在 `LaunchedEffect(searchSerial)` 里发 —— 保证「输入框已更新、结果区已重组」之后才发请求，
+    // 快速连点时也只有最后一次生效。
+    var searchSerial by remember { mutableIntStateOf(0) }
+    var searchKeyword by remember { mutableStateOf("") }
 
     // ---- 真实热搜 / 建议 ----
     // 热搜：先用本地缓存（Prefers("hot")）秒出，再异步刷一次网络（同 `X1()` 的两步）。
@@ -356,20 +361,28 @@ private fun HeroSearchScreen(
             focusInput()
             return
         }
-        val target = index.coerceIn(0, siteLabels.lastIndex)
+        // 【防越界】站点 Tab 随真实结果动态增长：列表为空 / 下标越界都必须先收敛，
+        // 否则 `coerceIn(0, -1)` 会直接抛 IllegalArgumentException。
+        val count = siteLabels.size
+        if (count <= 0) return
+        val target = index.coerceIn(0, count - 1)
         focusedSite = target
         scope.launch {
-            siteState.animateScrollToItem(target)
+            runCatching { siteState.animateScrollToItem(target) }
             withFrameNanos { }
             requestFocus(siteRequesters, target)
         }
     }
 
     fun focusPoster(index: Int) {
+        // 【防越界 / 防崩溃】结果为空时 `coerceIn(0, -1)` 同样会抛异常；
+        // 这里必须提前返回，焦点留在站点 Tab 上，绝不去请求一张不存在的卡。
         if (!hasInput || visibleResults.isEmpty()) return
         val target = index.coerceIn(0, visibleResults.lastIndex)
         scope.launch {
-            posterState.animateScrollToItem(if (target >= POSTER_SCROLL_ANCHOR) target else 0)
+            runCatching {
+                posterState.animateScrollToItem(if (target >= POSTER_SCROLL_ANCHOR) target else 0)
+            }
             withFrameNanos { }
             if (!posterRegistry.requestFocus(target)) {
                 withFrameNanos { }
@@ -431,42 +444,29 @@ private fun HeroSearchScreen(
     }
 
     /**
-     * 顶部放大镜 / 键盘搜索键：真实搜索。
+     * 统一的「请求搜索」入口：**只更新状态**，真正的请求由 `LaunchedEffect(searchSerial)` 发。
      *
-     * 对应 `SearchActivityV2.S0()`：
-     * ```java
-     * f2();                      // 收集所有可搜索站点
-     * ...清空上一轮结果...
-     * this.P.f(arrayList, strTrim, false, ...);   // 真正发起多站点搜索
-     * ```
-     * 这里换成本项目的 [SiteViewModel.searchContent]：
-     * 它内部会给**每个站点**各起一个任务，每完成一个就往 `search` LiveData 回一条 `Result`。
+     * 为什么不在点击回调里直接请求：
+     * 1. 点热词 / 历史时 `keyword` 还是**旧值**，直接调 `confirmSearch()` 会搜错词；
+     * 2. 结果区是靠 `hasInput` 从 false → true 才插入的，同一帧请求焦点会落到还没组合出来的节点上
+     *    （这就是「点热词闪退」的根因），交给 effect 就天然晚一帧，节点已经存在；
+     * 3. 快速连点多个胶囊时，序号一变 effect 就重启，前一轮不会再写结果。
      */
-    fun confirmSearch() {
-        val text = keyword.trim()
-        if (text.isEmpty()) {
+    fun requestSearch(text: String = keyword) {
+        val value = text.trim()
+        if (value.isEmpty()) {
             focusInput()
             return
         }
-        recordHistory(text)
-        // 1. 清空上一轮结果 + 进入加载态（原版 S0 里那一长串 clear）。
-        searchResults = emptyList()
-        searchedKeyword = text
-        selectedSite = 0
-        focusedSite = 0
-        searching = true
-        searchProgress = null
-        // 2. 收集可搜索站点：与 `f2()` 完全一致，只过滤 isSearchable()。
-        val sites = VodConfig.get().getSites().filter { it.isSearchable() }
-        Log.d(TAG_SEARCH, "开始搜索: keyword=$text 可搜索站点=${sites.size}")
-        if (sites.isEmpty()) {
-            searching = false
-            return
-        }
-        // 3. 发起搜索（quick = false，与原版一致）。
-        siteViewModel.searchContent(sites, text, false)
-        focusSite(0)
+        // 点胶囊时 keyword 还是旧值，必须先把输入框同步成新词。
+        if (field.text != value) setKeyword(value)
+        recordHistory(value)
+        searchKeyword = value
+        searchSerial++
     }
+
+    /** 顶部放大镜 / 键盘搜索键：走同一个入口（兼容原有调用点）。 */
+    fun confirmSearch() = requestSearch()
 
     /**
      * 小房子键 → 全局接口源侧边栏（复用 [SourceSidebar]，绝不自造 Dialog）。
@@ -578,6 +578,12 @@ private fun HeroSearchScreen(
         }
     }
 
+    // 结果集缩小（新一轮搜索返回的站点变少）时把「选中站点」收回有效范围：
+    // 焦点即选中之后 selectedSite 跟着焦点走，越界会让下方海报与 Tab 高亮对不上。
+    LaunchedEffect(siteLabels.size) {
+        if (selectedSite > siteLabels.lastIndex) selectedSite = siteLabels.lastIndex.coerceAtLeast(0)
+    }
+
     // ------------------------------------------------------------------
     // 真实数据 1：搜索结果（`SiteViewModel.search`）
     // ------------------------------------------------------------------
@@ -614,6 +620,37 @@ private fun HeroSearchScreen(
         }
         siteViewModel.searchProgress.observeForever(observer)
         onDispose { siteViewModel.searchProgress.removeObserver(observer) }
+    }
+
+    // ------------------------------------------------------------------
+    // 统一触发：搜索请求（点热词 / 点历史 / 放大镜 / 键盘搜索键）
+    // ------------------------------------------------------------------
+    // **只有这里**会真正调用 `searchContent`：
+    // - 时序安全：此时输入框与结果区已经重组完成，`focusSite(0)` 才有节点可落；
+    // - 串行化：快速连点胶囊时序号一变 effect 就重启，前一轮不会再往结果区写数据。
+    LaunchedEffect(searchSerial) {
+        if (searchSerial == 0) return@LaunchedEffect
+        val text = searchKeyword
+        if (text.isEmpty()) return@LaunchedEffect
+        // 1. 清空上一轮结果 + 进入加载态（原版 S0 里那一长串 clear）。
+        searchResults = emptyList()
+        searchedKeyword = text
+        selectedSite = 0
+        focusedSite = 0
+        searching = true
+        searchProgress = null
+        // 2. 收集可搜索站点：与 `f2()` 完全一致，只过滤 isSearchable()。
+        val sites = VodConfig.get().getSites().filter { it.isSearchable() }
+        Log.d(TAG_SEARCH, "开始搜索: keyword=$text 可搜索站点=${sites.size}")
+        if (sites.isEmpty()) {
+            searching = false
+            return@LaunchedEffect
+        }
+        // 3. 发起搜索（quick = false，与原版一致）。
+        siteViewModel.searchContent(sites, text, false)
+        // 4. 结果区刚插入（hasInput false→true），等一帧再落焦点。
+        withFrameNanos { }
+        focusSite(0)
     }
 
     // ------------------------------------------------------------------
@@ -739,8 +776,8 @@ private fun HeroSearchScreen(
                     wordRequesters = wordRequesters,
                     rightFirstRequester = rightFirstRequester,
                     onWordClick = { text ->
-                        setKeyword(text)
-                        recordHistory(text)
+                        // 点热词 / 历史 = 直接搜：先更新输入框，再由 searchSerial 统一触发请求。
+                        requestSearch(text)
                     },
                     // 胶囊 ↓ 到底时的兜底落点：**回到刚才高亮的站点 Tab**（《焦点总结》第 4 条），
                     // 而不是盲目落到第一个。
@@ -769,8 +806,11 @@ private fun HeroSearchScreen(
                     onSiteFocused = { index ->
                         focusedSite = index
                         resultsFocused = true
+                        // 【焦点即选中】不用按确定键：焦点移到哪个站点 Tab，下方海报立刻切到该站点。
+                        selectedSite = index
                     },
                     onSiteConfirm = { index ->
+                        // 兼容确定键：焦点即选中之后这里通常已经是同一个值，保留是为了不破坏原有按键习惯。
                         selectedSite = index
                         focusedSite = index
                     },

@@ -1233,10 +1233,14 @@ private fun HeroPlayDialog(
                             moduleFocused = contentFocused,
                             requester = flagRequesters[index],
                             // 焦点回到线路栏 = 暂时离开下半区：红框收起，只留当前项的焦点块。
+                            // 【焦点即选中】焦点移到哪条线路就切到哪条，不用再按确定键。
+                            // 线路切换是纯本地状态（不联网），所以立即生效、不做防抖。
                             onFocused = {
                                 focusedFlag = index
                                 contentFocused = false
+                                selectedFlag = index
                             },
+                            // 确定键保留（兼容原有按键习惯）：焦点即选中之后这里通常已是同一个值。
                             onConfirm = { selectedFlag = index },
                             // 线路栏 ↑ 上方只有不可聚焦的分区标题，直接消费。
                             onMoveUp = { },
@@ -1308,7 +1312,12 @@ private fun HeroPlayDialog(
                                 onFocused = {
                                     focusedControl = controlIndex
                                     contentFocused = true
+                                    // 【焦点即选中】焦点移到哪个分组就切到哪一组，下方集数网格立刻刷新。
+                                    // 纯本地状态（`ordered` 已全部在内存里），不联网、无需防抖；
+                                    // `selectPage` 内部会 `pendingCell = -1`，不会把焦点抢进网格。
+                                    selectPage(index)
                                 },
+                                // 确定键保留（兼容原有按键习惯）。
                                 onConfirm = { selectPage(index) },
                                 onMoveUp = { focusFlag(focusedFlag) },
                                 onMoveDown = { enterGrid() },
