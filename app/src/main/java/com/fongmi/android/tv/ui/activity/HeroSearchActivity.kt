@@ -125,6 +125,7 @@ import com.fongmi.android.tv.ui.hero.PLACEHOLDER_INDEX
 import com.fongmi.android.tv.ui.hero.SourceSidebar
 import com.fongmi.android.tv.ui.hero.SourceSidebarMode
 import com.fongmi.android.tv.ui.hero.requestFocus
+import com.fongmi.android.tv.ui.hero.openHeroDetailOrFolder
 import com.fongmi.android.tv.utils.SearchSuggest
 import com.github.catvod.net.OkHttp
 import com.google.gson.reflect.TypeToken
@@ -236,9 +237,9 @@ class HeroSearchActivity : ComponentActivity() {
                 HeroSearchScreen(
                     backdropUrl = backdropUrl,
                     siteViewModel = siteViewModel,
-                    // 卡片确认 → 带着真实 (Vod, Site) 进详情页：站点 key 必须一起传，
-                    // 否则详情页不知道要去哪个源里搜这部剧（同首页 `onOpenDetail`）。
-                    onOpenDetail = { vod, site -> HeroDetailActivity.start(this, vod, site) },
+                    // 卡片确认 → 带着真实 (Vod, Site) 打开：站点 key 必须一起传，否则不知道去哪个源。
+                    // folder 条目（网盘聚合壳）交给原版分类页，其余进 Hero 详情页。
+                    onOpenDetail = { vod, site -> openHeroDetailOrFolder(this, vod, site) },
                 )
             }
         }

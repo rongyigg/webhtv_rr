@@ -87,6 +87,7 @@ import androidx.lifecycle.Observer
 import androidx.lifecycle.ViewModelProvider
 import coil3.compose.AsyncImage
 import com.fongmi.android.tv.R
+import com.fongmi.android.tv.api.SiteApi
 import com.fongmi.android.tv.api.config.VodConfig
 import com.fongmi.android.tv.bean.Episode
 import com.fongmi.android.tv.bean.Flag
@@ -100,6 +101,7 @@ import com.fongmi.android.tv.ui.hero.HeroDialogShell
 import com.fongmi.android.tv.ui.hero.HeroFocusBrush
 import com.fongmi.android.tv.ui.hero.HeroImageLoader
 import com.fongmi.android.tv.ui.hero.HeroSectionTitle
+import com.fongmi.android.tv.ui.hero.openHeroDetailOrFolder
 import com.fongmi.android.tv.utils.Notify
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -114,8 +116,9 @@ import kotlinx.coroutines.withContext
  *   （首次进页就绕过旧缓存），观察 `SiteViewModel.result` 拿真实 [Vod]：
  *   简介 / 年份 / 地区 / 分类 / 导演 / 主演全部用真实字段，
  *   `Vod.flags[].episodes` 是 [HeroPlayDialog] 与起播的唯一数据源；
- * - `msearch:` / `atvp_detail:` 这类聚合搜索 / 内部插件临时 ID，以及空 ID，
- *   直接拒绝请求并显示对应空态（「该源需要特殊解析」/「缺少剧集 ID」），不再误报「无可用剧集」。
+ * - 特殊 ID 完全照抄原版 `VideoActivity.checkId()`：`push://` 换成 [SiteApi.PUSH] + 去前缀的 id；
+ *   **只有**空 ID 和 `msearch:` 直接显示空态（原版 `setEmpty(false)`）；
+ *   其余 id（含 `atvp_detail:` 这类插件内部 id）一律正常发详情请求，和原版一致，绝不自行拦截。
  * - 起播只调用原版公开入口 [VideoActivity.startDirect]（不碰 PlayerManager / PlaybackActivity，
  *   也不自己拼 Intent）；线路 / 集名 / 集地址直接来自真实 [Flag] / [Episode]。
  *
@@ -159,12 +162,21 @@ class HeroDetailActivity : ComponentActivity() {
         // 真实数据入口：首页海报卡 / 换源弹窗会把整条 Vod + Site 的关键字段塞进 Intent。
         // 只有剧名的旧入口（adb 直接拉起）继续整页回落 DEMO_DETAIL。
         val detail = readDetail()
-        // 换源弹窗要「排除当前源」：优先用这条数据自己的源，没有（旧入口）才回落到首页源。
-        val siteKey = intent.getStringExtra(EXTRA_SITE_KEY).orEmpty().ifBlank {
-            VodConfig.get().getHome().key
-        }
         // 真实详情主键：首页海报卡 / 换源弹窗已经把它塞进 Intent；旧入口（只有剧名）为空。
-        val vodId = intent.getStringExtra(EXTRA_VOD_ID).orEmpty()
+        val rawVodId = intent.getStringExtra(EXTRA_VOD_ID).orEmpty()
+        // 原版 `VideoActivity.checkId()`：
+        // `push://xxx` 是嗅探 / 推送专用地址，原版会把它换成 PUSH 站点 + 去掉前缀的 id，
+        // 再走普通详情请求；这里照抄，绝不自己另造规则。
+        val pushId = rawVodId.takeIf { it.startsWith(PUSH_PREFIX) }?.substring(PUSH_PREFIX.length)
+        val vodId = pushId ?: rawVodId
+        // 换源弹窗要「排除当前源」：优先用这条数据自己的源，没有（旧入口）才回落到首页源。
+        val siteKey = if (pushId != null) {
+            SiteApi.PUSH
+        } else {
+            intent.getStringExtra(EXTRA_SITE_KEY).orEmpty().ifBlank {
+                VodConfig.get().getHome().key
+            }
+        }
         val siteName = intent.getStringExtra(EXTRA_SITE_NAME).orEmpty()
         // 传下来的整条 Vod：如果它自己已经带 flags（WebHome 内联源 / 聚合结果），就不用再请求。
         val passedVod = readVod()
@@ -175,7 +187,11 @@ class HeroDetailActivity : ComponentActivity() {
             TAG_DETAIL,
             "收到的 Vod: id=${passedVod?.id}, site=$siteKey, flagsSize=${passedVod?.flags?.size ?: 0}, " +
                 "playableLines=${passedVod?.flags?.count { !it.episodes.isNullOrEmpty() } ?: 0}, " +
-                "playUrlLen=${passedVod?.playUrl?.length ?: 0}, vodId=$vodId, inlinePlayable=$inlinePlayable",
+                "playUrlLen=${passedVod?.playUrl?.length ?: 0}, vodId=$vodId, inlinePlayable=$inlinePlayable, " +
+                // 卡片自带的 Site 是否比配置里的更完整：若这里 api/jar 也空，
+                // 说明这条数据来自「片单/导航」类 spider 临时造的站点，配置里根本没有它。
+                "vodSiteKey=${passedVod?.site?.key}, vodSiteApi=${passedVod?.site?.api}, " +
+                "vodSiteJar=${passedVod?.site?.jar}, vodSiteExtLen=${passedVod?.site?.ext?.length ?: 0}",
         )
         // 换源弹窗需要 Activity 作用域的 SiteViewModel（构造函数里就建了两个单线程 executor，
         // 绝不能按弹窗 new）。详情页自己持有一份，和首页互不影响。
@@ -190,12 +206,12 @@ class HeroDetailActivity : ComponentActivity() {
                     "集数=${passedVod?.flags?.sumOf { it.episodes.orEmpty().size }}",
             )
 
-            // 2. 没有主键 / 主键是聚合搜索、内部插件生成的临时 ID：请求必然失败，直接拒绝。
+            // 2. 没有主键 / 聚合搜索临时 ID：原版 `checkId()` 同样直接进空态，不发请求。
             vodId.isBlank() -> Log.d(TAG_DETAIL, "缺少剧集 ID，跳过详情请求: siteKey=$siteKey")
 
             needsSpecialParse(vodId) -> Log.d(
                 TAG_DETAIL,
-                "临时 ID 需要特殊解析，跳过详情请求: siteKey=$siteKey id=$vodId",
+                "msearch 临时 ID，跳过详情请求: siteKey=$siteKey id=$vodId",
             )
 
             // 3. 正常详情：首次进页就带 refresh=true，绕过可能已经坏掉的旧缓存。
@@ -210,6 +226,14 @@ class HeroDetailActivity : ComponentActivity() {
                         "lookupKey=${site.key} name=${site.displayName} type=${site.type} " +
                         "api=${site.api} extLen=${site.ext.length} jar=${site.jar} id=$vodId",
                 )
+                // 这条是「spider 退化成 SpiderNull」的最强信号：key 在配置里查不到 → api 为空 →
+                // `BaseLoader.getSpider()` 直接返回 SpiderNull → 详情返回空串 → id 空 / 线路 0。
+                if (site.isEmpty) {
+                    Log.e(
+                        TAG_DETAIL,
+                        "站点配置里查不到 siteKey=$siteKey：详情请求必然返回空结果（api/ext/jar 全空）",
+                    )
+                }
                 siteViewModel.detailContent(siteKey, vodId, true)
             }
         }
@@ -272,6 +296,8 @@ class HeroDetailActivity : ComponentActivity() {
 
         private const val EXTRA_VOD = "extra_vod"
         private const val EXTRA_VOD_ID = "extra_vod_id"
+        /** 原版 `checkId()` 识别的嗅探 / 推送地址前缀，命中后换成 [SiteApi.PUSH] 站点。 */
+        private const val PUSH_PREFIX = "push://"
         private const val EXTRA_TITLE = "extra_title"
         private const val EXTRA_PIC = "extra_pic"
         private const val EXTRA_YEAR = "extra_year"
@@ -323,16 +349,14 @@ class HeroDetailActivity : ComponentActivity() {
 }
 
 /**
- * 聚合搜索 / 内部插件生成的临时 ID：详情接口必然查不到，直接拒绝发请求。
+ * 需要「特殊解析」的临时 ID：原版 `VideoActivity.checkId()` 只拦空 ID 和 `msearch:`。
  *
- * - `msearch:`：聚合搜索把多个源的结果拼成一条临时条目；
- * - `atvp_detail:`：Apple TV+ 内部插件条目。
- *
- * 这类 ID 只有在生成它的那套解析链路里才能播，硬塞给普通详情接口只会拿到空结果。
+ * `msearch:` 是聚合搜索把多个源的结果拼成的一条临时条目，普通详情接口必然查不到。
+ * **不要**在这里追加 `atvp_detail:` 之类的插件内部 id：原版对它们照常调用 `getDetail()`，
+ * 由生成该 id 的 spider 自己解析；提前拦截只会把「spider 解析失败」伪装成「不支持」。
  */
 private fun needsSpecialParse(vodId: String): Boolean =
-    vodId.startsWith("msearch:", ignoreCase = true) ||
-        vodId.startsWith("atvp_detail:", ignoreCase = true)
+    vodId.startsWith("msearch:", ignoreCase = true)
 
 /**
  * 传入的 [Vod] 是否已经自带可播放线路；顺手把「只有 urls、还没拆成 episodes」的线路补好。
@@ -681,9 +705,9 @@ private fun HeroDetailScreen(
                                                 "${site.displayName} · ${vod.name}",
                                             ),
                                         )
-                                        // 换源结果直接打开该源的真实详情，和首页点卡片的链路完全一致：
+                                        // 换源结果和首页点卡片完全一致：folder 条目走分类页，其余进详情页。
                                         // 选中条目已经带好 site，不再按剧名二次搜索。
-                                        HeroDetailActivity.start(context, vod, site)
+                                        openHeroDetailOrFolder(activity, vod, site)
                                     },
                                     onClosed = { showSourceDialog = false },
                                 )

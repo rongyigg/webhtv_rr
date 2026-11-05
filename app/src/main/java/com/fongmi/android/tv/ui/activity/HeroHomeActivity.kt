@@ -113,6 +113,7 @@ import com.fongmi.android.tv.ui.hero.SourceSidebar
 import com.fongmi.android.tv.ui.hero.SourceSidebarMode
 import com.fongmi.android.tv.ui.hero.TmdbMatchDialog
 import com.fongmi.android.tv.ui.hero.TmdbMatchItem
+import com.fongmi.android.tv.ui.hero.openHeroDetailOrFolder
 import com.fongmi.android.tv.utils.Notify
 import com.fongmi.android.tv.utils.PushParser
 import kotlinx.coroutines.delay
@@ -204,7 +205,8 @@ class HeroHomeActivity : ComponentActivity() {
                     // 首次加载与切源后重载都走这里，日志只在一个地方打。
                     onRefreshHome = { refreshHome("界面请求") },
                     // 卡片确定键 → 真实详情页，带上真实的 (Vod, Site)。
-                    onOpenDetail = { vod, site -> HeroDetailActivity.start(this, vod, site) },
+                    // folder 条目（网盘聚合壳，如 atvp_detail:）交给原版分类页，其余进 Hero 详情页。
+                    onOpenDetail = { vod, site -> openHeroDetailOrFolder(this, vod, site) },
                     // 顶栏「设置」：SettingActivity 只存在于 leanback flavor，见 openSettings 的说明。
                     onOpenSettings = { openSettings() },
                 )
