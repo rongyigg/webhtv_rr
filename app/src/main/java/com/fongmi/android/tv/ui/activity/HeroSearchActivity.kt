@@ -512,9 +512,11 @@ private fun HeroSearchScreen(
      *
      * 为什么不在点击回调里直接请求：
      * 1. 点热词 / 历史时 `keyword` 还是**旧值**，直接调 `confirmSearch()` 会搜错词；
-     * 2. 结果区是靠 `hasInput` 从 false → true 才插入的，同一帧请求焦点会落到还没组合出来的节点上
-     *    （这就是「点热词闪退」的根因），交给 effect 就天然晚一帧，节点已经存在；
+     * 2. 结果区是靠 `hasInput` 从 false → true 才插入的，同一帧请求焦点会落到还没组合出来的节点上；
      * 3. 快速连点多个胶囊时，序号一变 effect 就重启，前一轮不会再写结果。
+     *
+     * 真正的「点热词闪退」根因见下方协程里的 ①：胶囊销毁 → 焦点被系统恢复给输入框 →
+     * CoreTextField 用「旧布局 + 新文本」算光标位置而越界（`offset(3) is out of bounds [0, 0)`）。
      */
     fun requestSearch(text: String = keyword) {
         val value = text.trim()
@@ -529,7 +531,20 @@ private fun HeroSearchScreen(
         // 先让本次事件彻底走完、UI 稳定下来，再改状态并交给 `LaunchedEffect(searchSerial)` 发请求。
         scope.launch {
             delay(SEARCH_CLICK_SETTLE_MS)
-            // 点胶囊时 keyword 还是旧值，必须先把输入框同步成新词。
+            // ① 【真凶修复】先把焦点收回输入框，**然后**才改文本。
+            //    崩溃栈：IllegalArgumentException: offset(3) is out of bounds [0, 0)
+            //      at AndroidParagraph.getBoundingBox
+            //      at CoreTextFieldKt.bringSelectionEndIntoView
+            //      at invokeSuspend(...)
+            //    原因：胶囊被销毁后系统把焦点“恢复”到输入框，而 CoreTextField 在**聚焦回调**里
+            //    用「上一次布局结果」+「当前 value」算光标位置。若同一帧既换文本又聚焦，
+            //    就是「新 value 4 个字 + 旧 layout 0 个字」→ getBoundingBox(3) 直接越界。
+            //    这里在改文本之前先聚焦：此刻 value 与 layout 仍是旧的一致状态，聚焦协程
+            //    捕获到的是一对匹配数据，后面再换文本就不会再触发该路径。
+            focusInput()
+            // ② 等一帧布局，确保聚焦已真正生效，再动文本。
+            withFrameNanos { }
+            // ③ 点胶囊时 keyword 还是旧值，必须先把输入框同步成新词。
             if (field.text != value) setKeyword(value)
             recordHistory(value)
             searchKeyword = value
