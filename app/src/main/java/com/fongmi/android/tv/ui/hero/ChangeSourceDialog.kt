@@ -268,9 +268,9 @@ internal class ChangeSourceDialog private constructor(
         resultRecycler = findViewById(R.id.recycler)
         empty = findViewById(R.id.empty)
         progress = findViewById(R.id.progress)
-        // 复用现成字符串（「暂无可换源」），不新增 strings.xml 条目；
-        // 要改成「该站点暂无结果」只需在这里换一个资源 id。
-        empty.setText(R.string.play_change_empty)
+        // 空态文案按「这个源没搜到这部剧」来写，不能沿用候选源为空的
+        // 「暂无可换源」——那会把「搜不到」误导成「没有源可用」。
+        empty.text = EMPTY_RESULT_TEXT
         resultRecycler.layoutManager = LinearLayoutManager(context, RecyclerView.HORIZONTAL, false)
         resultRecycler.itemAnimator = null
         resultRecycler.descendantFocusability = ViewGroup.FOCUS_AFTER_DESCENDANTS
@@ -567,6 +567,9 @@ internal class ChangeSourceDialog private constructor(
     }
 
     companion object {
+
+        /** 结果区空态：当前源没搜到这部剧。 */
+        private const val EMPTY_RESULT_TEXT = "该源暂无此剧"
 
         /** f23：`c0(0.82f)`，窗口宽 = 屏幕宽 × 0.82。 */
         private const val WIDTH_FRACTION = 0.82f

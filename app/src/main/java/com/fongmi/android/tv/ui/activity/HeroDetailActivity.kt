@@ -109,9 +109,13 @@ import kotlinx.coroutines.withContext
  * HeroUI（Compose）详情页。
  *
  * 数据链路：
- * - 进页用 Intent 里的 `extra_vod_id` 调 `SiteViewModel.detailContent(siteKey, vodId)`，
- *   观察 `SiteViewModel.result` 拿真实 [Vod]：简介 / 年份 / 地区 / 分类 / 导演 / 主演全部用真实字段，
- *   `Vod.flags[].episodes` 是 [HeroPlayDialog] 与起播的唯一数据源。
+ * - 进页先看传入 [Vod] 是否自带 `flags`（WebHome 内联源 / 聚合结果）：有就直接渲染，跳过网络请求；
+ * - 没有才用 `extra_vod_id` 调 `SiteViewModel.detailContent(siteKey, vodId, refresh = true)`
+ *   （首次进页就绕过旧缓存），观察 `SiteViewModel.result` 拿真实 [Vod]：
+ *   简介 / 年份 / 地区 / 分类 / 导演 / 主演全部用真实字段，
+ *   `Vod.flags[].episodes` 是 [HeroPlayDialog] 与起播的唯一数据源；
+ * - `msearch:` / `atvp_detail:` 这类聚合搜索 / 内部插件临时 ID，以及空 ID，
+ *   直接拒绝请求并显示对应空态（「该源需要特殊解析」/「缺少剧集 ID」），不再误报「无可用剧集」。
  * - 起播只调用原版公开入口 [VideoActivity.startDirect]（不碰 PlayerManager / PlaybackActivity，
  *   也不自己拼 Intent）；线路 / 集名 / 集地址直接来自真实 [Flag] / [Episode]。
  *
@@ -152,7 +156,7 @@ class HeroDetailActivity : ComponentActivity() {
             systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
         }
         HeroImageLoader.install()
-        // 真实数据入口：首页海报卡 / 换源弹窗会把 (Vod, Site) 的字段逐个塞进 Intent。
+        // 真实数据入口：首页海报卡 / 换源弹窗会把整条 Vod + Site 的关键字段塞进 Intent。
         // 只有剧名的旧入口（adb 直接拉起）继续整页回落 DEMO_DETAIL。
         val detail = readDetail()
         // 换源弹窗要「排除当前源」：优先用这条数据自己的源，没有（旧入口）才回落到首页源。
@@ -162,23 +166,44 @@ class HeroDetailActivity : ComponentActivity() {
         // 真实详情主键：首页海报卡 / 换源弹窗已经把它塞进 Intent；旧入口（只有剧名）为空。
         val vodId = intent.getStringExtra(EXTRA_VOD_ID).orEmpty()
         val siteName = intent.getStringExtra(EXTRA_SITE_NAME).orEmpty()
+        // 传下来的整条 Vod：如果它自己已经带 flags（WebHome 内联源 / 聚合结果），就不用再请求。
+        val passedVod = readVod()
+        val inlinePlayable = passedVod != null && passedVod.hydrateInlineEpisodes()
         // 换源弹窗需要 Activity 作用域的 SiteViewModel（构造函数里就建了两个单线程 executor，
         // 绝不能按弹窗 new）。详情页自己持有一份，和首页互不影响。
         val siteViewModel = ViewModelProvider(this)[SiteViewModel::class.java]
         // 【真实详情】进页就请求：结果写 `SiteViewModel.result`，由 Compose 侧的观察者接收。
         // 详情接口返回的 `Vod.flags[].episodes` 是选集弹窗与起播的唯一数据源。
-        if (vodId.isNotBlank()) {
-            // 排查「详情拿不到线路」的第一手证据：key 能不能真的查到站点配置、ext 有没有丢。
-            // `SiteApi.detailContent` 内部会按 key 重新查 Site；查不到时拿到的是空 Site，
-            // 表现为 api/ext 全空、请求必然失败（csp_xxx 这类依赖 ext 的源尤其明显）。
-            val site = VodConfig.get().getSite(siteKey)
-            Log.d(
+        when {
+            // 1. 已经自带线路：直接渲染，绝不发请求（内联源本来就没有可查的详情接口）。
+            inlinePlayable -> Log.d(
                 TAG_DETAIL,
-                "请求详情: siteKey=$siteKey homeKey=${VodConfig.get().getHome().key} " +
-                    "lookupKey=${site.key} name=${site.displayName} type=${site.type} " +
-                    "api=${site.api} extLen=${site.ext.length} jar=${site.jar} id=$vodId",
+                "传入 Vod 已带线路，跳过详情请求: id=$vodId flags=${passedVod?.flags?.size} " +
+                    "集数=${passedVod?.flags?.sumOf { it.episodes.orEmpty().size }}",
             )
-            siteViewModel.detailContent(siteKey, vodId)
+
+            // 2. 没有主键 / 主键是聚合搜索、内部插件生成的临时 ID：请求必然失败，直接拒绝。
+            vodId.isBlank() -> Log.d(TAG_DETAIL, "缺少剧集 ID，跳过详情请求: siteKey=$siteKey")
+
+            needsSpecialParse(vodId) -> Log.d(
+                TAG_DETAIL,
+                "临时 ID 需要特殊解析，跳过详情请求: siteKey=$siteKey id=$vodId",
+            )
+
+            // 3. 正常详情：首次进页就带 refresh=true，绕过可能已经坏掉的旧缓存。
+            else -> {
+                // 排查「详情拿不到线路」的第一手证据：key 能不能真的查到站点配置、ext 有没有丢。
+                // `SiteApi.detailContent` 内部会按 key 重新查 Site；查不到时拿到的是空 Site，
+                // 表现为 api/ext 全空、请求必然失败（csp_xxx 这类依赖 ext 的源尤其明显）。
+                val site = VodConfig.get().getSite(siteKey)
+                Log.d(
+                    TAG_DETAIL,
+                    "请求详情: siteKey=$siteKey homeKey=${VodConfig.get().getHome().key} " +
+                        "lookupKey=${site.key} name=${site.displayName} type=${site.type} " +
+                        "api=${site.api} extLen=${site.ext.length} jar=${site.jar} id=$vodId",
+                )
+                siteViewModel.detailContent(siteKey, vodId, true)
+            }
         }
         setContent {
             MaterialTheme(colorScheme = darkColorScheme()) {
@@ -189,6 +214,7 @@ class HeroDetailActivity : ComponentActivity() {
                     siteKey = siteKey,
                     siteName = siteName,
                     siteViewModel = siteViewModel,
+                    inlineVod = if (inlinePlayable) passedVod else null,
                 )
             }
         }
@@ -226,8 +252,17 @@ class HeroDetailActivity : ComponentActivity() {
         )
     }
 
+    /**
+     * Intent 里的整条 [Vod]（Parcelable，`flags` / `episodes` 都在里面）。
+     *
+     * 旧入口（只有剧名）、进程重建后 Extra 丢失、或第三方调用方没带 Vod 时返回 null。
+     */
+    @Suppress("DEPRECATION")
+    private fun readVod(): Vod? = intent.getParcelableExtra(EXTRA_VOD)
+
     companion object {
 
+        private const val EXTRA_VOD = "extra_vod"
         private const val EXTRA_VOD_ID = "extra_vod_id"
         private const val EXTRA_TITLE = "extra_title"
         private const val EXTRA_PIC = "extra_pic"
@@ -242,15 +277,18 @@ class HeroDetailActivity : ComponentActivity() {
         /**
          * 统一入口：首页海报卡确定键、换源弹窗选中后调用。
          *
-         * [Vod] 不是 Parcelable，所以逐字段塞进 Intent；[Site] 只带 key + 名称
+         * [Vod] 本身是 Parcelable（`flags` / `episodes` 都随 Parcel 传递），所以整条一起带过去：
+         * 详情页先看它有没有自带可播线路（WebHome 内联源 / 聚合结果），有就直接渲染、不发详情请求。
+         * 标量字段仍然逐个塞进 Intent，供首帧直出和旧入口使用；[Site] 只带 key + 名称
          * （详情页只需要它做「排除当前源」和元数据展示，不需要完整站点配置）。
          *
-         * `extra_vod_id` 是详情接口的主键：进页后用它调 `SiteViewModel.detailContent`，
+         * `extra_vod_id` 是详情接口的主键：没有内联线路时用它调 `SiteViewModel.detailContent`，
          * 拿回真实的 `flags / episodes`；线路与选集不再有假数据。
          */
         fun start(context: Context, vod: Vod, site: Site) {
             context.startActivity(
                 Intent(context, HeroDetailActivity::class.java)
+                    .putExtra(EXTRA_VOD, vod)
                     .putExtra(EXTRA_VOD_ID, vod.id)
                     .putExtra(EXTRA_TITLE, vod.name)
                     .putExtra(EXTRA_PIC, vod.pic)
@@ -276,6 +314,31 @@ class HeroDetailActivity : ComponentActivity() {
     }
 }
 
+/**
+ * 聚合搜索 / 内部插件生成的临时 ID：详情接口必然查不到，直接拒绝发请求。
+ *
+ * - `msearch:`：聚合搜索把多个源的结果拼成一条临时条目；
+ * - `atvp_detail:`：Apple TV+ 内部插件条目。
+ *
+ * 这类 ID 只有在生成它的那套解析链路里才能播，硬塞给普通详情接口只会拿到空结果。
+ */
+private fun needsSpecialParse(vodId: String): Boolean =
+    vodId.startsWith("msearch:", ignoreCase = true) ||
+        vodId.startsWith("atvp_detail:", ignoreCase = true)
+
+/**
+ * 传入的 [Vod] 是否已经自带可播放线路；顺手把「只有 urls、还没拆成 episodes」的线路补好。
+ *
+ * `Flag.setEpisodes("")` 会造出一条空地址剧集，所以只在 `urls` 非空时才补，
+ * 绝不能直接对整个 Vod 调 `setFlags()`。
+ */
+private fun Vod.hydrateInlineEpisodes(): Boolean {
+    flags.forEach { flag ->
+        if (flag.episodes.isNullOrEmpty() && flag.urls.isNotBlank()) flag.setEpisodes(flag.urls)
+    }
+    return flags.any { !it.episodes.isNullOrEmpty() }
+}
+
 @Composable
 private fun HeroDetailScreen(
     activity: Activity,
@@ -284,6 +347,8 @@ private fun HeroDetailScreen(
     siteKey: String,
     siteName: String,
     siteViewModel: SiteViewModel,
+    /** 传入 Vod 自带的线路（非空表示已跳过网络请求，直接渲染）。 */
+    inlineVod: Vod?,
 ) {
     val context = LocalContext.current
     // ------------------------------------------------------------------
@@ -292,7 +357,10 @@ private fun HeroDetailScreen(
     // 本项目没有 `runtime-livedata`（没有 observeAsState），沿用首页 / 搜索页的
     // observeForever + onDispose 写法：销毁时一定摘除观察者，同时保留 LiveData
     // 「立刻重放上一次值」的特性 —— Activity 重建时详情不会闪回骨架。
-    var detailResult by remember { mutableStateOf<Result?>(null) }
+    var detailResult by remember {
+        // 传入 Vod 已经带线路：直接当成详情结果，首帧就是 Ready，不等任何网络。
+        mutableStateOf(inlineVod?.let { Result.vod(it) })
+    }
     DisposableEffect(siteViewModel, vodId) {
         val observer = Observer<Result?> { result ->
             if (result == null) return@Observer
@@ -342,19 +410,28 @@ private fun HeroDetailScreen(
     val vod = detailResult?.vod
     // 只保留真正有集数的线路：部分源的占位线路（如「请选择」）没有任何 episode。
     val flags = remember(detailResult) { vod?.flags.orEmpty().filter { !it.episodes.isNullOrEmpty() } }
-    // 【关键】「加载中」「请求失败」「确实没有剧集」是三种完全不同的状态：
-    // 请求失败时 `Result` 的 list 为空（`SiteViewModel` 失败时会 post `Result.empty()`），
-    // 以前这种情况会被误判成「该资源暂无可用剧集」，把失败说成没有资源。
     // 先落到局部 val：`detailResult` 是委托属性，Kotlin 不对它做智能转换。
     val result = detailResult
+    val special = needsSpecialParse(vodId)
+    // 【关键】「加载中」「请求失败」「确实没有剧集」「需要特殊解析」是四种完全不同的状态：
+    // 请求失败时 `Result` 的 list 为空（`SiteViewModel` 失败时会 post `Result.empty()`），
+    // 以前这种情况会被误判成「该资源暂无可用剧集」，把失败说成没有资源。
+    // `flags` 优先判定：传入 Vod 自带线路、以及 csp_PianDan 这类只有 4 集正常数据的源，
+    // 只要 episodes 非空就一定是 Ready，不能被其它条件抢走。
     val detailState = when {
+        flags.isNotEmpty() -> DetailState.Ready
         vodId.isBlank() -> DetailState.Empty
+        special -> DetailState.Empty
         result == null -> DetailState.Loading
         result.list.isEmpty() -> DetailState.Error
-        flags.isEmpty() -> DetailState.Empty
-        else -> DetailState.Ready
+        else -> DetailState.Empty
     }
     val detailError = result?.msg.orEmpty()
+    val emptyHint = when {
+        vodId.isBlank() -> "缺少剧集 ID，无法加载剧集"
+        special -> "该源需要特殊解析，暂不支持直接播放"
+        else -> "该资源暂无可用剧集"
+    }
     // Intent 字段用于首帧直出；详情到达后整体换成真实 Vod（年份 / 地区 / 分类 / 简介 / 导演 / 主演）。
     val page = remember(detail, detailResult, siteName) { detail.mergeDetail(vod, siteName) }
     // 两组可聚焦区域：按钮组 + 演职员行。跨区移动全部显式 requestFocus，不依赖 2D 焦点搜索。
@@ -476,7 +553,8 @@ private fun HeroDetailScreen(
                 )
             }
 
-            // 3.2 详情加载中 / 加载失败：两种状态分开显示，绝不把「请求失败」说成「没有剧集」。
+            // 3.2 加载中 / 加载失败 / 空态分开显示：绝不把「请求失败」说成「没有剧集」，
+            // 也不把「临时 ID 需要特殊解析」说成「这个源没有这部剧」。
             if (detailState == DetailState.Loading) {
                 Spacer(modifier = Modifier.height(DETAIL_CREDIT_TOP_GAP))
                 Row(
@@ -508,6 +586,16 @@ private fun HeroDetailScreen(
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                 )
+            } else if (detailState == DetailState.Empty) {
+                Spacer(modifier = Modifier.height(DETAIL_CREDIT_TOP_GAP))
+                Text(
+                    text = emptyHint,
+                    modifier = Modifier.widthIn(max = DETAIL_DESC_MAX_WIDTH),
+                    color = DETAIL_META_COLOR,
+                    fontSize = DETAIL_CREDIT_SP.sp,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
             }
 
             // 4. 按钮组：紧跟在简介下方，默认焦点「播放」。
@@ -526,9 +614,7 @@ private fun HeroDetailScreen(
                                 detailResult = null
                                 siteViewModel.detailContent(siteKey, vodId, true)
                             }
-                            DetailState.Empty -> Notify.show(
-                                if (vodId.isBlank()) "缺少剧集 ID，无法加载剧集" else "该资源暂无可用剧集",
-                            )
+                            DetailState.Empty -> Notify.show(emptyHint)
                             DetailState.Ready -> showPlayDialog = true
                         }
                         DETAIL_ACTION_CHANGE_SOURCE -> {
@@ -557,6 +643,9 @@ private fun HeroDetailScreen(
                                                 "${site.displayName} · ${vod.name}",
                                             ),
                                         )
+                                        // 换源结果直接打开该源的真实详情，和首页点卡片的链路完全一致：
+                                        // 选中条目已经带好 site，不再按剧名二次搜索。
+                                        HeroDetailActivity.start(context, vod, site)
                                     },
                                     onClosed = { showSourceDialog = false },
                                 )
@@ -1855,7 +1944,7 @@ private data class HeroCast(val id: String, val name: String, val avatarUrl: Str
  *
  * - [Loading]：请求还在路上（或正在重试）；
  * - [Ready]：拿到了至少一条带剧集的线路，可以弹选集；
- * - [Empty]：接口成功返回，但确实没有可播剧集（或没有 vodId）；
+ * - [Empty]：接口成功返回但确实没有可播剧集，或 ID 为空 / 需要特殊解析（临时 ID）；
  * - [Error]：请求失败 / 接口没返回数据（`Result.list` 为空），必须和 [Empty] 区分开。
  */
 private enum class DetailState { Loading, Ready, Empty, Error }
