@@ -5,6 +5,7 @@ import android.content.Intent
 import android.graphics.Color as AndroidColor
 import android.graphics.drawable.ColorDrawable
 import android.os.Bundle
+import android.util.Log
 import android.view.KeyEvent
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -47,6 +48,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -88,8 +90,17 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import androidx.lifecycle.Observer
+import androidx.lifecycle.ViewModelProvider
+import com.fongmi.android.tv.App
 import com.fongmi.android.tv.R
 import com.fongmi.android.tv.api.config.VodConfig
+import com.fongmi.android.tv.bean.Result
+import com.fongmi.android.tv.bean.Site
+import com.fongmi.android.tv.bean.Vod
+import com.fongmi.android.tv.bean.Word
+import com.fongmi.android.tv.model.SearchProgress
+import com.fongmi.android.tv.model.SiteViewModel
 import com.fongmi.android.tv.setting.Setting
 import com.fongmi.android.tv.setting.SiteBlockSetting
 import com.fongmi.android.tv.ui.hero.ACCENT_RED
@@ -114,7 +125,13 @@ import com.fongmi.android.tv.ui.hero.PLACEHOLDER_INDEX
 import com.fongmi.android.tv.ui.hero.SourceSidebar
 import com.fongmi.android.tv.ui.hero.SourceSidebarMode
 import com.fongmi.android.tv.ui.hero.requestFocus
+import com.fongmi.android.tv.utils.SearchSuggest
+import com.github.catvod.net.OkHttp
+import com.google.gson.reflect.TypeToken
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * HeroUI（Compose）搜索页。
@@ -171,6 +188,16 @@ import kotlinx.coroutines.launch
 class HeroSearchActivity : ComponentActivity() {
 
     /**
+     * 与首页 / 历史页同一个 ViewModel 类（各自持有自己的实例：`ViewModelProvider(this)` 是
+     * Activity 作用域，页面销毁即回收，不会把搜索结果串到别的页面）。
+     *
+     * 搜索写的是 `search` 这条 LiveData，首页写的是 `result`，两条互不干扰。
+     */
+    private val siteViewModel: SiteViewModel by lazy {
+        ViewModelProvider(this)[SiteViewModel::class.java]
+    }
+
+    /**
      * 【关键】与全站其它页面共用同一套「设计画布」。
      *
      * `ui/base/BaseActivity` 用 AutoSize 把屏幕固定成 960×540dp，再按「界面缩放」设置
@@ -203,8 +230,10 @@ class HeroSearchActivity : ComponentActivity() {
             MaterialTheme(colorScheme = darkColorScheme()) {
                 HeroSearchScreen(
                     backdropUrl = backdropUrl,
-                    // 卡片点击只走这一个真实入口：不碰播放器，也不碰 catvod 数据层。
-                    onOpenDetail = { title -> HeroDetailActivity.start(this, title) },
+                    siteViewModel = siteViewModel,
+                    // 卡片确认 → 带着真实 (Vod, Site) 进详情页：站点 key 必须一起传，
+                    // 否则详情页不知道要去哪个源里搜这部剧（同首页 `onOpenDetail`）。
+                    onOpenDetail = { vod, site -> HeroDetailActivity.start(this, vod, site) },
                 )
             }
         }
@@ -226,33 +255,73 @@ class HeroSearchActivity : ComponentActivity() {
 @Composable
 private fun HeroSearchScreen(
     backdropUrl: String?,
-    onOpenDetail: (String) -> Unit,
+    siteViewModel: SiteViewModel,
+    onOpenDetail: (Vod, Site) -> Unit,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
     // 输入内容用 TextFieldValue 维护：readOnly 只吃自己的虚拟键盘，光标由键盘 < / > 驱动。
     var field by remember { mutableStateOf(TextFieldValue("")) }
-    var history by remember { mutableStateOf(HERO_HISTORY.toList()) }
+    // 历史：启动时从 Prefers("keyword") 读 JSON（同 `xp.java` 的 a=7 分支），改动立刻写回。
+    var history by remember { mutableStateOf(readHistory()) }
     var selectedSite by remember { mutableIntStateOf(0) }
     var focusedSite by remember { mutableIntStateOf(0) }
     // 结果区是否持有焦点：输入被清空导致结果区整体消失时，用它把焦点安全送回输入框。
     var resultsFocused by remember { mutableStateOf(false) }
 
+    // ---- 真实搜索状态 ----
+    // 累积结果：`searchContent(List<Site>, ...)` 是**每个站点各回一条 Result**，
+    // 不是一次性返回全集，所以这里必须累加，不能整体覆盖。
+    var searchResults by remember { mutableStateOf<List<Vod>>(emptyList()) }
+    // 本次搜索真正生效的关键词：用户改了输入但还没按搜索时，下面的旧结果不能冒充新结果。
+    var searchedKeyword by remember { mutableStateOf("") }
+    var searching by remember { mutableStateOf(false) }
+    var searchProgress by remember { mutableStateOf<SearchProgress?>(null) }
+
+    // ---- 真实热搜 / 建议 ----
+    // 热搜：先用本地缓存（Prefers("hot")）秒出，再异步刷一次网络（同 `X1()` 的两步）。
+    var hotWords by remember { mutableStateOf(parseWords(Setting.getHot())) }
+    var hotLoaded by remember { mutableStateOf(false) }
+    // 建议：输入变化时向爱奇艺要，空结果**不清空**上一次的词（原版容错一致）。
+    var suggestWords by remember { mutableStateOf<List<String>>(emptyList()) }
+
     val keyword = field.text
     val hasInput = keyword.trim().isNotEmpty()
     // 三态：无输入 → 「历史 + 热搜」；有输入 → 「历史 + 建议」。
     val wordTitle = if (hasInput) TITLE_SUGGEST else TITLE_HOT
-    val words = remember(keyword) {
-        if (hasInput) suggestionsFor(keyword) else HERO_HOT
+    val words: List<String> = if (hasInput) suggestWords else hotWords
+
+    // 结果区只有「当前输入 == 本次搜索用的词」时才显示，避免改了关键词还挂着上一次的结果。
+    val resultsMatchInput = keyword.trim() == searchedKeyword
+
+    // 站点 Tab 完全由真实结果推导：`全部` + 返回过内容的站点（顺序 = 结果到达顺序），
+    // 与 `SearchActivityV2.c2()` 里 `this.R.a(site)` 的时机一致。
+    // 关键词改过但还没重新搜索时（resultsMatchInput=false）结果区是空的，Tab 也一并收回到「全部」。
+    val resultSites: List<Site> = remember(searchResults, resultsMatchInput) {
+        if (!resultsMatchInput) emptyList() else searchResults.mapNotNull { it.site }.distinctBy { it.key }
+    }
+    val siteLabels: List<String> = remember(resultSites) {
+        listOf(TITLE_ALL) + resultSites.map { it.displayName }
+    }
+    val visibleResults: List<Vod> = remember(searchResults, resultSites, selectedSite, resultsMatchInput) {
+        if (!resultsMatchInput) {
+            emptyList()
+        } else {
+            val site = resultSites.getOrNull(selectedSite - 1)
+            if (site == null) searchResults else searchResults.filter { it.site?.key == site.key }
+        }
     }
 
     val inputRequester = remember { FocusRequester() }
     val searchRequester = remember { FocusRequester() }
     val keyRequesters = remember { List(HERO_KEYS.size) { FocusRequester() } }
-    val historyRequesters = remember(history) { List(history.size) { FocusRequester() } }
-    val wordRequesters = remember(words) { List(words.size) { FocusRequester() } }
-    val siteRequesters = remember { List(HERO_SITE_TABS.size) { FocusRequester() } }
+    // 历史 / 热搜建议 / 站点 Tab 三组列表都是**运行时变长**的（热搜拉回来、结果逐站点到达），
+    // 所以统一用一份定长 FocusRequester 池：列表内容变化时 requester 实例不变，
+    // 不会出现「热搜加载完成 → 焦点从胶囊上掉下来」。
+    val historyRequesters = remember { List(FOCUS_REQUESTER_POOL) { FocusRequester() } }
+    val wordRequesters = remember { List(FOCUS_REQUESTER_POOL) { FocusRequester() } }
+    val siteRequesters = remember { List(FOCUS_REQUESTER_POOL) { FocusRequester() } }
     // 「右侧第一排第一个胶囊」的固定落点：键盘最右列 → 这里；站点 Tab ↑ → 也回这里。
     val rightFirstRequester = remember { FocusRequester() }
     // 海报卡是 Android View（HeroPosterCard），Compose 的 FocusRequester 摸不到它，
@@ -287,7 +356,7 @@ private fun HeroSearchScreen(
             focusInput()
             return
         }
-        val target = index.coerceIn(0, HERO_SITE_TABS.lastIndex)
+        val target = index.coerceIn(0, siteLabels.lastIndex)
         focusedSite = target
         scope.launch {
             siteState.animateScrollToItem(target)
@@ -297,8 +366,8 @@ private fun HeroSearchScreen(
     }
 
     fun focusPoster(index: Int) {
-        if (!hasInput) return
-        val target = index.coerceIn(0, HERO_RESULTS.lastIndex)
+        if (!hasInput || visibleResults.isEmpty()) return
+        val target = index.coerceIn(0, visibleResults.lastIndex)
         scope.launch {
             posterState.animateScrollToItem(if (target >= POSTER_SCROLL_ANCHOR) target else 0)
             withFrameNanos { }
@@ -313,11 +382,24 @@ private fun HeroSearchScreen(
         field = TextFieldValue(text = text, selection = TextRange(text.length))
     }
 
-    /** 历史最多 9 条，重复词提到最前（结构同 `xp.java` 的 a=7 分支：纯字符串列表）。 */
+    /**
+     * 记一条历史：**去重 → 提到最前 → 最多 9 条 → 立刻持久化**。
+     *
+     * 与 `xp.java` 的 `a(String)` 逐行对应：
+     * ```java
+     * list.remove(str); list.add(0, str);
+     * if (list.size() > 9) list.remove(9);
+     * vx0.S(App.l.h.toJson(list), "keyword");   // ← 本项目的等价物：Setting.putKeyword(...)
+     * ```
+     * 只改内存的话，退出页面就全丢了 —— 这是这次接入的重点之一。
+     */
     fun recordHistory(text: String) {
         val value = text.trim()
         if (value.isEmpty()) return
-        history = (listOf(value) + history.filterNot { it == value }).take(HISTORY_LIMIT)
+        val next = (listOf(value) + history.filterNot { it == value }).take(HISTORY_LIMIT)
+        if (next == history) return
+        history = next
+        Setting.putKeyword(App.gson().toJson(next))
     }
 
     /** 与 `CustomKeyboard.onTextClick` L31-36 一致：总长不超过 19，插入到光标处。 */
@@ -348,7 +430,18 @@ private fun HeroSearchScreen(
         field = field.copy(selection = TextRange(caret))
     }
 
-    /** 顶部放大镜：记一条历史，焦点交给结果区（结果区随输入实时出现，没有额外搜索态）。 */
+    /**
+     * 顶部放大镜 / 键盘搜索键：真实搜索。
+     *
+     * 对应 `SearchActivityV2.S0()`：
+     * ```java
+     * f2();                      // 收集所有可搜索站点
+     * ...清空上一轮结果...
+     * this.P.f(arrayList, strTrim, false, ...);   // 真正发起多站点搜索
+     * ```
+     * 这里换成本项目的 [SiteViewModel.searchContent]：
+     * 它内部会给**每个站点**各起一个任务，每完成一个就往 `search` LiveData 回一条 `Result`。
+     */
     fun confirmSearch() {
         val text = keyword.trim()
         if (text.isEmpty()) {
@@ -356,6 +449,22 @@ private fun HeroSearchScreen(
             return
         }
         recordHistory(text)
+        // 1. 清空上一轮结果 + 进入加载态（原版 S0 里那一长串 clear）。
+        searchResults = emptyList()
+        searchedKeyword = text
+        selectedSite = 0
+        focusedSite = 0
+        searching = true
+        searchProgress = null
+        // 2. 收集可搜索站点：与 `f2()` 完全一致，只过滤 isSearchable()。
+        val sites = VodConfig.get().getSites().filter { it.isSearchable() }
+        Log.d(TAG_SEARCH, "开始搜索: keyword=$text 可搜索站点=${sites.size}")
+        if (sites.isEmpty()) {
+            searching = false
+            return
+        }
+        // 3. 发起搜索（quick = false，与原版一致）。
+        siteViewModel.searchContent(sites, text, false)
         focusSite(0)
     }
 
@@ -440,9 +549,9 @@ private fun HeroSearchScreen(
                         true
                     }
                     // 最后一行（3–9）继续下按：有结果区就按「所在列」落到站点 Tab
-                    // （Tab 不足 7 个时收敛到最后一项），没有结果区就放行给原生 2D 搜索。
+                    // （Tab 数量不足时由 focusSite 内部收敛到最后一项），没有结果区就放行给原生 2D 搜索。
                     hasInput -> {
-                        focusSite(column.coerceAtMost(HERO_SITE_TABS.lastIndex))
+                        focusSite(column)
                         true
                     }
 
@@ -467,6 +576,86 @@ private fun HeroSearchScreen(
             withFrameNanos { }
             focusInput()
         }
+    }
+
+    // ------------------------------------------------------------------
+    // 真实数据 1：搜索结果（`SiteViewModel.search`）
+    // ------------------------------------------------------------------
+    // `SiteViewModel.searchContent(List<Site>, ...)` 的语义是「每个站点回一条 Result」，
+    // 所以这里必须**累加**：覆盖写只会剩下最后完成的那个源，正是「只出一个站点的结果」的经典成因。
+    //
+    // 用 DisposableEffect 而不是 observeAsState：本项目没引 `runtime-livedata`；
+    // 用 DisposableEffect 又能保证页面销毁时一定 removeObserver（LaunchedEffect + awaitDispose 等价）。
+    DisposableEffect(siteViewModel) {
+        // `SiteViewModel.init()` 会把 search 置 null，LiveData 连 null 一起派发，必须按可空接收。
+        val observer = Observer<Result?> { result ->
+            if (result == null) return@Observer
+            val incoming = result.list
+            if (incoming.isEmpty()) return@Observer
+            // 同一个站点重复回调（分页 / 重试）时按「站点 key + vod id」去重，绝不重复堆同一张卡。
+            val merged = (searchResults + incoming).distinctBy { vod -> vod.site?.key to vod.id }
+            searchResults = merged
+            Log.d(TAG_SEARCH, "收到结果: site=${result.list.firstOrNull()?.site?.key} 本批=${incoming.size} 累计=${merged.size}")
+        }
+        siteViewModel.search.observeForever(observer)
+        onDispose { siteViewModel.search.removeObserver(observer) }
+    }
+
+    // 进度：`current/total` 用来做「搜索中 x/y」，`finished` 一到就退出加载态。
+    DisposableEffect(siteViewModel) {
+        val observer = Observer<SearchProgress?> { progress ->
+            searchProgress = progress
+            // SearchProgress 是 Java record，Kotlin 里访问器是**方法**（finished()/current()/total()），
+            // 不是 getXxx 属性，写成 `progress.finished` 编译不过。
+            if (progress != null && progress.finished()) {
+                searching = false
+                Log.d(TAG_SEARCH, "搜索完成: ${progress.current()}/${progress.total()} 累计=${searchResults.size}")
+            }
+        }
+        siteViewModel.searchProgress.observeForever(observer)
+        onDispose { siteViewModel.searchProgress.removeObserver(observer) }
+    }
+
+    // ------------------------------------------------------------------
+    // 真实数据 2：热搜（`SearchActivityV2.X1` 的空输入分支）
+    // ------------------------------------------------------------------
+    LaunchedEffect(keyword) {
+        if (keyword.trim().isNotEmpty()) return@LaunchedEffect
+        // 已经拿到过网络结果就不再重复请求（同一页面内来回清空输入不刷接口）。
+        if (hotLoaded && hotWords.isNotEmpty()) return@LaunchedEffect
+        val body = withContext(Dispatchers.IO) {
+            OkHttp.string(HOT_URL, mapOf("Referer" to HOT_REFERER))
+        }
+        val fresh = parseWords(body)
+        if (fresh.isEmpty()) {
+            // 空结果 / 请求失败：保留缓存，绝不清空已有词。
+            Log.w(TAG_SEARCH, "热搜为空，保留缓存 ${hotWords.size} 条")
+            return@LaunchedEffect
+        }
+        hotWords = fresh
+        hotLoaded = true
+        // 与 `vx0.S(..., "hot")` 一致：把原始 JSON 存下来，下次进页面秒出。
+        Setting.putHot(body)
+        Log.d(TAG_SEARCH, "热搜更新: ${fresh.size} 条")
+    }
+
+    // ------------------------------------------------------------------
+    // 真实数据 3：建议词（`X1` 的非空分支，爱奇艺联想接口）
+    // ------------------------------------------------------------------
+    LaunchedEffect(keyword) {
+        val text = keyword.trim()
+        if (text.isEmpty()) return@LaunchedEffect
+        // 电视键盘是一格一格敲的，防抖 250ms，避免每按一个字母都打一次接口。
+        delay(SUGGEST_DEBOUNCE_MS)
+        val body = withContext(Dispatchers.IO) { OkHttp.string(SearchSuggest.iqiyiUrl(text)) }
+        val fresh = parseWords(body)
+        if (fresh.isEmpty()) {
+            // 原版容错：拿不到就不动列表，不要让「建议」整块消失。
+            Log.w(TAG_SEARCH, "建议为空: $text")
+            return@LaunchedEffect
+        }
+        suggestWords = fresh
+        Log.d(TAG_SEARCH, "建议更新: $text -> ${fresh.size} 条")
     }
 
     // ------------------------------------------------------------------
@@ -569,8 +758,12 @@ private fun HeroSearchScreen(
                         .padding(top = RESULT_SECTION_TOP_GAP),
                     siteState = siteState,
                     posterState = posterState,
+                    siteLabels = siteLabels,
+                    items = visibleResults,
                     selectedSite = selectedSite,
                     resultModuleFocused = resultsFocused,
+                    searching = searching,
+                    progress = searchProgress,
                     siteRequesters = siteRequesters,
                     posterRegistry = posterRegistry,
                     onSiteFocused = { index ->
@@ -586,14 +779,16 @@ private fun HeroSearchScreen(
                     onSiteLeft = { index -> focusSite(index - 1) },
                     onSiteRight = { index -> focusSite(index + 1) },
                     onPosterFocused = { resultsFocused = true },
-                    onPosterOpen = { title ->
+                    onPosterOpen = { vod ->
+                        // 与 `ks2.java`（原版搜索卡片）一致：点开前把当前关键词记进历史，
+                        // 再把真实 (Vod, Site) 交给详情页。
                         recordHistory(keyword)
-                        onOpenDetail(title)
+                        onOpenDetail(vod, vod.site ?: VodConfig.get().getHome())
                     },
                     onPosterUp = { focusSite(focusedSite) },
                     onPosterLeft = { index -> if (index > 0) focusPoster(index - 1) },
                     onPosterRight = { index ->
-                        if (index < HERO_RESULTS.lastIndex) focusPoster(index + 1)
+                        if (index < visibleResults.lastIndex) focusPoster(index + 1)
                     },
                 )
             }
@@ -917,9 +1112,13 @@ private fun ResultSection(
     modifier: Modifier = Modifier,
     siteState: LazyListState,
     posterState: LazyListState,
+    siteLabels: List<String>,
+    items: List<Vod>,
     selectedSite: Int,
     // 结果区（Tab 行 / 海报）当前是否持有焦点 —— 站点 Tab 三态里的第 2 态要用。
     resultModuleFocused: Boolean,
+    searching: Boolean,
+    progress: SearchProgress?,
     siteRequesters: List<FocusRequester>,
     posterRegistry: HeroPosterViewRegistry,
     onSiteFocused: (Int) -> Unit,
@@ -929,7 +1128,7 @@ private fun ResultSection(
     onSiteLeft: (Int) -> Unit,
     onSiteRight: (Int) -> Unit,
     onPosterFocused: () -> Unit,
-    onPosterOpen: (String) -> Unit,
+    onPosterOpen: (Vod) -> Unit,
     onPosterUp: (Int) -> Unit,
     onPosterLeft: (Int) -> Unit,
     onPosterRight: (Int) -> Unit,
@@ -948,7 +1147,8 @@ private fun ResultSection(
             horizontalArrangement = Arrangement.spacedBy(SITE_ITEM_SPACING),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            itemsIndexed(items = HERO_SITE_TABS) { index, label ->
+            // 池子只有 FOCUS_REQUESTER_POOL 个 requester，站点数异常多时截断，绝不越界。
+            itemsIndexed(items = siteLabels.take(siteRequesters.size)) { index, label ->
                 HeroSiteTab(
                     label = label,
                     selected = index == selectedSite,
@@ -984,7 +1184,7 @@ private fun ResultSection(
                 ),
                 horizontalArrangement = Arrangement.spacedBy(POSTER_ITEM_SPACING),
             ) {
-                itemsIndexed(items = HERO_RESULTS) { index, item ->
+                itemsIndexed(items = items) { index, vod ->
                     // 【红线】HeroPosterCard 自己 onMeasure 死锁 120×214dp，
                     // 这里绝不加 Modifier.size()/width()/height()，直接放进去。
                     AndroidView(
@@ -992,16 +1192,19 @@ private fun ResultSection(
                             HeroPosterCard(context).also { card -> posterRegistry.bind(index, card) }
                         },
                         update = { card ->
+                            // 字段映射逐条对应 `ks2.java`（原版搜索卡片）：
+                            //   name → 剧名；getSiteName() → 左上站点标签；getRemarks() → 左下集数标签；
+                            //   pic → 海报地址。
                             // 只在值变化时写，避免每次重组都触发 HeroPosterCard 内部的图片重载。
-                            if (card.title != item.title) card.title = item.title
-                            if (card.topStartTag != item.topTag) card.topStartTag = item.topTag
-                            if (card.bottomStartTag != item.bottomTag) card.bottomStartTag = item.bottomTag
-                            if (card.imageUrl != item.imageUrl) card.imageUrl = item.imageUrl
+                            if (card.title != vod.name) card.title = vod.name
+                            if (card.topStartTag != vod.siteName) card.topStartTag = vod.siteName
+                            if (card.bottomStartTag != vod.remarks) card.bottomStartTag = vod.remarks
+                            if (card.imageUrl != vod.pic) card.imageUrl = vod.pic
 
                             card.setOnFocusChangeListener { _, hasFocus ->
                                 if (hasFocus) onPosterFocused()
                             }
-                            card.setOnClickListener { onPosterOpen(item.title) }
+                            card.setOnClickListener { onPosterOpen(vod) }
                             card.setOnKeyListener { _, keyCode, event ->
                                 if (event.action != KeyEvent.ACTION_DOWN) return@setOnKeyListener false
                                 when (keyCode) {
@@ -1027,6 +1230,26 @@ private fun ResultSection(
                         onRelease = { card -> posterRegistry.unbind(index, card) },
                     )
                 }
+            }
+
+            // 加载 / 空态提示：**画在 215dp 容器内部**，不改任何尺寸，也不参与焦点。
+            if (items.isEmpty()) {
+                val hint = when {
+                    searching -> if (progress != null && progress.total() > 0) {
+                        "搜索中 ${progress.current()}/${progress.total()}"
+                    } else {
+                        "搜索中…"
+                    }
+
+                    progress != null -> "没有找到相关内容"
+                    else -> "输入关键词后按搜索键"
+                }
+                Text(
+                    text = hint,
+                    color = Color.White.copy(alpha = 0.6f),
+                    fontSize = 16.sp,
+                    modifier = Modifier.align(Alignment.Center),
+                )
             }
         }
     }
@@ -1140,53 +1363,49 @@ private fun HeroSiteTab(
 }
 
 // ---------------------------------------------------------------------------
-// 假数据（数据层未接，先验证结构与焦点；结构同 xp.java 的 a=7 分支：纯字符串列表）
+// 真实数据：本地历史 + 热搜/建议解析
 // ---------------------------------------------------------------------------
 
-private data class HeroSearchResult(
-    val title: String,
-    val topTag: String,
-    val bottomTag: String,
-    val imageUrl: String,
-)
+/**
+ * 读历史：`Prefers("keyword")` 里存的是 JSON 字符串数组。
+ *
+ * 与 `xp.java` 构造函数的 a=7 分支逐字对应：
+ * ```java
+ * List list = vx0.D("keyword").isEmpty()
+ *     ? new ArrayList()
+ *     : App.l.h.fromJson(vx0.D("keyword"), TypeToken.getParameterized(List.class, String.class).getType());
+ * ```
+ * 本项目的 `vx0.D/S` 就是 [Setting.getKeyword] / [Setting.putKeyword]（同一套 Prefers 键名）。
+ *
+ * 任何脏数据（旧版本写坏的、手工改过的）都退化成空列表，绝不让搜索页因为历史记录崩掉。
+ */
+private fun readHistory(): List<String> {
+    val raw = Setting.getKeyword()
+    if (raw.isBlank()) return emptyList()
+    return runCatching {
+        App.gson().fromJson<List<String>>(raw, object : TypeToken<List<String>>() {}.type)
+    }.getOrNull()
+        ?.filter { it.isNotBlank() }
+        ?.distinct()
+        ?.take(HISTORY_LIMIT)
+        ?: emptyList()
+}
 
-private val HERO_HISTORY: List<String> = listOf(
-    "凡人修仙传",
-    "http://127.0.0.1:8877/proxy?do=appSignature",
-)
-
-private val HERO_HOT: List<String> = listOf(
-    "开心锤锤",
-    "战狼2",
-    "小猪佩奇全集",
-    "抓特务",
-    "新猫和老鼠 第四季",
-    "汪汪队立大功全集",
-    "熊出没全集",
-)
-
-/** 建议词：先走精确假数据表，其余关键字从热搜 / 历史 / 结果标题做包含匹配。 */
-private val HERO_SUGGESTIONS: Map<String, List<String>> = mapOf(
-    "凡人" to listOf("凡人修仙传第一季", "凡人修仙传第二季", "凡人修仙传国漫"),
-)
-
-private val HERO_SITE_TABS: List<String> = listOf("全部", "指南", "花卷", "木偶", "觅盘", "玩偶", "盘搜")
-
-private val HERO_RESULTS: List<HeroSearchResult> = listOf(
-    HeroSearchResult("凡人修仙传", "4K HDR", "更新至197集", "https://picsum.photos/seed/hero-search-0/400/600"),
-    HeroSearchResult("凡人修仙传第一季", "独播", "全30集", "https://picsum.photos/seed/hero-search-1/400/600"),
-    HeroSearchResult("凡人修仙传第二季", "1080P", "全24集", "https://picsum.photos/seed/hero-search-2/400/600"),
-    HeroSearchResult("凡人修仙传国漫", "会员", "全120集", "https://picsum.photos/seed/hero-search-3/400/600"),
-    HeroSearchResult("凡人修仙传第三季", "HDR", "更新至 12 集", "https://picsum.photos/seed/hero-search-4/400/600"),
-    HeroSearchResult("战狼2", "4K", "电影", "https://picsum.photos/seed/hero-search-5/400/600"),
-    HeroSearchResult("开心锤锤", "热播", "更新至 300 集", "https://picsum.photos/seed/hero-search-6/400/600"),
-)
-
-private fun suggestionsFor(keyword: String): List<String> {
-    if (keyword.isBlank()) return emptyList()
-    HERO_SUGGESTIONS[keyword]?.let { return it }
-    return (HERO_HOT + HERO_HISTORY + HERO_RESULTS.map { it.title })
-        .filter { it.contains(keyword, ignoreCase = true) }
+/**
+ * 解析热词 / 建议词。
+ *
+ * 两个接口的外层结构恰好都能被 [Word] 直接吃掉：
+ * - 360kan 热搜：`{"errno":0,"data":[{"title":"开心锤锤",...}]}` → `data[].title`
+ * - 爱奇艺建议：`{"code":"A00000","data":[{"name":"凡人歌",...}]}` → `data[].name`
+ *
+ * [Word.Data] 上就是 `@SerializedName(value = "title", alternate = "name")`，
+ * 所以同一个解析器能同时覆盖两者（原版 `zr2` 回调也是这么做的）。
+ */
+private fun parseWords(json: String): List<String> {
+    if (json.isBlank()) return emptyList()
+    return Word.objectFrom(json).data
+        .map { it.title.trim() }
+        .filter { it.isNotEmpty() }
         .distinct()
 }
 
@@ -1292,3 +1511,18 @@ private const val HISTORY_LIMIT = 9
 private const val TITLE_HISTORY = "历史"
 private const val TITLE_HOT = "热搜"
 private const val TITLE_SUGGEST = "建议"
+// 结果区第一个站点 Tab：聚合所有源的结果（同原版 `dz2` 里第一项「全部」）。
+private const val TITLE_ALL = "全部"
+
+// 动态列表（历史 / 热搜建议 / 站点 Tab）共用的 FocusRequester 池容量：
+// 站点总数一般十几个、热词一次 30 条左右，64 足够且不需要随内容重建 requester。
+private const val FOCUS_REQUESTER_POOL = 64
+
+private const val TAG_SEARCH = "HeroSearch"
+
+// 热搜：360kan 排行榜（`SearchActivityV2.X1()` 的原地址与原 Referer，一字不改）。
+private const val HOT_URL = "https://api.web.360kan.com/v1/rank?cat=1"
+private const val HOT_REFERER = "https://www.360kan.com/rank/general"
+
+// 建议词防抖：电视键盘逐字输入，250ms 内的连续按键只打一次接口。
+private const val SUGGEST_DEBOUNCE_MS = 250L
