@@ -168,7 +168,16 @@ class HeroDetailActivity : ComponentActivity() {
         // 【真实详情】进页就请求：结果写 `SiteViewModel.result`，由 Compose 侧的观察者接收。
         // 详情接口返回的 `Vod.flags[].episodes` 是选集弹窗与起播的唯一数据源。
         if (vodId.isNotBlank()) {
-            Log.d(TAG_DETAIL, "请求详情: site=$siteKey id=$vodId")
+            // 排查「详情拿不到线路」的第一手证据：key 能不能真的查到站点配置、ext 有没有丢。
+            // `SiteApi.detailContent` 内部会按 key 重新查 Site；查不到时拿到的是空 Site，
+            // 表现为 api/ext 全空、请求必然失败（csp_xxx 这类依赖 ext 的源尤其明显）。
+            val site = VodConfig.get().getSite(siteKey)
+            Log.d(
+                TAG_DETAIL,
+                "请求详情: siteKey=$siteKey homeKey=${VodConfig.get().getHome().key} " +
+                    "lookupKey=${site.key} name=${site.displayName} type=${site.type} " +
+                    "api=${site.api} extLen=${site.ext.length} jar=${site.jar} id=$vodId",
+            )
             siteViewModel.detailContent(siteKey, vodId)
         }
         setContent {
@@ -287,25 +296,65 @@ private fun HeroDetailScreen(
     DisposableEffect(siteViewModel, vodId) {
         val observer = Observer<Result?> { result ->
             if (result == null) return@Observer
-            val incoming = result.vod
-            // 只接收本次条目的详情：换源弹窗走的是 `search` 通道，不会写 `result`；
-            // 这里再按 id 过滤，避免其它入口（例如首页 result）串台。
-            if (incoming.id.isNotBlank() && incoming.id != vodId) return@Observer
-            detailResult = result
+            // 【排查日志 1】Result 形状：listSize=0 说明请求失败 / 接口没返回数据，
+            // listSize>0 才轮到「flags 为什么是空」的问题。
             Log.d(
                 TAG_DETAIL,
-                "详情到达: id=${incoming.id} 线路=${incoming.flags.size} " +
-                    "集数=${incoming.flags.sumOf { it.episodes.orEmpty().size }}",
+                "获取到详情: listSize=${result.list.size}, code=${result.code}, msg=${result.msg}",
             )
+            val incoming = result.vod
+            Log.d(
+                TAG_DETAIL,
+                "Vod详情: name=${incoming.name}, id=${incoming.id}, flagsSize=${incoming.flags.size}",
+            )
+            // 【排查日志 2】播放字段：`Vod.setFlags()` 就是靠这两个字段生成线路的；
+            // 这里为空说明接口压根没给播放数据（或字段名不对），与选集弹窗无关。
+            Log.d(
+                TAG_DETAIL,
+                "Vod播放字段: playFrom=[${incoming.playFrom}] playUrlLen=${incoming.playUrl.length}",
+            )
+            if (incoming.playUrl.isNotBlank()) {
+                Log.d(TAG_DETAIL, "Vod播放字段(前 800 字): ${incoming.playUrl.take(800)}")
+            }
+            if (incoming.flags.isNotEmpty()) {
+                val first = incoming.flags[0]
+                val playable = incoming.flags.count { !it.episodes.isNullOrEmpty() }
+                Log.d(
+                    TAG_DETAIL,
+                    "第一条线路: flag=${first.flag}, show=${first.show}, " +
+                        "episodesSize=${first.episodes.orEmpty().size}, " +
+                        "可播放线路=$playable/${incoming.flags.size}",
+                )
+            } else {
+                Log.e(TAG_DETAIL, "【严重】未解析出任何线路，请检查请求 key 和 id 是否正确！")
+            }
+            // 只接收本次条目的详情：换源弹窗走的是 `search` 通道，不会写 `result`；
+            // 这里再按 id 过滤，避免其它入口（例如首页 result）串台。
+            if (incoming.id.isNotBlank() && incoming.id != vodId) {
+                Log.w(TAG_DETAIL, "忽略非本次详情: resultId=${incoming.id} 期望=$vodId")
+                return@Observer
+            }
+            detailResult = result
         }
         siteViewModel.result.observeForever(observer)
         onDispose { siteViewModel.result.removeObserver(observer) }
     }
     val vod = detailResult?.vod
-    // 详情还没回来：播放按钮先不弹空选集，改为提示 + 转圈占位。
-    val loadingDetail = vodId.isNotBlank() && vod == null
     // 只保留真正有集数的线路：部分源的占位线路（如「请选择」）没有任何 episode。
     val flags = remember(detailResult) { vod?.flags.orEmpty().filter { !it.episodes.isNullOrEmpty() } }
+    // 【关键】「加载中」「请求失败」「确实没有剧集」是三种完全不同的状态：
+    // 请求失败时 `Result` 的 list 为空（`SiteViewModel` 失败时会 post `Result.empty()`），
+    // 以前这种情况会被误判成「该资源暂无可用剧集」，把失败说成没有资源。
+    // 先落到局部 val：`detailResult` 是委托属性，Kotlin 不对它做智能转换。
+    val result = detailResult
+    val detailState = when {
+        vodId.isBlank() -> DetailState.Empty
+        result == null -> DetailState.Loading
+        result.list.isEmpty() -> DetailState.Error
+        flags.isEmpty() -> DetailState.Empty
+        else -> DetailState.Ready
+    }
+    val detailError = result?.msg.orEmpty()
     // Intent 字段用于首帧直出；详情到达后整体换成真实 Vod（年份 / 地区 / 分类 / 简介 / 导演 / 主演）。
     val page = remember(detail, detailResult, siteName) { detail.mergeDetail(vod, siteName) }
     // 两组可聚焦区域：按钮组 + 演职员行。跨区移动全部显式 requestFocus，不依赖 2D 焦点搜索。
@@ -427,8 +476,8 @@ private fun HeroDetailScreen(
                 )
             }
 
-            // 3.2 详情加载中：播放按钮先不弹空选集，用转圈占位告诉用户「线路还在路上」。
-            if (loadingDetail) {
+            // 3.2 详情加载中 / 加载失败：两种状态分开显示，绝不把「请求失败」说成「没有剧集」。
+            if (detailState == DetailState.Loading) {
                 Spacer(modifier = Modifier.height(DETAIL_CREDIT_TOP_GAP))
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
@@ -445,6 +494,20 @@ private fun HeroDetailScreen(
                         fontSize = DETAIL_CREDIT_SP.sp,
                     )
                 }
+            } else if (detailState == DetailState.Error) {
+                Spacer(modifier = Modifier.height(DETAIL_CREDIT_TOP_GAP))
+                Text(
+                    text = if (detailError.isBlank()) {
+                        "详情加载失败，按「播放」重试"
+                    } else {
+                        "详情加载失败：$detailError（按「播放」重试）"
+                    },
+                    modifier = Modifier.widthIn(max = DETAIL_DESC_MAX_WIDTH),
+                    color = DETAIL_ERROR_COLOR,
+                    fontSize = DETAIL_CREDIT_SP.sp,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
             }
 
             // 4. 按钮组：紧跟在简介下方，默认焦点「播放」。
@@ -455,10 +518,18 @@ private fun HeroDetailScreen(
                 // 「播放」拉起选集弹窗；「换源」拉起换源弹窗（收藏仍是占位）。
                 onConfirm = { index ->
                     when (index) {
-                        DETAIL_ACTION_PLAY -> when {
-                            loadingDetail -> Notify.show("正在加载剧集，请稍候")
-                            flags.isEmpty() -> Notify.show("该资源暂无可用剧集")
-                            else -> showPlayDialog = true
+                        DETAIL_ACTION_PLAY -> when (detailState) {
+                            DetailState.Loading -> Notify.show("正在加载剧集，请稍候")
+                            DetailState.Error -> {
+                                // 失败多半是网络 / 源临时抽风：清空旧结果回到加载态，再带 refresh 重试一次。
+                                Notify.show("详情加载失败，正在重试…")
+                                detailResult = null
+                                siteViewModel.detailContent(siteKey, vodId, true)
+                            }
+                            DetailState.Empty -> Notify.show(
+                                if (vodId.isBlank()) "缺少剧集 ID，无法加载剧集" else "该资源暂无可用剧集",
+                            )
+                            DetailState.Ready -> showPlayDialog = true
                         }
                         DETAIL_ACTION_CHANGE_SOURCE -> {
                             // 候选源规则与首页完全一致：
@@ -1779,6 +1850,16 @@ private data class HeroDetailAction(
 /** 演职员：TMDB person id + 姓名 + 头像地址（picsum 稳定图，不依赖 TMDB）。 */
 private data class HeroCast(val id: String, val name: String, val avatarUrl: String)
 
+/**
+ * 详情加载状态：四态互斥，UI 与播放按钮都按它分支。
+ *
+ * - [Loading]：请求还在路上（或正在重试）；
+ * - [Ready]：拿到了至少一条带剧集的线路，可以弹选集；
+ * - [Empty]：接口成功返回，但确实没有可播剧集（或没有 vodId）；
+ * - [Error]：请求失败 / 接口没返回数据（`Result.list` 为空），必须和 [Empty] 区分开。
+ */
+private enum class DetailState { Loading, Ready, Empty, Error }
+
 private data class HeroDetail(
     val title: String,
     val meta: String,
@@ -1927,6 +2008,8 @@ private val DETAIL_TITLE_META_GAP = 2.dp
 private val DETAIL_META_HEIGHT = 20.dp
 private const val DETAIL_META_SP = 14f
 private val DETAIL_META_COLOR = Color(0xCCFFFFFF)
+/** 详情请求失败提示：淡红，和普通元数据区分开。 */
+private val DETAIL_ERROR_COLOR = Color(0xFFFF8A80)
 private val DETAIL_META_DESC_GAP = 4.dp
 /** 简介最大宽度 440dp：每行约 30 个汉字，4 行刚好不喧宾夺主。 */
 private val DETAIL_DESC_MAX_WIDTH = 440.dp

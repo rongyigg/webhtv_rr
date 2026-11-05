@@ -55,6 +55,12 @@ public class SiteApi {
         return site.getType() == 3;
     }
 
+    // TODO(详情无线路排查：定位后删除) 只用于本次排查：截断超长响应，避免 logcat 被刷爆。
+    private static String head(String text, int max) {
+        if (text == null) return "null";
+        return text.length() <= max ? text : text.substring(0, max) + "...(len=" + text.length() + ")";
+    }
+
     private static String ac(int type) {
         return type == 0 ? "videolist" : "detail";
     }
@@ -180,20 +186,41 @@ public class SiteApi {
         // 那是个副作用，缓存会吞掉它，见 cacheDetail 的说明。
         long beforeSpider = System.currentTimeMillis();
         if (isSpider(site)) {
+            // TODO(详情无线路排查：定位后删除) 看 spider 是否退化成 SpiderNull（jar 加载 / init 失败）。
+            // 保留下面原始的 spider 调用形式：`CatWebWiringTest#webOpeningDetailIsNotCached`
+            // 用「先取时刻、再调 spider」的源码顺序做校验，不能改成先拿变量再调用。
+            Log.d("HeroDetail", "详情走 spider: siteKey=" + site.getKey() + " type=" + site.getType()
+                    + " api=" + site.getApi() + " extLen=" + site.getExt().length()
+                    + " jar=" + site.getJar() + " spiderClass=" + site.recent().spider().getClass().getName());
             String detailContent = site.recent().spider().detailContent(Arrays.asList(requestId));
             TmdbSourceCredentialIngress.Ingress ingress = TmdbSourceCredentialIngress.extractRootAndStrip(detailContent);
             SpiderDebug.log("detail", ingress.getSanitizedJson());
+            // TODO(详情无线路排查：定位后删除) 原始响应前 1200 字（已剥离 tmdb_api_key）。
+            Log.d("HeroDetail", "详情原始响应(spider): key=" + key + " id=" + requestId
+                    + " body=" + head(ingress.getSanitizedJson(), 1200));
             result = Result.fromJson(ingress.getSanitizedJson());
         } else {
             ArrayMap<String, String> params = new ArrayMap<>();
             params.put("ac", ac(site.getType()));
             params.put("ids", requestId);
+            // TODO(详情无线路排查：定位后删除) 确认 ext 是否真的进了请求参数。
+            Log.d("HeroDetail", "详情走接口: siteKey=" + site.getKey() + " type=" + site.getType()
+                    + " api=" + site.getApi() + " extLen=" + site.getExt().length()
+                    + " ac=" + params.get("ac") + " ids=" + requestId);
             String detailContent = call(site, params);
             TmdbSourceCredentialIngress.Ingress ingress = TmdbSourceCredentialIngress.extractRootAndStrip(detailContent);
             SpiderDebug.log("detail", ingress.getSanitizedJson());
+            // TODO(详情无线路排查：定位后删除) 原始响应前 1200 字（已剥离 tmdb_api_key）。
+            Log.d("HeroDetail", "详情原始响应(接口): key=" + key + " id=" + requestId
+                    + " body=" + head(ingress.getSanitizedJson(), 1200));
             result = Result.fromType(site.getType(), ingress.getSanitizedJson());
         }
         Source.get().parse(result.getVod().setFlags());
+        // TODO(详情无线路排查：定位后删除) 解析后的线路数 / 集数。
+        Log.d("HeroDetail", "详情解析结果: key=" + key + " id=" + id
+                + " listSize=" + result.getList().size() + " flagsSize=" + result.getVod().getFlags().size()
+                + " playFrom=[" + result.getVod().getPlayFrom() + "]"
+                + " playUrlLen=" + result.getVod().getPlayUrl().length());
         result = applyPushTitle(push, result);
         cacheDetail(key, sourceKey, id, result, beforeSpider);
         return result;
