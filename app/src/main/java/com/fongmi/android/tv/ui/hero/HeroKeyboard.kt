@@ -1,5 +1,6 @@
 package com.fongmi.android.tv.ui.hero
 
+import android.util.Log
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
@@ -603,18 +604,35 @@ internal class HeroPosterViewRegistry {
     fun requestFocus(index: Int): Boolean {
         val card = views[index] ?: return false
         if (!card.isAttachedToWindow) return false
-        return card.requestFocus()
+        // 【防崩溃】Android View 在这一帧刚被回收/分离时 requestFocus 仍可能抛
+        // IllegalStateException，焦点失败只是体验降级，绝不允许冒泡到 Recomposer。
+        return runCatching { card.requestFocus() }
+            .onFailure { Log.e(TAG_FOCUS, "焦点请求失败: $it") }
+            .getOrDefault(false)
     }
 }
 
 /** 在已挂载的 FocusRequester 列表里安全请求焦点：未组合的 Lazy 项会抛异常，这里降级返回 false。 */
-internal fun requestFocus(requesters: List<FocusRequester>, index: Int): Boolean {
+internal fun requestFocus(requesters: List<FocusRequester>, index: Int, tag: String = TAG_FOCUS): Boolean {
     val requester = requesters.getOrNull(index) ?: return false
-    return requestFocus(requester)
+    return requestFocus(requester, tag)
 }
 
-internal fun requestFocus(requester: FocusRequester): Boolean =
-    runCatching { requester.requestFocus() }.isSuccess
+/**
+ * 【防崩溃】`FocusRequester.requestFocus()` 在目标节点本帧被销毁/尚未挂载时会抛
+ * `IllegalStateException`（"FocusRequester is not initialized" 等）。
+ *
+ * 电视端的热搜词是「先读缓存、再被网络结果覆盖」的两段式更新：用户点中的胶囊
+ * 可能在同一帧内被移出组合，此时任何焦点请求都属于**可失败的体验动作**，
+ * 因此统一在这里吞掉异常并记日志，绝不让它把整个界面带崩。
+ */
+internal fun requestFocus(requester: FocusRequester, tag: String = TAG_FOCUS): Boolean =
+    runCatching { requester.requestFocus() }
+        .onFailure { Log.e(tag, "焦点请求失败: $it") }
+        .getOrDefault(false)
+
+/** 焦点相关日志统一 TAG（搜索页调用处可传入 `HeroSearch`）。 */
+internal const val TAG_FOCUS: String = "HeroFocus"
 
 // ---------------------------------------------------------------------------
 // 键盘数据（结构同 xp.java 的 a=7 分支）

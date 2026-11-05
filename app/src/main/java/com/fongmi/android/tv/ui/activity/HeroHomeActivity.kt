@@ -377,7 +377,10 @@ private fun HeroHomeScreen(
     // 三个焦点区各自持有一组 FocusRequester：跨区移动用显式 requestFocus，
     // 避免 2D 焦点搜索在“顶栏项宽 ≠ 卡片宽”时落空。
     val topBarRequesters = remember { List(TOP_BAR_LABELS.size) { FocusRequester() } }
-    val tabRequesters = remember { List(HERO_TABS.size) { FocusRequester() } }
+    // 【动态分类】Tab 数量现在由 `Result.types` 决定（不同源 3~20 个不等），
+    // 所以 requester 必须用**固定容量池**：列表内容变化时 requester 实例不变，
+    // 不会出现「分类到达 → 焦点从 Tab 上掉下来 / requester 目标失效」。
+    val tabRequesters = remember { List(TAB_REQUESTER_POOL) { FocusRequester() } }
 
     // ------------------------------------------------------------------
     // 首页真实数据
@@ -391,9 +394,22 @@ private fun HeroHomeScreen(
     var homeResult by remember { mutableStateOf<Result?>(null) }
     // 已经自动加载过的「站点:分类」。分类结果本身也可能为空，用它挡掉来回死循环。
     var autoCategoryKey by remember { mutableStateOf<String?>(null) }
-    // 当前接口源真实返回的分类（`Result.types`）。分类结果本身可能不带 types，
-    // 所以这里单独缓存，供「Tab 文案 → 真实分类」的映射使用（声明在观察者之前）。
+    // 当前接口源真实返回的分类（`Result.types`）：**Tab 列表的唯一数据源**。
+    // 分类结果本身通常不带 types，所以这里单独缓存；声明在观察者之前。
     var homeTypes by remember { mutableStateOf<List<VodType>>(emptyList()) }
+    // 当前 Tab 列表来自哪个源：换源后即使新源不返回分类，也要把旧源的 Tab 清掉，
+    // 否则用户会在新源上看到一串点了也没数据的「幽灵分类」。
+    var homeTabsSiteKey by remember { mutableStateOf("") }
+    // 【动态分类 Tab】= 固定的「推荐」+ 源返回的每一个分类，**直接持有 VodType**。
+    // 以前是「写死 6 个文案，再用 contains 去猜对应哪个分类」，源分类名一变就匹配不上、
+    // Tab 也就永远只切视觉不发请求。现在 index → type 是硬绑定，请求直接用 typeId。
+    // 截断到 requester 池大小，保证 `requesters[index]` 永远有实例。
+    val homeTabs = remember(homeTypes) {
+        buildList {
+            add(HomeTab(label = TAB_RECOMMEND, type = null))
+            homeTypes.take(TAB_REQUESTER_POOL - 1).forEach { add(HomeTab(label = it.typeName, type = it)) }
+        }
+    }
     // 用户当前是否停在「分类 Tab」上（index > 0）。
     // 分类请求返回空列表时不能触发下面「首页为空 → 自动加载第一个分类」的兜底，
     // 否则会把用户明确选中的分类悄悄换成第一个分类；[reloadHome] 会把它复位。
@@ -415,9 +431,16 @@ private fun HeroHomeScreen(
         // 所以这里必须按可空接收：null 直接忽略（等价于「还没拿到数据」）。
         val observer = Observer<Result?> { result ->
             if (result == null) return@Observer
-            // 分类只在首页 / 分类首包里带回来：拿到就缓存，供「Tab 文案 → 真实分类」映射。
-            if (result.types.isNotEmpty()) homeTypes = result.types
             val site = VodConfig.get().getHome()
+            // 【动态分类 Tab 的唯一数据源】`Result.types` 决定整排 Tab。
+            // - 换源后的第一条结果：**无条件同步**（新源没有分类就把旧源的 Tab 收掉）；
+            // - 同一个源：只在 types 非空时更新（分类首包通常不带 types，不能把 Tab 清空）。
+            if (site.key != homeTabsSiteKey) {
+                homeTabsSiteKey = site.key
+                homeTypes = result.types
+            } else if (result.types.isNotEmpty()) {
+                homeTypes = result.types
+            }
             // 【关键】`SiteApi.homeContent` / `categoryContent` 都不像 `searchContent` 那样给每条 Vod 盖 site。
             // 不补的话 `Vod.getSiteKey()` 是空串：详情页「排除当前源」直接失效、来源标签也是空白。
             result.list.forEach { it.setSite(site) }
@@ -509,7 +532,9 @@ private fun HeroHomeScreen(
     // 注意：这里只移动焦点；选中态由 Tab 自己的 onFocused 更新（焦点即选中）。
     fun focusTab(index: Int? = null) {
         val fallback = if (selectedTabIndex >= 0) selectedTabIndex else rememberedTabIndex
-        val target = (index ?: fallback).coerceIn(0, HERO_TABS.lastIndex)
+        // 【动态分类】边界跟着真实 Tab 列表走：`homeTabs` 永远至少有「推荐」，
+        // 但源分类可能在运行中变少，这里再收敛一次，绝不出现 `coerceIn(0, -1)`。
+        val target = (index ?: fallback).coerceIn(0, homeTabs.lastIndex.coerceAtLeast(0))
         rememberedTabIndex = target
         scope.launch { tabState.animateScrollToItem(target) }
         if (!requestFocus(tabRequesters, target)) requestFocus(tabRequesters, 0)
@@ -637,28 +662,21 @@ private fun HeroHomeScreen(
             reloadHome()
             return@LaunchedEffect
         }
-        val label = HERO_TABS.getOrNull(index) ?: return@LaunchedEffect
+        // 【动态分类】index 直接对应 `homeTabs[index]`：type 是源返回的真实 VodType，
+        // 不再用「设计稿文案 contains 分类名」去猜，也就不会出现「Tab 能切、请求发不出去」。
+        val tab = homeTabs.getOrNull(index) ?: return@LaunchedEffect
+        val type = tab.type ?: return@LaunchedEffect
         val site = VodConfig.get().getHome()
         if (site.key.isEmpty()) return@LaunchedEffect
         // 分类还没回来（冷启动配置仍在加载 / 首页请求在途）：**不标记 loaded**，
-        // 等 `homeTypes` 变化后本 effect 会自动重跑一次，避免「先滑到 Tab、分类后到」永远匹配不上。
-        if (homeTypes.isEmpty()) {
-            Log.d(TAG_HOME, "分类 Tab「$label」等待分类数据，暂不请求")
-            return@LaunchedEffect
-        }
-        // Tab 文案是固定的设计稿文案，和源里的分类名做双向包含匹配；
-        // 匹配不到就**只切视觉、不乱发请求**（宁可保持现有海报，也不展示错分类的数据）。
-        val type = homeTypes.firstOrNull { item ->
-            item.typeName.isNotEmpty() && (item.typeName.contains(label) || label.contains(item.typeName))
-        }
-        if (type == null) {
-            loadedTabIndex = index
-            Log.d(TAG_HOME, "分类 Tab「$label」在当前源没有同名分类，保持现有海报")
+        // 等 `homeTypes` 变化后本 effect 会自动重跑一次，避免「先滑到 Tab、分类后到」永远对不上。
+        if (type.typeId.isBlank()) {
+            Log.d(TAG_HOME, "分类 Tab「${tab.label}」缺少 typeId，暂不请求")
             return@LaunchedEffect
         }
         loadedTabIndex = index
         categoryTabActive = true
-        Log.d(TAG_HOME, "焦点切分类: $label -> ${type.typeName}(${type.typeId})")
+        Log.d(TAG_HOME, "焦点切分类: ${tab.label} -> ${type.typeName}(${type.typeId})")
         siteViewModel.categoryContent(site.key, type.typeId, "1", true, hashMapOf())
     }
 
@@ -747,6 +765,7 @@ private fun HeroHomeScreen(
             }
             HeroTabBar(
                 state = tabState,
+                tabs = homeTabs,
                 requesters = tabRequesters,
                 // -1 = 还没进过 Tab 栏（此时所有 Tab 都不涂红，只有焦点态才红）。
                 selectedIndex = selectedTabIndex,
@@ -1195,15 +1214,19 @@ private fun HeroHomeStatus(loading: Boolean, message: String) {
  * - focused（无论是否选中）：[HeroFocusBrush] 红渐变色块 + 纯白字；
  * - 失焦但 selected、且焦点还在 Tab/海报模块内：**红框描边 + 透明底**（规则 ②）；
  * - 焦点离开模块（↑ 回顶栏）或从未选中：`Color.Transparent` 全透明底 + 60% 白字（规则 ③）。
- *   **selected 只由确定键产生**，焦点经过某个 Tab（包括左右键移动）不会把它置为 selected；
- *   用户还没按过确定键时 `selectedIndex = -1`，此时整排都没有红底。
+ *   **焦点即选中**：焦点经过哪个 Tab，`selectedIndex` 就跟着变成哪个（数据加载由防抖 effect 负责）；
+ *   还没进过 Tab 栏时 `selectedIndex = -1`，此时整排都没有红底。
  * - 形状为胶囊（[HERO_TAB_SHAPE]，13dp 圆角，高度 26dp 时刚好半圆）。
  * 背景不做颜色动画，避免过渡帧出现半透明色块。
  * 左右键不交给系统焦点搜索，而是显式 [focusTab]，这样横向滚动与选中态永远同步。
+ *
+ * [tabs] 由 `homeTypes`（`Result.types`）动态生成：第 0 项固定是「推荐」，
+ * 其余每一项都带着源返回的真实分类，所以本组件不再持有任何写死的分类文案。
  */
 @Composable
 private fun HeroTabBar(
     state: LazyListState,
+    tabs: List<HomeTab>,
     requesters: List<FocusRequester>,
     selectedIndex: Int,
     moduleFocused: Boolean,
@@ -1228,12 +1251,13 @@ private fun HeroTabBar(
         horizontalArrangement = Arrangement.spacedBy(HERO_TAB_SPACING),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        HERO_TABS.forEachIndexed { index, label ->
-            // 用 item(key = ...) 而不是 itemsIndexed：后者与海报行的 itemsIndexed 同名，
-            // 两个扩展函数无法同时 import，这里直接用 LazyListScope 的成员函数。
-            item(key = label) {
+        tabs.forEachIndexed { index, tab ->
+            // 用 `item(key = index)` 而不是文案做 key：不同源可能返回同名分类
+            // （同名不同 typeId），文案做 key 会直接撞成 "Key was already used" 而崩溃。
+            // 下标 key 同时保证「切源后 Tab 数量变化」时组合位置稳定。
+            item(key = index) {
                 HeroTabChip(
-                    label = label,
+                    label = tab.label,
                     selected = index == selectedIndex,
                     moduleFocused = moduleFocused,
                     requester = requesters[index],
@@ -1644,8 +1668,20 @@ private const val TOP_BAR_SEARCH_LABEL = "搜索"
 
 private const val TOP_BAR_SETTINGS_LABEL = "设置"
 
-// 分类 Tab 顺序对照 ref_docs/home_ui.png 的胶囊分类条。
-private val HERO_TABS = listOf("推荐", "电影", "电视剧", "动漫", "综艺", "纪录片")
+// 分类 Tab 的固定首项：「推荐」= 首页首屏数据（`homeContent`）；其余项全部来自 `Result.types`。
+private const val TAB_RECOMMEND = "推荐"
+
+// 动态分类 Tab 的 FocusRequester 池容量：源一般返回 3~20 个分类，
+// 池子固定不随列表重建，切源 / 分类后到时焦点都不会因为 requester 重建而掉下来。
+private const val TAB_REQUESTER_POOL = 32
+
+/**
+ * 首页分类 Tab 的一项。
+ *
+ * [type] 为 null 表示「推荐」（首页首屏 `homeContent`）；其余项直接持有源返回的分类，
+ * 于是 `index → 分类` 是硬绑定：请求时直接用 `type.typeId`，不再用文案去猜。
+ */
+private data class HomeTab(val label: String, val type: VodType?)
 
 /**
  * 「焦点即选中」的请求防抖窗口（毫秒）。

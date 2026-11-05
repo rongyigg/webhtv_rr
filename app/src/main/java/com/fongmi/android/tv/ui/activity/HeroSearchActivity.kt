@@ -128,6 +128,7 @@ import com.fongmi.android.tv.ui.hero.requestFocus
 import com.fongmi.android.tv.utils.SearchSuggest
 import com.github.catvod.net.OkHttp
 import com.google.gson.reflect.TypeToken
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -328,7 +329,16 @@ private fun HeroSearchScreen(
     val wordRequesters = remember { List(FOCUS_REQUESTER_POOL) { FocusRequester() } }
     val siteRequesters = remember { List(FOCUS_REQUESTER_POOL) { FocusRequester() } }
     // 「右侧第一排第一个胶囊」的固定落点：键盘最右列 → 这里；站点 Tab ↑ → 也回这里。
-    val rightFirstRequester = remember { FocusRequester() }
+    //
+    // 【为什么拆成两个 requester】历史区与热搜/建议区是**两个不同的 Composable**，
+    // 且谁是「第一排」由 `history.isEmpty()` 二选一决定。点热搜时同一帧内会发生两件事：
+    //   1) `recordHistory(text)` → history 从空变非空 → 「第一排」从热搜区跳到历史区；
+    //   2) `hasInput` 变 true → words 从 hotWords 切成 suggestWords → 热搜区整体被销毁。
+    // 如果两处共用一个 requester，`Modifier.focusRequester` 会在同一帧里先解绑旧节点、
+    // 再绑定新节点；这中间任何一次 `requestFocus()` 都会撞上「未初始化 / 已失效」而抛异常。
+    // 拆开之后两个 requester 各自只属于一个区块，跨区块交接只在下一帧发生，天然安全。
+    val historyFirstRequester = remember { FocusRequester() }
+    val wordFirstRequester = remember { FocusRequester() }
     // 海报卡是 Android View（HeroPosterCard），Compose 的 FocusRequester 摸不到它，
     // 用一张「下标 → View」的登记表跨区交接焦点，卡片自带的 2dp 红描边才会亮。
     val posterRegistry = remember { HeroPosterViewRegistry() }
@@ -342,20 +352,37 @@ private fun HeroSearchScreen(
     // 焦点回到输入框/键盘 = 离开结果区，清掉标记，避免之后清空输入时把焦点从键盘抢走。
     fun focusInput() {
         resultsFocused = false
-        requestFocus(inputRequester)
+        requestFocus(inputRequester, TAG_SEARCH)
     }
 
     fun focusKeyboard(index: Int) {
         resultsFocused = false
         val target = index.coerceIn(FIRST_KEY_INDEX, HERO_KEYS.lastIndex)
-        if (!requestFocus(keyRequesters, target)) requestFocus(keyRequesters, FIRST_KEY_INDEX)
+        if (!requestFocus(keyRequesters, target, TAG_SEARCH)) {
+            requestFocus(keyRequesters, FIRST_KEY_INDEX, TAG_SEARCH)
+        }
     }
 
-    /** 站点 Tab ↑ / 「第一排第一个胶囊」的固定落点：右侧历史第一条（没有历史就是热搜第一条）。 */
+    /**
+     * 站点 Tab ↑ / 「第一排第一个胶囊」的固定落点：右侧历史第一条（没有历史就是热搜第一条）。
+     *
+     * 【防崩溃】必须按**运行时**的 `history.isNotEmpty()` 二选一，而不是在组合期把
+     * requester 传进已经消失的区块：点热搜会让 history 立刻非空、热搜区立刻销毁，
+     * 这时能接收焦点的只有历史第一条。焦点请求本身也已 runCatching 兜底。
+     */
     fun focusRightFirstChip() {
-        runCatching { rightFirstRequester.requestFocus() }
+        val target = if (history.isNotEmpty()) historyFirstRequester else wordFirstRequester
+        requestFocus(target, TAG_SEARCH)
     }
 
+    /**
+     * 落焦点到站点 Tab。
+     *
+     * 【防崩溃 + 防失效】结果区是 `hasInput` 之后才插入组合树的，且站点 Tab 数量会随
+     * 真实结果动态增长。这里不再「等一帧就请求一次」，而是**逐帧重试**：
+     * 目标 requester 还没挂载时 `requestFocus()` 返回 false，就继续等下一帧，
+     * 直到成功或超出重试上限；任何一次失败都只记日志，绝不抛出。
+     */
     fun focusSite(index: Int) {
         if (!hasInput) {
             focusInput()
@@ -369,8 +396,15 @@ private fun HeroSearchScreen(
         focusedSite = target
         scope.launch {
             runCatching { siteState.animateScrollToItem(target) }
-            withFrameNanos { }
-            requestFocus(siteRequesters, target)
+            var ok = false
+            for (attempt in 0 until FOCUS_RETRY_FRAMES) {
+                withFrameNanos { }
+                if (requestFocus(siteRequesters, target, TAG_SEARCH)) {
+                    ok = true
+                    break
+                }
+            }
+            if (!ok) Log.w(TAG_SEARCH, "站点 Tab 焦点未落位: index=$target count=$count")
         }
     }
 
@@ -632,25 +666,36 @@ private fun HeroSearchScreen(
         if (searchSerial == 0) return@LaunchedEffect
         val text = searchKeyword
         if (text.isEmpty()) return@LaunchedEffect
-        // 1. 清空上一轮结果 + 进入加载态（原版 S0 里那一长串 clear）。
-        searchResults = emptyList()
-        searchedKeyword = text
-        selectedSite = 0
-        focusedSite = 0
-        searching = true
-        searchProgress = null
-        // 2. 收集可搜索站点：与 `f2()` 完全一致，只过滤 isSearchable()。
-        val sites = VodConfig.get().getSites().filter { it.isSearchable() }
-        Log.d(TAG_SEARCH, "开始搜索: keyword=$text 可搜索站点=${sites.size}")
-        if (sites.isEmpty()) {
+        try {
+            // 1. 清空上一轮结果 + 进入加载态（原版 S0 里那一长串 clear）。
+            searchResults = emptyList()
+            searchedKeyword = text
+            selectedSite = 0
+            focusedSite = 0
+            searching = true
+            searchProgress = null
+            // 2. 收集可搜索站点：与 `f2()` 完全一致，只过滤 isSearchable()。
+            val sites = VodConfig.get().getSites().filter { it.isSearchable() }
+            Log.d(TAG_SEARCH, "开始搜索: keyword=$text 可搜索站点=${sites.size}")
+            if (sites.isEmpty()) {
+                searching = false
+                return@LaunchedEffect
+            }
+            // 3. 发起搜索（quick = false，与原版一致）。
+            siteViewModel.searchContent(sites, text, false)
+            // 4. 结果区刚插入（hasInput false→true），等一帧再落焦点。
+            //    `focusSite` 内部已做「逐帧重试 + runCatching + 越界收敛」，
+            //    这里再包一层 try/catch 只是最后一道保险：焦点失败永远不能等于 App 崩溃。
+            withFrameNanos { }
+            focusSite(0)
+        } catch (e: CancellationException) {
+            // 用户又点了一次 / 页面退出：effect 被正常取消，不要当成错误。
+            throw e
+        } catch (e: Throwable) {
+            // 【防崩溃】LaunchedEffect 体内未捕获的异常会直接打到 Recomposer，必闪退。
+            Log.e(TAG_SEARCH, "搜索流程异常: $e", e)
             searching = false
-            return@LaunchedEffect
         }
-        // 3. 发起搜索（quick = false，与原版一致）。
-        siteViewModel.searchContent(sites, text, false)
-        // 4. 结果区刚插入（hasInput false→true），等一帧再落焦点。
-        withFrameNanos { }
-        focusSite(0)
     }
 
     // ------------------------------------------------------------------
@@ -660,10 +705,29 @@ private fun HeroSearchScreen(
         if (keyword.trim().isNotEmpty()) return@LaunchedEffect
         // 已经拿到过网络结果就不再重复请求（同一页面内来回清空输入不刷接口）。
         if (hotLoaded && hotWords.isNotEmpty()) return@LaunchedEffect
-        val body = withContext(Dispatchers.IO) {
-            OkHttp.string(HOT_URL, mapOf("Referer" to HOT_REFERER))
+        // 【防崩溃】网络/解析异常必须就地吞掉：LaunchedEffect 里漏出去的异常会直接
+        // 崩掉 Recomposer。热搜拿不到只是少几个词，绝不能影响页面可用性。
+        val body = try {
+            withContext(Dispatchers.IO) {
+                OkHttp.string(HOT_URL, mapOf("Referer" to HOT_REFERER))
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            Log.e(TAG_SEARCH, "热搜请求失败: $e", e)
+            return@LaunchedEffect
         }
-        val fresh = parseWords(body)
+        // 【刷新保护】请求返回时用户可能已经开始输入 / 已经点了热词：热搜区不再展示，
+        // 再写 `hotWords` 只会制造一次「点击瞬间的额外重组」，直接丢弃这次结果。
+        if (keyword.trim().isNotEmpty()) return@LaunchedEffect
+        val fresh = try {
+            parseWords(body)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            Log.e(TAG_SEARCH, "热搜解析失败: $e", e)
+            return@LaunchedEffect
+        }
         if (fresh.isEmpty()) {
             // 空结果 / 请求失败：保留缓存，绝不清空已有词。
             Log.w(TAG_SEARCH, "热搜为空，保留缓存 ${hotWords.size} 条")
@@ -672,7 +736,7 @@ private fun HeroSearchScreen(
         hotWords = fresh
         hotLoaded = true
         // 与 `vx0.S(..., "hot")` 一致：把原始 JSON 存下来，下次进页面秒出。
-        Setting.putHot(body)
+        runCatching { Setting.putHot(body) }
         Log.d(TAG_SEARCH, "热搜更新: ${fresh.size} 条")
     }
 
@@ -684,8 +748,22 @@ private fun HeroSearchScreen(
         if (text.isEmpty()) return@LaunchedEffect
         // 电视键盘是一格一格敲的，防抖 250ms，避免每按一个字母都打一次接口。
         delay(SUGGEST_DEBOUNCE_MS)
-        val body = withContext(Dispatchers.IO) { OkHttp.string(SearchSuggest.iqiyiUrl(text)) }
-        val fresh = parseWords(body)
+        val body = try {
+            withContext(Dispatchers.IO) { OkHttp.string(SearchSuggest.iqiyiUrl(text)) }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            Log.e(TAG_SEARCH, "建议请求失败: $text $e", e)
+            return@LaunchedEffect
+        }
+        val fresh = try {
+            parseWords(body)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            Log.e(TAG_SEARCH, "建议解析失败: $text $e", e)
+            return@LaunchedEffect
+        }
         if (fresh.isEmpty()) {
             // 原版容错：拿不到就不动列表，不要让「建议」整块消失。
             Log.w(TAG_SEARCH, "建议为空: $text")
@@ -774,7 +852,8 @@ private fun HeroSearchScreen(
                     hasInput = hasInput,
                     historyRequesters = historyRequesters,
                     wordRequesters = wordRequesters,
-                    rightFirstRequester = rightFirstRequester,
+                    historyFirstRequester = historyFirstRequester,
+                    wordFirstRequester = wordFirstRequester,
                     onWordClick = { text ->
                         // 点热词 / 历史 = 直接搜：先更新输入框，再由 searchSerial 统一触发请求。
                         requestSearch(text)
@@ -934,7 +1013,8 @@ private fun RightContentColumn(
     hasInput: Boolean,
     historyRequesters: List<FocusRequester>,
     wordRequesters: List<FocusRequester>,
-    rightFirstRequester: FocusRequester,
+    historyFirstRequester: FocusRequester,
+    wordFirstRequester: FocusRequester,
     onWordClick: (String) -> Unit,
     onDownToResults: () -> Unit,
 ) {
@@ -945,7 +1025,7 @@ private fun RightContentColumn(
             words = history,
             requesters = historyRequesters,
             // 历史非空时，「右侧第一排第一个」就是历史第一条。
-            firstRowRequester = if (history.isNotEmpty()) rightFirstRequester else null,
+            firstRowRequester = if (history.isNotEmpty()) historyFirstRequester else null,
             isFirstRowSection = history.isNotEmpty(),
             resultsVisible = hasInput,
             onWordClick = onWordClick,
@@ -959,7 +1039,9 @@ private fun RightContentColumn(
                 title = wordTitle,
                 words = words,
                 requesters = wordRequesters,
-                firstRowRequester = if (history.isEmpty()) rightFirstRequester else null,
+                // 【关键】热搜/建议区只在「历史为空」时才是第一排；两个区块各用各的
+                // requester，点热搜（history 立刻非空）时热搜区被销毁也不会牵连历史区。
+                firstRowRequester = if (history.isEmpty()) wordFirstRequester else null,
                 isFirstRowSection = history.isEmpty(),
                 resultsVisible = hasInput,
                 onWordClick = onWordClick,
@@ -1557,6 +1639,10 @@ private const val TITLE_ALL = "全部"
 // 动态列表（历史 / 热搜建议 / 站点 Tab）共用的 FocusRequester 池容量：
 // 站点总数一般十几个、热词一次 30 条左右，64 足够且不需要随内容重建 requester。
 private const val FOCUS_REQUESTER_POOL = 64
+
+// 站点 Tab 落焦点的逐帧重试上限：结果区要等 `hasInput` 之后才进组合树，
+// 一般 1~2 帧即可挂载；给 8 帧余量既不会无限空转，也覆盖得了慢设备的一帧长布局。
+private const val FOCUS_RETRY_FRAMES = 8
 
 private const val TAG_SEARCH = "HeroSearch"
 
