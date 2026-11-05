@@ -2,9 +2,13 @@ package com.fongmi.android.tv.ui.hero
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.util.Log
+import coil3.EventListener
 import coil3.ImageLoader
 import coil3.SingletonImageLoader
+import coil3.network.HttpException
 import coil3.network.okhttp.OkHttpNetworkFetcherFactory
+import coil3.request.ErrorResult
 import coil3.request.ImageRequest
 import coil3.request.SuccessResult
 import coil3.request.allowHardware
@@ -45,9 +49,39 @@ object HeroImageLoader {
         SingletonImageLoader.setSafe { context -> newImageLoader(context) }
     }
 
+    /**
+     * 图片加载失败日志（Coil 侧）。
+     *
+     * 挂在 ImageLoader 上而不是每个 Composable 的 `onError`：首页海报、背景大图、磨砂背景、
+     * 历史/搜索页全部覆盖，也不会因为某处忘了加回调而漏掉。
+     *
+     * 打印三件事，正好对应「部分有图、部分没图」的三种成因：
+     * - 完整 URL：分辨是空地址、协议相对地址，还是真的豆瓣图床；
+     * - 异常类型：`HttpException` = 服务端拒绝（403 防盗链 / 404 图已删），`IOException` = 网络；
+     * - HTTP 状态码：取自 `HttpException.response.code`。
+     */
+    private object ImageErrorLogger : EventListener() {
+
+        override fun onError(request: ImageRequest, result: ErrorResult) {
+            val raw = request.data?.toString().orEmpty()
+            val url = if (raw.isBlank()) "<空地址>" else raw
+            val throwable = result.throwable
+            val status = (throwable as? HttpException)?.response?.code
+            val http = if (status == null) "" else " HTTP $status"
+            Log.e(
+                "HeroImageError",
+                "加载失败: $url | ${throwable.javaClass.simpleName}$http: ${throwable.message}",
+                throwable,
+            )
+        }
+    }
+
     fun newImageLoader(context: Context): ImageLoader =
         ImageLoader.Builder(context)
             .components { add(OkHttpNetworkFetcherFactory(callFactory = { client })) }
+            // 所有走 Coil 的图片（首页 AsyncImage、搜索/历史、磨砂背景）共用这一个监听器：
+            // 失败时把**完整地址 + 异常类型 + HTTP 状态码**打出来，否则「部分没图」无从下手。
+            .eventListener(ImageErrorLogger)
             .build()
 
     /**

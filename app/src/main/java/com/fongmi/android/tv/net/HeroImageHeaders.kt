@@ -1,6 +1,7 @@
 package com.fongmi.android.tv.net
 
 import android.net.Uri
+import android.util.Log
 import com.fongmi.android.tv.utils.ImageHeaderPolicy
 import com.fongmi.android.tv.utils.UrlUtil
 import com.github.catvod.utils.Json
@@ -47,7 +48,16 @@ internal object HeroImageHeaders {
         if (marker < 0) {
             // 没有指令：只剩豆瓣防盗链这一条全局规则。
             val referer = ImageHeaderPolicy.doubanImageReferer(raw, false)
-            return if (referer.isEmpty()) null else Resolved(raw, mapOf(HEADER_REFERER to referer))
+            if (referer.isEmpty()) {
+                // 诊断：豆瓣域名但没命中 `img\d+\.doubanio\.com` 规则（例如 `qnmob3.doubanio.com`、
+                // 老图床 `img1.douban.com`、`s3.doubanio.com`）。这类地址缺 Referer 基本必 403，
+                // 这条 W 日志能直接把「没图」和「规则漏判」对上号。
+                if (raw.contains("douban", ignoreCase = true)) {
+                    Log.w("HeroImageError", "豆瓣图片未命中 Referer 规则: $raw")
+                }
+                return null
+            }
+            return Resolved(raw, mapOf(HEADER_REFERER to referer))
         }
         val url = raw.substring(0, marker)
         // OkHttp 会把指令里的 `{` `"` 等字符百分号编码，先还原再按原版规则解析。
@@ -108,16 +118,37 @@ internal object HeroImageHeaders {
  */
 internal object HeroImageHeaderInterceptor : Interceptor {
 
+    /**
+     * 原版 Glide 链路**真的带 UA**，但**不是**伪造的 Chrome UA。
+     *
+     * `ImgUtil.getUrl()` 无论有没有 `@xxx=` 指令，最后都会把地址包成
+     * `GlideUrl(url, LazyHeaders.Builder().build())`；而 Glide 的 `LazyHeaders` 默认头里就有
+     * `User-Agent = System.getProperty("http.agent")`（反编译 `LazyHeaders$Builder` 可见
+     * `User-Agent` + `http.agent` 两个常量），也就是 Android 系统的
+     * `Dalvik/2.1.0 (Linux; U; Android xx; ...)`。
+     *
+     * Coil 走的是裸 OkHttp，**一个 UA 都不发**。图床若按 UA 做风控，
+     * 就正好是「原版能出图、HeroUI 不出图」。这里补的是原版那个系统 UA，不是编造的浏览器 UA。
+     */
+    private val androidUserAgent: String by lazy {
+        System.getProperty("http.agent") ?: "Dalvik/2.1.0 (Linux; U; Android)"
+    }
+
     override fun intercept(chain: Interceptor.Chain): Response {
         val request = chain.request()
         val current = request.url.toString()
-        val resolved = HeroImageHeaders.resolve(current) ?: return chain.proceed(request)
+        val resolved = HeroImageHeaders.resolve(current)
         val builder = request.newBuilder()
-        if (resolved.url != current) {
-            val url = resolved.url.toHttpUrlOrNull() ?: return chain.proceed(request)
-            builder.url(url)
+        if (resolved != null) {
+            if (resolved.url != current) {
+                val url = resolved.url.toHttpUrlOrNull() ?: return chain.proceed(request)
+                builder.url(url)
+            }
+            resolved.headers.forEach { (name, value) -> builder.header(name, value) }
         }
-        resolved.headers.forEach { (name, value) -> builder.header(name, value) }
+        // 站点自己给了 UA（`@User-Agent=` 指令，或接口配置的全局 headers）就绝不覆盖：
+        // 那才是站点真正想要的值，系统 UA 只是兜底。`ResponseInterceptor` 在网络层仍可再覆盖。
+        if (request.header("User-Agent") == null) builder.header("User-Agent", androidUserAgent)
         return chain.proceed(builder.build())
     }
 }

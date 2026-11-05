@@ -8,10 +8,12 @@ import android.graphics.Paint
 import android.graphics.Rect
 import android.graphics.RectF
 import android.graphics.Typeface
+import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.text.TextUtils
 import android.util.AttributeSet
+import android.util.Log
 import android.view.Gravity
 import android.view.View
 import android.widget.FrameLayout
@@ -19,6 +21,10 @@ import android.widget.ImageView
 import android.widget.TextView
 import androidx.core.content.ContextCompat
 import com.bumptech.glide.Glide
+import com.bumptech.glide.load.DataSource
+import com.bumptech.glide.load.engine.GlideException
+import com.bumptech.glide.request.RequestListener
+import com.bumptech.glide.request.target.Target
 import com.fongmi.android.tv.R
 import com.fongmi.android.tv.utils.ImgUtil
 import com.google.android.material.imageview.ShapeableImageView
@@ -482,8 +488,37 @@ class HeroPosterCard @JvmOverloads constructor(
             // 豆瓣海报就只剩 403 空白。
             // 原版整段包在 try/catch(Throwable) 里，这里同样兜住：解析失败退回占位图，绝不崩。
             val model = runCatching { ImgUtil.getUrl(imageUrl) }.getOrNull()
-            if (model == null) image.setImageResource(R.drawable.shape_source_poster_placeholder)
-            else Glide.with(context.applicationContext).load(model).centerCrop().into(image)
+            if (model == null) {
+                Log.e("HeroImageError", "加载失败: ${imageUrl.ifBlank { "<空地址>" }} | ImgUtil.getUrl 解析失败")
+                image.setImageResource(R.drawable.shape_source_poster_placeholder)
+            } else {
+                // 失败日志：Glide 的 onLoadFailed 带 GlideException（内含 HTTP 码 / 解码原因）。
+                // 地址在创建监听器时就捕获，避免回调晚到时读到下一张卡片的 imageUrl。
+                val url = imageUrl
+                Glide.with(context.applicationContext)
+                    .load(model)
+                    .centerCrop()
+                    .listener(object : RequestListener<Drawable> {
+                        override fun onLoadFailed(
+                            e: GlideException?,
+                            model: Any?,
+                            target: Target<Drawable>?,
+                            isFirstResource: Boolean,
+                        ): Boolean {
+                            Log.e("HeroImageError", "加载失败: ${url.ifBlank { "<空地址>" }}", e)
+                            return false
+                        }
+
+                        override fun onResourceReady(
+                            resource: Drawable,
+                            model: Any?,
+                            target: Target<Drawable>?,
+                            dataSource: DataSource,
+                            isFirstResource: Boolean,
+                        ): Boolean = false
+                    })
+                    .into(image)
+            }
         }
         placeholder.visibility = if (imageUrl.isBlank() && !emptyTitle) View.VISIBLE else View.GONE
     }
