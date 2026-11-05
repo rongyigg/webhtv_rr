@@ -10,6 +10,8 @@ import coil3.request.SuccessResult
 import coil3.request.allowHardware
 import coil3.toBitmap
 import com.fongmi.android.tv.net.HeroHttpDns
+import com.fongmi.android.tv.net.HeroImageHeaderInterceptor
+import com.github.catvod.net.OkHttp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
@@ -18,14 +20,22 @@ import java.util.concurrent.TimeUnit
 /**
  * Hero UI 的 Coil 图片加载入口。
  *
- * 独立的 OkHttp 客户端只服务 Compose 图片加载，DNS 使用 [HeroHttpDns] 的多路 DoH 并发解析，
- * 用来给 TMDB 海报/背景图提供防污染直连；既有 Glide 链路完全不受影响。
+ * **必须继承 catvod 的全局客户端**（[OkHttp.client]），不能自己裸建 `OkHttpClient.Builder()`：
+ * - 接口配置 JSON 顶部的全局 `headers` 由全局客户端的 `ResponseInterceptor` 按 host 注入，
+ *   豆瓣这类图片防盗链就是靠它 + [com.fongmi.android.tv.utils.ImageHeaderPolicy] 才能加载；
+ * - 代理 / hosts / DoH / 证书策略 / UA 与原版 Glide 链路（`OkGlideModule` 也复用同一个客户端）完全一致。
+ *
+ * 在此基础上只做两件事：
+ * 1. DNS 换成 [HeroHttpDns]：**只有 `*.tmdb.org`** 走多路 DoH 防污染，其余域名原样交回
+ *    `OkHttp.dns()`（保住接口配置的 `hosts` 映射与用户自选 DoH）；
+ * 2. 追加 [HeroImageHeaderInterceptor]，补齐原版 `ImgUtil.getUrl()` 的 `@Referer=` 等图片指令。
  */
 object HeroImageLoader {
 
     private val client: OkHttpClient by lazy {
-        OkHttpClient.Builder()
+        OkHttp.client().newBuilder()
             .dns(HeroHttpDns)
+            .addInterceptor(HeroImageHeaderInterceptor)
             .connectTimeout(10, TimeUnit.SECONDS)
             .readTimeout(20, TimeUnit.SECONDS)
             .build()

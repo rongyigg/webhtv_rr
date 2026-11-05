@@ -1,5 +1,7 @@
 package com.fongmi.android.tv.model;
 
+import android.util.Log;
+
 import androidx.lifecycle.LiveData;
 import androidx.lifecycle.MutableLiveData;
 import androidx.lifecycle.ViewModel;
@@ -319,6 +321,9 @@ public class SiteViewModel extends ViewModel {
                 error -> {
                     if (taskId.get() != currentId) return;
                     if (error instanceof CancellationException) return;
+                    // 超时 / 线程池异常不会经过 SiteApi 的 catch（那只兜站点内部抛出的异常），
+                    // 所以这里补一条统一日志，否则「某个源没数据」在超时场景下完全没有痕迹。
+                    Log.e("HeroHome", "请求失败 type=" + type + " site=" + VodConfig.get().getHome().getKey() + " 错误=" + error, error);
                     Result failure = error instanceof ExtractException ? Result.error(error.getMessage()) : Result.empty();
                     if (type == TaskType.PLAYER) App.post(() -> {
                         if (taskId.get() != currentId) return;

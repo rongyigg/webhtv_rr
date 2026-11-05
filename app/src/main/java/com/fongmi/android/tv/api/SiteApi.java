@@ -1,6 +1,7 @@
 package com.fongmi.android.tv.api;
 
 import android.text.TextUtils;
+import android.util.Log;
 
 import androidx.annotation.NonNull;
 import androidx.collection.ArrayMap;
@@ -66,6 +67,9 @@ public class SiteApi {
             SiteHealthStore.recordHome(site, true, result.getList().size(), System.currentTimeMillis() - start, "");
             return result;
         } catch (Exception e) {
+            // 首页空白时的第一手证据：哪个源、哪个 api、什么异常。原版 HomeActivity 吞掉异常后
+            // 只表现为「没数据」，没有这行日志就无法区分是站点问题还是我们的调用方式问题。
+            Log.e("HeroHome", "抓取失败站点: " + site.getName() + "(" + site.getKey() + ") api=" + site.getApi() + " 错误: " + e.getMessage(), e);
             SiteHealthStore.recordHome(site, false, 0, System.currentTimeMillis() - start, e.getMessage());
             throw e;
         }
@@ -99,7 +103,12 @@ public class SiteApi {
                 String homeContent = response.body().string();
                 SpiderDebug.log("home", homeContent);
                 Result result = Result.fromType(site.getType(), homeContent);
+                // 诊断用：`fetchPic` 会给 type<=2 的源补封面，做法是拿 `ac=videolist&ids=...`
+                // 再请求一次整张列表；接口不支持这个参数时会返回空，首页就被整张清空。
+                // 打出前后条数，就能一眼区分「源本身没数据」和「补图把列表清空了」。
+                int parsed = result.getList().size();
                 fetchPic(site, result);
+                Log.d("HeroHome", "home 解析=" + parsed + " 补图后=" + result.getList().size() + " site=" + site.getKey() + " type=" + site.getType());
                 setTypes(site, result);
                 return result;
             }

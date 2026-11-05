@@ -13,12 +13,14 @@ import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
 /**
- * 多路 DoH 并发解析，用于 TMDB 等图片/数据域名的防污染直连。
+ * 多路 DoH 并发解析，**只用于 TMDB 图床**（`*.tmdb.org`）的防污染直连。
  *
  * 与 catvod 既有的 [com.github.catvod.net.OkDns] 相比，这里同时对多个公共 DoH 发起查询，
- * 谁先返回有效结果就采用谁；全部失败或超时后回落到 [OkHttp.dns]，
- * 因此用户配置的 hosts 映射、DoH 与系统解析仍然是兜底路径。
+ * 谁先返回有效结果就采用谁；全部失败或超时后回落到 [OkHttp.dns]。
  * 成功结果按 [TTL_MS] 缓存，避免每次图片请求都重新解析。
+ *
+ * 非 TMDB 域名直接转交 [OkHttp.dns]，保证接口配置的 `hosts` 映射与用户自选 DoH 仍然生效 ——
+ * 这是「原版能出图、HeroUI 出不来」最容易被忽略的一环。
  *
  * 目前只接入 HeroUI 的 Coil 图片链路；全局 OkHttp 仍走 catvod 的 [com.github.catvod.net.OkDns]
  * （单路 DoH），要替换全局解析必须修改 catvod 核心层，留待单独评审后再做。
@@ -39,6 +41,10 @@ object HeroHttpDns : Dns {
     }
 
     override fun lookup(hostname: String): List<InetAddress> {
+        // 【兼容性红线】只有 TMDB 图床走多路 DoH，其余域名一律交回 catvod 的 [OkHttp.dns]。
+        // 接口配置里的 `hosts` 映射（奇葩源常用：把图片/接口域名钉到指定 IP）和用户自选的 DoH
+        // 都只在 OkDns 里生效；如果对所有域名都强上 DoH，就会绕过它们，出现「原版有图、我们没有」。
+        if (!needsDoh(hostname)) return OkHttp.dns().lookup(hostname)
         val cached = cache[hostname]
         if (cached != null && cached.expireAt > System.currentTimeMillis()) return cached.addresses
         val raced = race(hostname)
@@ -47,6 +53,12 @@ object HeroHttpDns : Dns {
             return raced
         }
         return OkHttp.dns().lookup(hostname)
+    }
+
+    /** TMDB 官方图床：`image.tmdb.org` / `images.tmdb.org`，以及用户自定义的其它 `*.tmdb.org`。 */
+    private fun needsDoh(hostname: String): Boolean {
+        val host = hostname.lowercase()
+        return host == "tmdb.org" || host.endsWith(".tmdb.org")
     }
 
     private fun race(hostname: String): List<InetAddress> {

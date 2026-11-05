@@ -20,6 +20,7 @@ import android.widget.TextView
 import androidx.core.content.ContextCompat
 import com.bumptech.glide.Glide
 import com.fongmi.android.tv.R
+import com.fongmi.android.tv.utils.ImgUtil
 import com.google.android.material.imageview.ShapeableImageView
 import com.google.android.material.shape.ShapeAppearanceModel
 import kotlin.math.roundToInt
@@ -474,8 +475,15 @@ class HeroPosterCard @JvmOverloads constructor(
         if (imageUrl.isBlank()) {
             image.setImageResource(R.drawable.shape_source_poster_placeholder)
         } else {
-            // TODO(数据层对接)：接入真实海报后由这里统一加载；占位首字仅在无图时显示。
-            Glide.with(context.applicationContext).load(imageUrl).centerCrop().into(image)
+            // 【照抄原版】原版 `ImgUtil.load()` 是 `Glide.with(view).load(getUrl(url))`：
+            // 必须先把地址交给 `ImgUtil.getUrl()` 解析成 GlideUrl —— 它会剥掉 `@Headers=` /
+            // `@Referer=` / `@Cookie=` / `@User-Agent=` 指令，并在豆瓣图床（img*.doubanio.com）
+            // 上补 `Referer: https://movie.douban.com`。直接 `load(String)` 会丢掉这一层，
+            // 豆瓣海报就只剩 403 空白。
+            // 原版整段包在 try/catch(Throwable) 里，这里同样兜住：解析失败退回占位图，绝不崩。
+            val model = runCatching { ImgUtil.getUrl(imageUrl) }.getOrNull()
+            if (model == null) image.setImageResource(R.drawable.shape_source_poster_placeholder)
+            else Glide.with(context.applicationContext).load(model).centerCrop().into(image)
         }
         placeholder.visibility = if (imageUrl.isBlank() && !emptyTitle) View.VISIBLE else View.GONE
     }

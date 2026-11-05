@@ -356,19 +356,43 @@ private fun HeroHomeScreen(
     // 这里用行为完全等价的 observeForever + onDispose 摘除，包括「立刻重放上一次值」这一特性 ——
     // 所以 Activity 重建时旧数据会先回来，不会闪一下空列表。
     var homeResult by remember { mutableStateOf<Result?>(null) }
+    // 已经自动加载过的「站点:分类」。分类结果本身也可能为空，用它挡掉来回死循环。
+    var autoCategoryKey by remember { mutableStateOf<String?>(null) }
+
+    /**
+     * 重新拉一次首页，并复位「自动分类」标记。
+     *
+     * 首次进入、小房子切源都走这里；设置页返回由 Activity 的 `onResume` 直接调 `onRefreshHome()`。
+     */
+    fun reloadHome() {
+        autoCategoryKey = null
+        onRefreshHome()
+    }
+
     DisposableEffect(siteViewModel) {
         // `SiteViewModel.init()` 会把 `result` 置为 null，LiveData 会把 null 一起派发下来，
         // 所以这里必须按可空接收：null 直接忽略（等价于「还没拿到数据」）。
         val observer = Observer<Result?> { result ->
-            if (result != null) {
-                val site = VodConfig.get().getHome()
-                // 【关键】`SiteApi.homeContent` 不像 `searchContent` 那样给每条 Vod 盖 site。
-                // 不补的话 `Vod.getSiteKey()` 是空串：详情页「排除当前源」直接失效、
-                // 卡片左上角来源标签也是空白。
-                result.list.forEach { it.setSite(site) }
-                Log.d(TAG_HOME, "获取到真实数据条数=${result.list.size} msg=${result.msg} site=${site.key}")
-                homeResult = result
+            if (result == null) return@Observer
+            val site = VodConfig.get().getHome()
+            // 【关键】`SiteApi.homeContent` / `categoryContent` 都不像 `searchContent` 那样给每条 Vod 盖 site。
+            // 不补的话 `Vod.getSiteKey()` 是空串：详情页「排除当前源」直接失效、来源标签也是空白。
+            result.list.forEach { it.setSite(site) }
+            Log.d(TAG_HOME, "获取到真实数据条数=${result.list.size} msg=${result.msg} site=${site.key}")
+            // 与原版 HomeActivity.addVideo() 完全一致：首页 list 为空但站点返回了分类时，
+            // 自动去拉第一个分类的第 1 页。只返回 class、不返回 list 的源靠这一步才有内容，
+            // 少了它就是「原版正常、我们空白」。
+            val firstType = result.types.firstOrNull()
+            if (result.list.isEmpty() && firstType != null) {
+                val categoryKey = site.key + ":" + firstType.typeId
+                if (categoryKey != autoCategoryKey) {
+                    autoCategoryKey = categoryKey
+                    Log.d(TAG_HOME, "首页列表为空，自动加载第一个分类: ${firstType.typeName}(${firstType.typeId})")
+                    siteViewModel.categoryContent(site.key, firstType.typeId, "1", true, hashMapOf())
+                    return@Observer
+                }
             }
+            homeResult = result
         }
         siteViewModel.result.observeForever(observer)
         onDispose { siteViewModel.result.removeObserver(observer) }
@@ -376,7 +400,7 @@ private fun HeroHomeScreen(
     // 首次进入就请求一次。失败 / 空列表一律交给下面的空态，**绝不回退任何假数据**。
     LaunchedEffect(Unit) {
         Log.d(TAG_HOME, "首次进入首页，触发 homeContent")
-        onRefreshHome()
+        reloadHome()
     }
 
     /** Vod → HeroPoster 的唯一映射点；`homeResult == null`（首帧 / 首次请求在途）时返回空列表。 */
@@ -591,7 +615,9 @@ private fun HeroHomeScreen(
                                     // 所以必须自己再拉一次 homeContent()，否则界面还是旧源的数据。
                                     Log.d(TAG_HOME, "小房子切换接口源: ${current.key} -> ${site.key}")
                                     VodConfig.get().setHome(site)
-                                    onRefreshHome()
+                                    // 换源必须连「自动分类」标记一起复位，否则新源若同样需要自动分类，
+                                    // 会命中旧 key 的判断而不重新请求。
+                                    reloadHome()
                                     Notify.show(context.getString(R.string.source_sidebar_switched, site.displayName))
                                 }
                             },
