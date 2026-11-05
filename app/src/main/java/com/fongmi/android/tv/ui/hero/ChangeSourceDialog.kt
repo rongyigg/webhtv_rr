@@ -374,9 +374,10 @@ internal class ChangeSourceDialog private constructor(
         // 【致命日志 1】换源搜索入参：keyword 为空 / 源被 quick 过滤，都会让结果永远为空。
         // `SiteViewModel.searchContent(List)` 在 `quick && !site.isQuickSearch()` 时直接跳过该源，
         // 所以这里同时打印 quickSearch，能一眼看出「是没搜」还是「搜了没结果」。
+        // keyword 用 `[...]` 包起来：首尾空格在日志里肉眼不可见，却是搜不到的最常见原因。
         Log.e(
             TAG,
-            "换源搜索入参: site=${site.key}, keyword=$keyword, quick=$quick, " +
+            "发起搜索: site=${site.key}, keyword=[$keyword], quick=$quick, " +
                 "name=${site.displayName}, searchable=${site.isSearchable}, " +
                 "quickSearch=${site.isQuickSearch}",
         )
@@ -395,9 +396,19 @@ internal class ChangeSourceDialog private constructor(
         // 如果这里根本没有日志，说明请求被 quick 过滤掉了（见 startSearch 的入参日志）。
         Log.e(
             TAG,
-            "换源搜索结果: site=$siteKey listSize=${items.size}, " +
+            "收到结果: site=$siteKey, listSize=${items.size}, " +
                 "code=${result?.code}, msg=${result?.msg}",
         )
+        if (items.isEmpty()) {
+            // 【对照日志】0 条时把「当前所有可搜索源」整表打出来：
+            // 目标源如果不在这个列表里，问题就与这部剧无关（源没加载 / 被禁用 / 不可搜索）。
+            val searchable = VodConfig.get().sites.filter { it.isSearchable }
+            Log.e(
+                TAG,
+                "收到结果为空，当前可搜索源(${searchable.size}): " +
+                    searchable.joinToString { "${it.key}:${it.displayName}" },
+            )
+        }
         if (items.isNotEmpty()) {
             val merged = resultsBySite.getOrElse(siteKey) { emptyList() } + items
             resultsBySite[siteKey] = merged.distinctBy { it.id }

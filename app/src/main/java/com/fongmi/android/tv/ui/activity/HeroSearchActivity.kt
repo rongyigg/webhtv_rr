@@ -8,6 +8,7 @@ import android.os.Bundle
 import android.util.Log
 import android.view.KeyEvent
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
@@ -125,7 +126,6 @@ import com.fongmi.android.tv.ui.hero.PLACEHOLDER_INDEX
 import com.fongmi.android.tv.ui.hero.SourceSidebar
 import com.fongmi.android.tv.ui.hero.SourceSidebarMode
 import com.fongmi.android.tv.ui.hero.requestFocus
-import com.fongmi.android.tv.ui.hero.openHeroDetailOrFolder
 import com.fongmi.android.tv.utils.SearchSuggest
 import com.github.catvod.net.OkHttp
 import com.google.gson.reflect.TypeToken
@@ -237,9 +237,9 @@ class HeroSearchActivity : ComponentActivity() {
                 HeroSearchScreen(
                     backdropUrl = backdropUrl,
                     siteViewModel = siteViewModel,
-                    // 卡片确认 → 带着真实 (Vod, Site) 打开：站点 key 必须一起传，否则不知道去哪个源。
-                    // folder 条目（网盘聚合壳）交给原版分类页，其余进 Hero 详情页。
-                    onOpenDetail = { vod, site -> openHeroDetailOrFolder(this, vod, site) },
+                    // 普通卡片 → Hero 详情页。folder 条目在页面内部拦截成「页内下钻」，
+                    // 根本不会走到这里（见 HeroSearchScreen 的 `isDrillDownFolder` 分支）。
+                    onOpenDetail = { vod, site -> HeroDetailActivity.start(this, vod, site) },
                 )
             }
         }
@@ -316,6 +316,16 @@ private fun HeroSearchScreen(
     var searchSerial by remember { mutableIntStateOf(0) }
     var searchKeyword by remember { mutableStateOf("") }
 
+    // ---- 搜索页内嵌下钻（folder 条目）----
+    // folder 条目（网盘聚合壳，如 `atvp_detail:`）的正确动作是拿它的 id 走**分类接口** `t=` 展开目录，
+    // 而不是拿它去请求 `ids=` 详情（站源会判成业务错误，返回空 id / 0 线路）。
+    // 原版是在点击处跳到分类页；这里改成**留在搜索页**做二级列表：
+    // 压栈 → `categoryContent(...)` → 用分类结果替换下方海报行 → 返回键 / 「返回上一级」出栈。
+    var drillStack by remember { mutableStateOf<List<DrillEntry>>(emptyList()) }
+    var drillResults by remember { mutableStateOf<List<Vod>>(emptyList()) }
+    var drillLoading by remember { mutableStateOf(false) }
+    val drillActive = drillStack.isNotEmpty()
+
     // ---- 真实热搜 / 建议 ----
     // 热搜：先用本地缓存（Prefers("hot")）秒出，再异步刷一次网络（同 `X1()` 的两步）。
     var hotWords by remember { mutableStateOf(parseWords(Setting.getHot())) }
@@ -338,10 +348,10 @@ private fun HeroSearchScreen(
     val resultSites: List<Site> = remember(searchResults, resultsMatchInput) {
         if (!resultsMatchInput) emptyList() else searchResults.mapNotNull { it.site }.distinctBy { it.key }
     }
-    val siteLabels: List<String> = remember(resultSites) {
+    val searchSiteLabels: List<String> = remember(resultSites) {
         listOf(TITLE_ALL) + resultSites.map { it.displayName }
     }
-    val visibleResults: List<Vod> = remember(searchResults, resultSites, selectedSite, resultsMatchInput) {
+    val searchVisible: List<Vod> = remember(searchResults, resultSites, selectedSite, resultsMatchInput) {
         if (!resultsMatchInput) {
             emptyList()
         } else {
@@ -349,6 +359,10 @@ private fun HeroSearchScreen(
             if (site == null) searchResults else searchResults.filter { it.site?.key == site.key }
         }
     }
+    // 下钻层级存在时，下方海报行整块换成「当前目录的分类结果」，
+    // 站点 Tab 行只剩一个「返回上一级」——不再按源分组（目录结果本来就只有这一个源）。
+    val siteLabels: List<String> = if (drillActive) listOf(DRILL_BACK_LABEL) else searchSiteLabels
+    val visibleResults: List<Vod> = if (drillActive) drillResults else searchVisible
 
     val inputRequester = remember { FocusRequester() }
     val searchRequester = remember { FocusRequester() }
@@ -439,11 +453,18 @@ private fun HeroSearchScreen(
         }
     }
 
-    fun focusPoster(index: Int) {
+    /**
+     * 落焦点到海报行。
+     *
+     * [count] 必须由调用方显式传入**当前实际渲染的条目数**：下钻结果由 LiveData 回调异步写入，
+     * 若在这里读组合期的 `visibleResults`，闭包里拿到的会是上一帧的旧列表（甚至是空的），
+     * 于是「下钻后焦点不落到海报上」。
+     */
+    fun focusPoster(index: Int, count: Int) {
         // 【防越界 / 防崩溃】结果为空时 `coerceIn(0, -1)` 同样会抛异常；
         // 这里必须提前返回，焦点留在站点 Tab 上，绝不去请求一张不存在的卡。
-        if (!hasInput || visibleResults.isEmpty()) return
-        val target = index.coerceIn(0, visibleResults.lastIndex)
+        if (!hasInput || count <= 0) return
+        val target = index.coerceIn(0, count - 1)
         scope.launch {
             runCatching {
                 posterState.animateScrollToItem(if (target >= POSTER_SCROLL_ANCHOR) target else 0)
@@ -453,6 +474,53 @@ private fun HeroSearchScreen(
                 withFrameNanos { }
                 posterRegistry.requestFocus(target)
             }
+        }
+    }
+
+    /**
+     * 打开一个 folder 条目：压栈 + 用**分类接口**展开目录（`t=vod.id`）。
+     *
+     * 与原版 `CollectActivity.onItemClick` → `VodActivity.start(..., Result.folder(item))` 的语义一致，
+     * 区别只是落点从「原版分类页」换成「本页的下方海报行」。
+     * 请求写的是 `SiteViewModel.result`（详情同一条通道），搜索结果走的是 `search`，两者互不干扰。
+     */
+    fun openDrillDown(vod: Vod, site: Site) {
+        drillStack = drillStack + DrillEntry(site, vod)
+        drillResults = emptyList()
+        drillLoading = true
+        selectedSite = 0
+        focusedSite = 0
+        Log.e(
+            TAG_SEARCH,
+            "下钻 folder: site=${site.key} id=${vod.id} name=${vod.name} " +
+                "depth=${drillStack.size} api=${site.api}",
+        )
+        siteViewModel.categoryContent(site.key, vod.id, "1", true, hashMapOf())
+    }
+
+    /**
+     * 返回上一级：出栈。
+     *
+     * - 还有上级目录 → 重新展开上级（分类结果本来就会被下级覆盖，必须重新请求）；
+     * - 已经到顶 → 清空目录结果，原搜索结果原样恢复（`searchResults` 从未被改动）。
+     */
+    fun exitDrillDown() {
+        if (drillStack.isEmpty()) return
+        drillStack = drillStack.dropLast(1)
+        drillResults = emptyList()
+        selectedSite = 0
+        focusedSite = 0
+        val parent = drillStack.lastOrNull()
+        Log.e(TAG_SEARCH, "返回上一级: 剩余层级=${drillStack.size} parent=${parent?.vod?.id}")
+        if (parent == null) {
+            drillLoading = false
+            scope.launch {
+                withFrameNanos { }
+                focusSite(0)
+            }
+        } else {
+            drillLoading = true
+            siteViewModel.categoryContent(parent.site.key, parent.vod.id, "1", true, hashMapOf())
         }
     }
 
@@ -711,6 +779,43 @@ private fun HeroSearchScreen(
     }
 
     // ------------------------------------------------------------------
+    // 真实数据 1.5：folder 下钻的分类结果（`SiteViewModel.result`）
+    // ------------------------------------------------------------------
+    // `SiteApi.categoryContent` 写的是 `result` 通道（搜索写的是 `search`），两条互不干扰。
+    // 只有**当前确实处于下钻层级**时才接受回调：返回上一级之后残留的旧结果绝不能覆盖原搜索结果。
+    DisposableEffect(siteViewModel) {
+        val observer = Observer<Result?> { result ->
+            if (result == null) return@Observer
+            if (drillStack.isEmpty()) return@Observer
+            val current = drillStack.last().site
+            // 分类接口不会给每条结果盖 site（原版整页共用一个 key），这里补上：
+            // 卡片左上角的站点标签、点开后的详情页都要靠它。
+            drillResults = result.list.map { vod ->
+                if (vod.site == null) vod.apply { site = current } else vod
+            }
+            drillLoading = false
+            Log.e(
+                TAG_SEARCH,
+                "下钻结果: depth=${drillStack.size} id=${drillStack.last().vod.id} " +
+                    "listSize=${result.list.size} code=${result.code} msg=${result.msg}",
+            )
+        }
+        siteViewModel.result.observeForever(observer)
+        onDispose { siteViewModel.result.removeObserver(observer) }
+    }
+
+    // 目录结果到达后把焦点落到第一张海报；空目录 / 失败则落到「⬅️ 返回上一级」。
+    // 这里必须显式传 `drillResults.size`：`visibleResults` 是组合期局部变量，闭包里会读到旧值。
+    LaunchedEffect(drillResults, drillStack.size) {
+        if (drillStack.isEmpty()) return@LaunchedEffect
+        withFrameNanos { }
+        if (drillResults.isNotEmpty()) focusPoster(0, drillResults.size) else focusSite(0)
+    }
+
+    // 下钻层级存在时，返回键先退回上一级，而不是直接退出搜索页。
+    BackHandler(enabled = drillActive) { exitDrillDown() }
+
+    // ------------------------------------------------------------------
     // 统一触发：搜索请求（点热词 / 点历史 / 放大镜 / 键盘搜索键）
     // ------------------------------------------------------------------
     // **只有这里**会真正调用 `searchContent`：
@@ -723,6 +828,10 @@ private fun HeroSearchScreen(
         try {
             // 1. 清空上一轮结果 + 进入加载态（原版 S0 里那一长串 clear）。
             searchResults = emptyList()
+            // 新一轮搜索必须退出下钻：否则旧的目录结果会压在新搜索结果上。
+            drillStack = emptyList()
+            drillResults = emptyList()
+            drillLoading = false
             searchedKeyword = text
             selectedSite = 0
             focusedSite = 0
@@ -934,6 +1043,12 @@ private fun HeroSearchScreen(
                     resultModuleFocused = resultsFocused,
                     searching = searching,
                     progress = searchProgress,
+                    // 下钻时的空态文案必须说「目录」，不能沿用「输入关键词后按搜索键」。
+                    emptyHint = if (drillActive) {
+                        if (drillLoading) "正在加载目录…" else "该目录暂无内容"
+                    } else {
+                        null
+                    },
                     siteRequesters = siteRequesters,
                     posterRegistry = posterRegistry,
                     onSiteFocused = { index ->
@@ -943,25 +1058,32 @@ private fun HeroSearchScreen(
                         selectedSite = index
                     },
                     onSiteConfirm = { index ->
-                        // 兼容确定键：焦点即选中之后这里通常已经是同一个值，保留是为了不破坏原有按键习惯。
-                        selectedSite = index
-                        focusedSite = index
+                        if (drillActive) {
+                            // 下钻时 Tab 行只有「⬅️ 返回上一级」这一项，确定键 = 出栈。
+                            exitDrillDown()
+                        } else {
+                            // 兼容确定键：焦点即选中之后这里通常已经是同一个值，保留是为了不破坏原有按键习惯。
+                            selectedSite = index
+                            focusedSite = index
+                        }
                     },
                     onSiteUp = { focusRightFirstChip() },
-                    onSiteDown = { focusPoster(0) },
+                    onSiteDown = { focusPoster(0, visibleResults.size) },
                     onSiteLeft = { index -> focusSite(index - 1) },
                     onSiteRight = { index -> focusSite(index + 1) },
                     onPosterFocused = { resultsFocused = true },
                     onPosterOpen = { vod ->
-                        // 与 `ks2.java`（原版搜索卡片）一致：点开前把当前关键词记进历史，
-                        // 再把真实 (Vod, Site) 交给详情页。
+                        // 与 `ks2.java`（原版搜索卡片）一致：点开前把当前关键词记进历史。
                         recordHistory(keyword)
-                        onOpenDetail(vod, vod.site ?: VodConfig.get().getHome())
+                        // 分类结果已经补过 site；下钻层级里再用当前目录的源兜底，最后才回首页源。
+                        val site = vod.site ?: drillStack.lastOrNull()?.site ?: VodConfig.get().getHome()
+                        // folder 条目（网盘聚合壳）留在本页展开目录；其余照旧进详情页。
+                        if (vod.isDrillDownFolder()) openDrillDown(vod, site) else onOpenDetail(vod, site)
                     },
                     onPosterUp = { focusSite(focusedSite) },
-                    onPosterLeft = { index -> if (index > 0) focusPoster(index - 1) },
+                    onPosterLeft = { index -> if (index > 0) focusPoster(index - 1, visibleResults.size) },
                     onPosterRight = { index ->
-                        if (index < visibleResults.lastIndex) focusPoster(index + 1)
+                        if (index < visibleResults.lastIndex) focusPoster(index + 1, visibleResults.size)
                     },
                 )
             }
@@ -1297,6 +1419,8 @@ private fun ResultSection(
     resultModuleFocused: Boolean,
     searching: Boolean,
     progress: SearchProgress?,
+    // 非空时覆盖空态文案（下钻目录用）；null = 沿用搜索页原来的三态文案。
+    emptyHint: String?,
     siteRequesters: List<FocusRequester>,
     posterRegistry: HeroPosterViewRegistry,
     onSiteFocused: (Int) -> Unit,
@@ -1412,7 +1536,7 @@ private fun ResultSection(
 
             // 加载 / 空态提示：**画在 215dp 容器内部**，不改任何尺寸，也不参与焦点。
             if (items.isEmpty()) {
-                val hint = when {
+                val hint = emptyHint ?: when {
                     searching -> if (progress != null && progress.total() > 0) {
                         "搜索中 ${progress.current()}/${progress.total()}"
                     } else {
@@ -1689,6 +1813,31 @@ private const val TITLE_HOT = "热搜"
 private const val TITLE_SUGGEST = "建议"
 // 结果区第一个站点 Tab：聚合所有源的结果（同原版 `dz2` 里第一项「全部」）。
 private const val TITLE_ALL = "全部"
+
+// ---------------------------------------------------------------------------
+// 搜索页内嵌下钻（folder 条目）
+// ---------------------------------------------------------------------------
+
+/**
+ * 下钻栈的一层：folder 条目 + 它所属的源。
+ *
+ * 存整个 [Site] 而不是 key：请求要原样带上 `api / type / ext`，
+ * 只留 key 再回查 `VodConfig` 在「临时站点」场景下会查成空 Site。
+ */
+private data class DrillEntry(val site: Site, val vod: Vod)
+
+/** 下钻时站点 Tab 行里唯一的按钮文案（确定键 = 出栈，等价于返回键）。 */
+private const val DRILL_BACK_LABEL = "⬅️ 返回上一级"
+
+/** 网盘聚合插件的 folder 壳前缀（与 `Vod.isFolder()` 的 `vod_tag=folder` 等价）。 */
+private const val ATVP_FOLDER_PREFIX = "atvp_detail:"
+
+/**
+ * folder 判定：原版在点击处就分流到分类页，而搜索 / 历史结果可能丢掉 `vod_tag=folder`，
+ * 所以这里连 `atvp_detail:` 前缀一起认（与 `HeroEntryRoute` 的判定保持一致）。
+ */
+private fun Vod.isDrillDownFolder(): Boolean =
+    isFolder || id.startsWith(ATVP_FOLDER_PREFIX, ignoreCase = true)
 
 // 动态列表（历史 / 热搜建议 / 站点 Tab）共用的 FocusRequester 池容量：
 // 站点总数一般十几个、热词一次 30 条左右，64 足够且不需要随内容重建 requester。

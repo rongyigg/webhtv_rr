@@ -359,6 +359,30 @@ private fun needsSpecialParse(vodId: String): Boolean =
     vodId.startsWith("msearch:", ignoreCase = true)
 
 /**
+ * 猫源 / 网盘聚合源在 `vod_play_url` 里塞的**动作指令**集数。
+ *
+ * 这类源把「📄 媒体信息 / 🔍 全局搜索 / ➕ 稍后再看 / ➖ 取消追剧」伪装成集数：
+ * ```
+ * 📄 媒体信息$msubinfo-db%3A36675942%7C小城良方#🔍 全局搜索$msubsearch-小城良方#...
+ * ```
+ * `Flag.setEpisodes()` 按第一个 `$` 拆成 `name=📄 媒体信息`、`url=msubinfo-db%3A...`，
+ * 于是 HeroUI 会把它当成普通集数渲染 —— 点下去必然起播失败。
+ *
+ * 本项目**没有**这套动作的分发器（`SiteApi.action` 只处理 `vod_tag=action` 的整条记录，
+ * 且 type=4 时把 action 当 URL 直接 GET），所以这里只做**识别**：
+ * 选集弹窗把它们灰显 + 提示「该线路仅用于元数据操作」，绝不把动作串送进起播。
+ */
+private val ACTION_EPISODE_NAMES = listOf("msubinfo", "msubsearch", "msubdel", "watchadd")
+
+/** 这条集数的地址是不是动作指令（`msubinfo-...`，兼容整串带前导 `$` 的写法）。 */
+private fun Episode.isActionCommand(): Boolean {
+    val raw = getUrl().trim()
+    if (raw.isEmpty()) return false
+    val value = raw.removePrefix("$")
+    return ACTION_EPISODE_NAMES.any { name -> value == name || value.startsWith("${name}-") }
+}
+
+/**
  * 传入的 [Vod] 是否已经自带可播放线路；顺手把「只有 urls、还没拆成 episodes」的线路补好。
  *
  * `Flag.setEpisodes("")` 会造出一条空地址剧集，所以只在 `urls` 非空时才补，
@@ -455,6 +479,24 @@ private fun HeroDetailScreen(
                 )
             } else {
                 Log.e(TAG_DETAIL, "【严重】未解析出任何线路，请检查请求 key 和 id 是否正确！")
+            }
+            // 【排查日志 3】动作指令集数：网盘聚合 / 猫源会把「媒体信息 / 全局搜索 / 稍后再看」
+            // 伪装成集数（`📄 媒体信息$msubinfo-...`）。本站没有这套动作的分发器，
+            // 它们会被灰显、点了只提示不起播 —— 这里先把「到底有几条」落成日志，
+            // 否则用户只会看到「点集数没反应」，分不清是解析失败还是本来就不可播。
+            val actionEpisodes = incoming.flags.flatMap { flag ->
+                flag.episodes.orEmpty().filter { it.isActionCommand() }
+            }
+            Log.e(
+                TAG_DETAIL,
+                "动作指令集数: count=${actionEpisodes.size}, " +
+                    "totalEpisodes=${incoming.flags.sumOf { it.episodes.orEmpty().size }}",
+            )
+            actionEpisodes.forEach { episode ->
+                Log.e(
+                    TAG_DETAIL,
+                    "  动作项: name=${episode.getName()} url=${episode.getUrl()}",
+                )
             }
             // 详情结果只来自本页的 `detailContent`（换源弹窗写的是 `search` 通道）。
             // 即使源站返回的 id 与请求 id 不完全一致，只要结果到了就必须接收：
@@ -1726,6 +1768,8 @@ private fun HeroPlayDialog(
                                     // 原版推荐文案：`desc + name`（TMDB 刮削后是「S01E02 标题」，普通源就是集名）。
                                     label = episode.getDisplayName(),
                                     playing = episode === playingEpisode,
+                                    // 动作指令（媒体信息 / 全局搜索 / 稍后再看 / 取消追剧）不是播放地址，灰显。
+                                    actionOnly = episode.isActionCommand(),
                                     requester = cellRequesters[index],
                                     onFocused = {
                                         anchorCell = index
@@ -1734,10 +1778,21 @@ private fun HeroPlayDialog(
                                         contentFocused = true
                                     },
                                     onConfirm = {
-                                        playingEpisode = episode
-                                        // 直接把真实 (线路, 集) 交给详情页，由它调用原版起播入口。
-                                        // TODO(接入历史库)：这里补 History.push，目前只负责起播。
-                                        onEpisodeSelected(currentFlag, episode)
+                                        // 【关键防线】动作指令绝不能进起播：本站没有这套动作的分发器，
+                                        // 送进 VideoActivity 只会拿 `msubinfo-...` 当 URL 请求，必然失败。
+                                        if (episode.isActionCommand()) {
+                                            Log.e(
+                                                TAG_DETAIL,
+                                                "动作集数不可播放: name=${episode.getName()} url=${episode.getUrl()} " +
+                                                    "flag=${currentFlag.getFlag()}",
+                                            )
+                                            Notify.show("该线路仅用于元数据操作")
+                                        } else {
+                                            playingEpisode = episode
+                                            // 直接把真实 (线路, 集) 交给详情页，由它调用原版起播入口。
+                                            // TODO(接入历史库)：这里补 History.push，目前只负责起播。
+                                            onEpisodeSelected(currentFlag, episode)
+                                        }
                                     },
                                 )
                             }
@@ -1930,6 +1985,8 @@ private fun HeroToggleButton(
 private fun HeroEpisodeCell(
     label: String,
     playing: Boolean,
+    // 动作指令集数（`msubinfo-...` 等）：不是播放地址，灰显 + 确定键只提示、不起播。
+    actionOnly: Boolean,
     requester: FocusRequester,
     onFocused: () -> Unit,
     onConfirm: () -> Unit,
@@ -1944,9 +2001,16 @@ private fun HeroEpisodeCell(
             .focusRequester(requester)
             .onFocusChanged { if (it.isFocused) onFocused() }
             .clip(EPISODE_CELL_SHAPE)
-            .background(if (isFocused) EPISODE_CELL_FOCUS_BACKGROUND else EPISODE_CELL_BACKGROUND)
+            .background(
+                when {
+                    // 动作项永远不亮焦点红块：它不能被误认为「可播放」。
+                    isFocused && !actionOnly -> EPISODE_CELL_FOCUS_BACKGROUND
+                    actionOnly -> EPISODE_CELL_ACTION_BACKGROUND
+                    else -> EPISODE_CELL_BACKGROUND
+                },
+            )
             .then(
-                if (isFocused) {
+                if (isFocused && !actionOnly) {
                     Modifier.border(EPISODE_CELL_BORDER, HeroAccentColor, EPISODE_CELL_SHAPE)
                 } else {
                     Modifier
@@ -1962,7 +2026,11 @@ private fun HeroEpisodeCell(
                 .padding(horizontal = EPISODE_CELL_H_PADDING)
                 // 超长剧集名不省略号硬截断，跑马灯滚动显示（adapter_episode.xml 的 marquee）。
                 .basicMarquee(iterations = Int.MAX_VALUE),
-            color = if (playing) HeroAccentColor else Color.White,
+            color = when {
+                actionOnly -> EPISODE_CELL_ACTION_TEXT
+                playing -> HeroAccentColor
+                else -> Color.White
+            },
             fontSize = EPISODE_CELL_SP.sp,
             maxLines = 1,
             softWrap = false,
@@ -2335,4 +2403,8 @@ private val EPISODE_CELL_BORDER = 2.dp
 private val EPISODE_CELL_H_PADDING = 8.dp
 private val EPISODE_CELL_BACKGROUND = Color(0x14FFFFFF)
 private val EPISODE_CELL_FOCUS_BACKGROUND = Color(0x1FFFFFFF)
+
+// 动作指令集数（`msubinfo-...` 等）专用：底色更暗、字更灰，和「可播放的集数」一眼分开。
+private val EPISODE_CELL_ACTION_BACKGROUND = Color(0x0AFFFFFF)
+private val EPISODE_CELL_ACTION_TEXT = Color(0x66FFFFFF)
 private const val EPISODE_CELL_SP = 16f
