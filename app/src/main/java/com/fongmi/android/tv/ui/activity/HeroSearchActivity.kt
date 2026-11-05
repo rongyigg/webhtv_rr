@@ -218,6 +218,10 @@ class HeroSearchActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // 【仅用于定位崩溃】先装全局兜底日志：任何线程的未捕获异常都会在
+        // `AndroidRuntime: FATAL EXCEPTION` 之前多打一条带完整堆栈的 `HeroSearch` 日志，
+        // `adb logcat | grep -E "AndroidRuntime|HeroSearch"` 就能直接看到崩溃行号。
+        installCrashLogger()
         window.setBackgroundDrawable(ColorDrawable(AndroidColor.BLACK))
         WindowCompat.setDecorFitsSystemWindows(window, false)
         WindowInsetsControllerCompat(window, window.decorView).apply {
@@ -243,6 +247,32 @@ class HeroSearchActivity : ComponentActivity() {
     companion object {
 
         private const val EXTRA_BACKDROP = "hero_backdrop"
+
+        // 全局 handler 只能装一次：Activity 每次重建都装会不断套娃，堆栈也会被反复包一层。
+        @Volatile
+        private var crashLoggerInstalled = false
+
+        /**
+         * 【仅用于定位崩溃】把未捕获异常原样记录到 logcat，再交回系统默认处理。
+         *
+         * 这里**不吞异常**：该崩还是崩，但 `AndroidRuntime` 之前一定先有一条
+         * `HeroSearch: 全局捕获到崩溃` 的完整堆栈，能直接看到崩溃行号与线程名。
+         * 确认崩溃修完后可以整段删掉，不影响任何业务逻辑。
+         */
+        private fun installCrashLogger() {
+            if (crashLoggerInstalled) return
+            crashLoggerInstalled = true
+            val previous = Thread.getDefaultUncaughtExceptionHandler()
+            Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
+                Log.e(
+                    TAG_SEARCH,
+                    "全局捕获到崩溃: thread=${thread.name} message=${throwable.message}",
+                    throwable,
+                )
+                // 交回系统默认处理：保持原有「崩了就崩」的行为，绝不留下半死进程。
+                previous?.uncaughtException(thread, throwable)
+            }
+        }
 
         /** 统一入口：首页顶栏「搜索」调用，并把首页当前那张大图一起带过来做磨砂背景。 */
         fun start(context: Context, backdropUrl: String? = null) {
@@ -492,11 +522,19 @@ private fun HeroSearchScreen(
             focusInput()
             return
         }
-        // 点胶囊时 keyword 还是旧值，必须先把输入框同步成新词。
-        if (field.text != value) setKeyword(value)
-        recordHistory(value)
-        searchKeyword = value
-        searchSerial++
+        // 【防崩溃 · 异步化】绝不能在按键 / 点击回调里同步改状态。
+        // 点热搜会在同一帧内改三处状态：`field`（hasInput false→true）、`history`、`searchKeyword`，
+        // 热搜区因此被销毁；而此刻遥控器按键事件仍在分发栈里，后续 KeyUp / 事件消费
+        // 一旦碰到已销毁的节点，就是在原生层崩，runCatching 完全兜不住。
+        // 先让本次事件彻底走完、UI 稳定下来，再改状态并交给 `LaunchedEffect(searchSerial)` 发请求。
+        scope.launch {
+            delay(SEARCH_CLICK_SETTLE_MS)
+            // 点胶囊时 keyword 还是旧值，必须先把输入框同步成新词。
+            if (field.text != value) setKeyword(value)
+            recordHistory(value)
+            searchKeyword = value
+            searchSerial++
+        }
     }
 
     /** 顶部放大镜 / 键盘搜索键：走同一个入口（兼容原有调用点）。 */
@@ -1163,10 +1201,12 @@ private fun HeroWordChip(
             .onPreviewKeyEvent { event ->
                 if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
                 when (event.key) {
-                    Key.DirectionCenter, Key.Enter -> {
-                        onClick()
-                        true
-                    }
+                    // 【关键】确定键 / Enter **不再在这里拦截**。
+                    // 点热搜会立刻改 field / history / hasInput，热搜区在同一帧被销毁；
+                    // 如果在 onPreviewKeyEvent 里同步调 onClick()，按键事件还在分发途中，
+                    // 后续的 KeyUp / 事件消费会打到已销毁的节点上（原生层直接崩，runCatching 兜不住）。
+                    // 交给下面的 `.clickable`：它内部完整处理 KeyDown + KeyUp + 消费，
+                    // 且回调走的是 Compose 的点击分发，不在按键分发栈里改状态。
 
                     // ←/→ 一律不拦截：交给 Compose 原生 2D 焦点搜索，
                     // 它会按几何位置自动把焦点交给键盘最右列（高度最接近的那一排）。
@@ -1441,10 +1481,8 @@ private fun HeroSiteTab(
             .onPreviewKeyEvent { event ->
                 if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
                 when (event.key) {
-                    Key.DirectionCenter, Key.Enter -> {
-                        onConfirm()
-                        true
-                    }
+                    // 确定键同样交给 `.clickable`（KeyDown + KeyUp 完整处理），
+                    // 避免在按键分发栈里同步改状态导致下方海报行内容替换时的事件悬空。
 
                     Key.DirectionUp -> {
                         onMoveUp()
@@ -1652,3 +1690,7 @@ private const val HOT_REFERER = "https://www.360kan.com/rank/general"
 
 // 建议词防抖：电视键盘逐字输入，250ms 内的连续按键只打一次接口。
 private const val SUGGEST_DEBOUNCE_MS = 250L
+
+// 点击胶囊（热搜 / 历史 / 建议）后到真正改状态之间的缓冲（毫秒）：
+// 让遥控器这次 KeyDown/KeyUp 彻底分发完，避免「改状态销毁节点」和「按键事件仍在分发」撞在同一帧。
+private const val SEARCH_CLICK_SETTLE_MS = 50L
