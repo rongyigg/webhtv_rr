@@ -36,6 +36,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -85,6 +86,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
@@ -94,7 +96,9 @@ import androidx.lifecycle.ViewModelProvider
 import coil3.ImageLoader
 import coil3.SingletonImageLoader
 import coil3.compose.AsyncImage
+import coil3.compose.SubcomposeAsyncImage
 import coil3.request.ImageRequest
+import coil3.request.crossfade
 import com.fongmi.android.tv.R
 import com.fongmi.android.tv.api.SiteApi
 import com.fongmi.android.tv.api.config.VodConfig
@@ -846,15 +850,15 @@ private fun HeroHomeScreen(
         if (!requestFocus(tabRequesters, target)) requestFocus(tabRequesters, 0)
     }
 
-    // → 海报行：从别的排切入时用默认参数 index = 0，永远落在最左侧的第一张。
+    // → 海报行：从别的排切入时用默认参数 index = 0，落在第一张（屏幕正中）。
     fun focusPoster(index: Int = 0) {
         // 真实数据可能为空（首次加载中 / 接口源返回空）：空列表时 `coerceIn(0, -1)` 会直接抛
         // IllegalArgumentException，所以必须先挡掉，焦点留在原地。
         if (posters.isEmpty()) return
         val target = index.coerceIn(0, posters.lastIndex)
-        // 靠左吸附：焦点在 index 0..3 时锚点恒为 0，列表不动，右侧露出第 8 张的边；
-        // 焦点到 index 4 及以后，锚点 = 焦点索引 → 被选中的卡正好停在 24dp 基准线上，
-        // 上一张被挤到 24dp 左侧、在屏幕最左缘出血露出一截。
+        // 【居中滚动】首尾 padding 已经是 (屏宽 - 卡片宽) / 2，`animateScrollToItem(target)`
+        // 会把第 target 张卡精确停在屏幕正中，不再需要任何「第 5 张开始推最左」的手工换算。
+        // index 0..3 仍锚定 0：这一段整行还没滚动，第一张本就居中，右侧自然露出后面的卡。
         val anchor = if (target >= POSTER_SCROLL_ANCHOR) target else 0
         if (requestFocus(posterRequesters, target)) {
             if (posterState.firstVisibleItemIndex == anchor && posterState.firstVisibleItemScrollOffset == 0) return
@@ -1222,7 +1226,8 @@ private fun HeroHomeScreen(
  * 底层背景大图（XML `heroBg`）。
  *
  * 用 [Crossfade] 让“海报焦点变化 → 背景切换”是交叉淡入淡出，而不是硬切；
- * 300ms 与左侧文字的 320ms 呼应：背景略慢半拍，注意力先落在文字上。
+ * 800ms 足够慢，换焦点时背景像「呼吸」一样过渡，不会闪白/闪黑；
+ * 左侧文字仍用 320ms，先落位，背景再慢慢跟上。
  */
 @Composable
 private fun HeroBackdrop(url: String) {
@@ -1233,7 +1238,8 @@ private fun HeroBackdrop(url: String) {
         modifier = Modifier.fillMaxSize(),
     ) { backdropUrl ->
         AsyncImage(
-            model = backdropUrl,
+            // 容器本身已经 800ms 交叉淡入，图片再叠 300ms 淡入，首帧不会先黑再显示。
+            model = rememberHeroImageModel(backdropUrl),
             contentDescription = null,
             contentScale = ContentScale.Crop,
             modifier = Modifier.fillMaxSize(),
@@ -1452,7 +1458,7 @@ private fun HeroTopBarItem(
  * 节点参数逐条对应：
  * - 容器：`layout_marginBottom=22dp`（L68）+ `paddingStart/End=24dp`（L69-70）。
  * - 剧名：32sp 粗体、固定高 36dp、`gravity=bottom`、阴影 #cc000000 dx2 dy2 radius12（L72-83）；
- *   有 TMDB 艺术字 Logo 时改用 L82-89 的 72dp 高 / 720dp 最宽 Logo 行。
+ *   有 TMDB 艺术字 Logo 时改用 L82-89 的 Logo 行（本工程放大到 96dp 高 / 720dp 最宽）。
  * - 元数据：14sp、#ccffffff、高 20dp、marginTop 2dp、阴影 #aa000000 1.5/1.5/8（L93-104）。
  * - 简介：12sp、#bbffffff、高 40dp、maxLines 2、lineSpacingExtra 3dp、
  *   外层横向 LinearLayout `weightSum=2` 而子项 `weight=1` → 宽度取一半（L105-125）。
@@ -1460,7 +1466,7 @@ private fun HeroTopBarItem(
  * 内容随海报焦点变化，用 [AnimatedContent] 做“淡入 + 轻微上滑 / 淡出 + 轻微上移”，
  * 320ms 比背景略快，文字先落位，避免整屏同时变化显得迟滞。
  *
- * `tmdbData` 只影响剧名行：有艺术字 Logo（`logoUrl`）时整行换成 Logo（高 72dp、最宽 720dp、
+ * `tmdbData` 只影响剧名行：有艺术字 Logo（`logoUrl`）时整行换成 Logo（高 96dp、最宽 720dp、
  * `ContentScale.Fit`、贴底左对齐）并隐藏文字；没有 Logo 时仍显示 32sp 文字，
  * 且**只有手动匹配**才允许覆盖剧名（自动匹配可能判错，见历史决策）。
  */
@@ -1485,9 +1491,15 @@ private fun HeroInfoArea(poster: HeroPoster, tmdbData: HeroTmdbData?) {
     ) { current ->
         val logoUrl = tmdbData?.logoUrl.orEmpty()
         val hasLogo = logoUrl.isNotBlank()
+        // 剧名文字兜底：只有**手动**匹配才覆盖剧名（自动匹配可能判错，名字改错比图糊更严重）。
+        val titleText = if (tmdbData?.manual == true) {
+            tmdbData.item.title.ifBlank { current.title }
+        } else {
+            current.title
+        }
         Column(modifier = Modifier.fillMaxWidth()) {
             // 剧名行（原版 `activity_home_v2.xml` L82-89 / `HomeActivityV2.D2(pos)`）：
-            // 有 TMDB 艺术字 Logo → 整行 72dp，只显示 Logo、隐藏 32sp 文字；
+            // 有 TMDB 艺术字 Logo → 整行 96dp（艺术字太小时眼睛要凑上去，96dp 才和元数据/简介比例协调）；
             // 没有 Logo → 保持 36dp 的 32sp 文字标题。两种状态不混排，各自固定高度。
             Box(
                 modifier = Modifier
@@ -1496,30 +1508,39 @@ private fun HeroInfoArea(poster: HeroPoster, tmdbData: HeroTmdbData?) {
                 contentAlignment = Alignment.BottomStart,
             ) {
                 if (hasLogo) {
-                    AsyncImage(
-                        model = logoUrl,
+                    // Subcompose：图没到之前 / 加载失败时，槽内继续渲染原本的 32sp 文字，
+                    // 视觉上就是「文字标题原位等图」，绝不出现一行空白再突然冒出艺术字。
+                    SubcomposeAsyncImage(
+                        model = rememberHeroImageModel(logoUrl),
                         contentDescription = current.title,
                         contentScale = ContentScale.Fit,
                         alignment = Alignment.BottomStart,
+                        // fillMaxWidth 是给 loading / error 槽里的文字留排版宽度：
+                        // Subcompose 在图片未到达时没有固有尺寸，只写 widthIn(max) 会缩成 0 宽，
+                        // 兜底文字一个字都看不见 —— 那正好又回到「先闪一下空白标题」。
                         modifier = Modifier
-                            .height(HERO_LOGO_HEIGHT)
-                            .widthIn(max = HERO_LOGO_MAX_WIDTH),
+                            .fillMaxHeight()
+                            .widthIn(max = HERO_LOGO_MAX_WIDTH)
+                            .fillMaxWidth(),
+                        loading = {
+                            Box(
+                                modifier = Modifier.fillMaxSize(),
+                                contentAlignment = Alignment.BottomStart,
+                            ) {
+                                HeroTitleText(titleText)
+                            }
+                        },
+                        error = {
+                            Box(
+                                modifier = Modifier.fillMaxSize(),
+                                contentAlignment = Alignment.BottomStart,
+                            ) {
+                                HeroTitleText(titleText)
+                            }
+                        },
                     )
                 } else {
-                    Text(
-                        // 只有**手动**匹配才覆盖剧名：自动匹配可能判错，名字改错比图糊更严重（历史决策）。
-                        text = if (tmdbData?.manual == true) {
-                            tmdbData.item.title.ifBlank { current.title }
-                        } else {
-                            current.title
-                        },
-                        color = Color.White,
-                        fontSize = HERO_TITLE_SP.sp,
-                        fontWeight = FontWeight.Bold,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        style = TextStyle(shadow = HERO_TITLE_SHADOW),
-                    )
+                    HeroTitleText(titleText)
                 }
             }
             Spacer(modifier = Modifier.height(HERO_META_TOP_GAP))
@@ -1555,6 +1576,25 @@ private fun HeroInfoArea(poster: HeroPoster, tmdbData: HeroTmdbData?) {
             )
         }
     }
+}
+
+/**
+ * 首页剧名的纯文字形态：32sp 粗体白字 + 阴影 + 单行省略。
+ *
+ * 抽成独立 composable 是为了让「没有 Logo」「Logo 加载中」「Logo 加载失败」三种情况
+ * 共用**逐字一致**的文字样式 —— 三处各写一遍迟早会漂移，加载完成瞬间字号跳一下就露馅。
+ */
+@Composable
+private fun HeroTitleText(text: String) {
+    Text(
+        text = text,
+        color = Color.White,
+        fontSize = HERO_TITLE_SP.sp,
+        fontWeight = FontWeight.Bold,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+        style = TextStyle(shadow = HERO_TITLE_SHADOW),
+    )
 }
 
 /**
@@ -1789,13 +1829,11 @@ private fun HeroTabChip(
  * 海报区（XML `posterArea`，L142-191）：整块固定高 215dp（L147），内部 recycler 同为 215dp（L156）。
  *
  * 卡片尺寸严格照抄 `ref_docs/adapter_vod_rect.xml`：120dp × 180dp、8dp 圆角、间距 12dp。
- * 列表**靠左吸附**，不做任何居中/对称换算：
- * - `contentPadding = (start 24dp, end 0dp)`，LazyRow 自身铺满整行且不加外层 padding，
- *   于是它的裁剪边界就是屏幕边缘 —— 等价于 Android 的 `clipToPadding=false`：
- *   静止时第一张卡正好压在 24dp 基准线上；滚动后卡片可以一路出血到 x = 0。
- * - 焦点在 index 0..3 时锚点恒为 0，列表不动，右侧自然露出第 8 张卡的边。
- * - 焦点到 index 4 及以后，锚点 = 焦点索引，被选中的卡正好停在 24dp 基准线上，
- *   上一张则被挤到 24dp 左侧、在屏幕最左缘露出一截（出血贴边）。
+ * 列表**居中吸附**：
+ * - 首尾留白 = `(屏幕宽 - 卡片宽) / 2`，第一张卡静止时正好压在屏幕正中；
+ *   滚到第 N 张时 `animateScrollToItem(N)` 也把它停在正中（LazyRow 的 item 起点 = 起始 padding）。
+ * - 最后一张卡同理可以滚到正中，不会再卡在左边、露出半屏黑边。
+ * - 留白按**未缩放**的 [POSTER_CARD_WIDTH] 算：焦点态 1.1 倍放大是绘制层缩放，不占布局宽度。
  */
 @Composable
 private fun PosterArea(
@@ -1811,13 +1849,18 @@ private fun PosterArea(
     onMoveLeft: (Int) -> Unit,
     onMoveRight: (Int) -> Unit,
 ) {
+    // 屏幕宽度决定首尾留白：让第一张 / 最后一张都能滚到屏幕正中。
+    // 不能写死 24dp —— 列表必须左右各留 (屏宽 - 卡片宽) / 2，
+    // `animateScrollToItem(target)` 才会把目标卡停在正中（而不是贴左）。
+    val screenWidth = LocalConfiguration.current.screenWidthDp.dp
+    val horizontalPadding = ((screenWidth - POSTER_CARD_WIDTH) / 2).coerceAtLeast(HERO_PADDING)
     LazyRow(
         state = state,
         // 铺满整行、无外层 padding：LazyRow 的裁剪边界 = 屏幕边缘（Compose 等价于 clipToPadding=false）。
         modifier = Modifier
             .fillMaxWidth()
             .height(POSTER_AREA_HEIGHT),
-        contentPadding = PaddingValues(start = HERO_PADDING, end = 0.dp),
+        contentPadding = PaddingValues(start = horizontalPadding, end = horizontalPadding),
         horizontalArrangement = Arrangement.spacedBy(POSTER_GAP),
     ) {
         itemsIndexed(items = posters, key = { _, poster -> poster.id }) { index, poster ->
@@ -1898,9 +1941,12 @@ private fun PosterCard(
     // 触发后还要先把状态复位（否则弹窗抢走 KeyUp 就永远停在「按着」），时序很难保证。
     // Job 是唯一可靠的取消句柄：KeyUp / 失焦 / 离开组合都能精确取消。
     val scope = rememberCoroutineScope()
+    // 海报请求带上统一淡入：左右换焦点时旧图淡出、新图淡入，不再硬切。
+    val posterModel = rememberHeroImageModel(poster.url)
     var longPressJob by remember { mutableStateOf<Job?>(null) }
     // 这一次按下是否已经被长按消费：KeyUp 时据此决定「不再触发点击」，并且必须消费掉 KeyUp。
-    // 只在下次 `repeatCount == 0` 的 KeyDown 复位 —— 弹窗会抢走 KeyUp，不能指望它来复位。
+    // 真正的解锁交给 `onPreviewKeyEvent` 最前面的长按锁（只认 KeyUp）；
+    // 下面 KeyDown 里的复位只是兜底，锁生效时根本走不到那里。
     var isLongPressTriggered by remember { mutableStateOf(false) }
     var downLongPressJob by remember { mutableStateOf<Job?>(null) }
     var isDownLongPressTriggered by remember { mutableStateOf(false) }
@@ -1931,6 +1977,14 @@ private fun PosterCard(
                 }
             }
             .onPreviewKeyEvent { event ->
+                // 【长按锁】长按一旦被消费，后续所有事件（系统重复 KeyDown、迟到的 KeyUp、
+                // 甚至方向键）全部吃掉，只有松开按键（KeyUp）才解锁。
+                // 不加这道锁时，长按呼出弹窗后残留的按键会漏到底层：弹窗下面又打开一次详情页，
+                // 或者列表被继续滚动 —— 用户看到的就是「按一下弹了两个界面」。
+                if (isLongPressTriggered) {
+                    if (event.type == KeyEventType.KeyUp) isLongPressTriggered = false
+                    return@onPreviewKeyEvent true
+                }
                 // 确定键 / 回车完全由卡片接管（见下方 when 的前两个分支），
                 // 这样「短按 = 进详情、长按 ≥ 1s = 呼出换源弹窗」才不会和 clickable 冲突。
                 when (event.key) {
@@ -2029,7 +2083,7 @@ private fun PosterCard(
                 .then(if (borderStroke != null) Modifier.border(borderStroke, POSTER_SHAPE) else Modifier),
         ) {
             AsyncImage(
-                model = poster.url,
+                model = posterModel,
                 contentDescription = poster.title,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize(),
@@ -2077,7 +2131,7 @@ private const val HERO_PRELOAD_RANGE = 3
 private const val HERO_POSTER_PRELOAD_WIDTH = 360
 private const val HERO_BACKDROP_PRELOAD_WIDTH = 960
 
-/** 艺术字 Logo 的预热解码宽度：展示上限是 720dp 宽 / 72dp 高，2x 屏按 800px 解码足够，不影响磁盘缓存里原始字节。 */
+/** 艺术字 Logo 的预热解码宽度：展示上限是 720dp 宽 / 96dp 高，2x 屏按 800px 解码足够，不影响磁盘缓存里原始字节。 */
 private const val HERO_LOGO_PRELOAD_WIDTH = 800
 
 /**
@@ -2291,9 +2345,30 @@ private fun enqueuePreload(loader: ImageLoader, context: Context, url: String, w
     loader.enqueue(
         ImageRequest.Builder(context)
             .data(url)
+            .crossfade(HERO_IMAGE_CROSSFADE_MS)
             .size(width)
             .build()
     )
+}
+
+/**
+ * 统一的图片请求：首页 / 详情页所有 `AsyncImage` / `SubcomposeAsyncImage` 都从这里拿 model。
+ *
+ * - 固定 [HERO_IMAGE_CROSSFADE_MS] 淡入：首载、换图、预热命中都不会硬切；
+ * - `remember(context, url)`：同一个 URL 重组时复用同一个请求，Coil 才能命中内存 / 磁盘缓存，
+ *   否则每帧新建 ImageRequest 会被当成新请求重新读一遍；
+ * - `internal`：详情页（同包）的背景 / 海报 / 演员头像复用同一份实现，
+ *   保证与首页预热**参数逐字一致**，点进详情时图片已经在缓存里。
+ */
+@Composable
+internal fun rememberHeroImageModel(url: String): ImageRequest {
+    val context = LocalContext.current
+    return remember(context, url) {
+        ImageRequest.Builder(context)
+            .data(url)
+            .crossfade(HERO_IMAGE_CROSSFADE_MS)
+            .build()
+    }
 }
 
 /**
@@ -2391,9 +2466,10 @@ private val TOP_BAR_ITEM_SPACING = 40.dp    // navRecycler 项间距（放大字
 // ---------------------------------------------------------------------------
 private val HERO_INFO_BOTTOM_GAP = 22.dp    // L68 layout_marginBottom
 private val HERO_TITLE_HEIGHT = 36.dp       // L79 layout_height
-// 艺术字 Logo：原版 `activity_home_v2.xml` L82-89 —— 高 72dp、最宽 720dp、贴底左对齐、Fit 等比。
-// 没有 Logo 时剧名行回落到文字高度 36dp，不能把文字行也撑到 72dp（会把元数据/简介整体下推）。
-private val HERO_LOGO_HEIGHT = 72.dp
+// 艺术字 Logo：原版 `activity_home_v2.xml` L82-89 是 72dp，本工程按需求放大到 96dp ——
+// 电视 3 米外 72dp 的艺术字笔画会糊在一起，96dp 才和 32sp 标题、元数据行形成正常层级。
+// 没有 Logo 时剧名行回落到文字高度 36dp，不能把文字行也撑到 96dp（会把元数据/简介整体下推）。
+private val HERO_LOGO_HEIGHT = 96.dp
 private val HERO_LOGO_MAX_WIDTH = 720.dp
 private const val HERO_TITLE_SP = 32f       // L72 textSize
 private val HERO_META_TOP_GAP = 2.dp        // L100 layout_marginTop
@@ -2403,8 +2479,10 @@ private val HERO_DESC_TOP_GAP = 4.dp        // L109 layout_marginTop
 private val HERO_DESC_HEIGHT = 40.dp        // L118 layout_height
 private const val HERO_DESC_SP = 12f        // L112 textSize
 private const val HERO_DESC_WIDTH_FRACTION = 0.5f // L110 weightSum=2 + L124 weight=1
-private const val HERO_BACKDROP_FADE_MS = 300
+private const val HERO_BACKDROP_FADE_MS = 800
 private const val HERO_INFO_FADE_MS = 320
+/** 所有 Coil 请求的统一淡入时长：图片从透明淡到不透明，换图 / 首载都不会「啪」地硬切。 */
+private const val HERO_IMAGE_CROSSFADE_MS = 300
 
 // 简介 lineSpacingExtra=3dp（L125）。Android 的 12sp 默认行高 ≈ 14sp，加 3dp → 17sp。
 private const val HERO_DESC_LINE_HEIGHT_SP = 17f
@@ -2458,7 +2536,8 @@ private val POSTER_CARD_WIDTH = 120.dp
 private val POSTER_CARD_HEIGHT = 180.dp
 private val POSTER_GAP = 12.dp
 
-// 焦点进入第 5 张（index = 4）起，被选中的卡靠左吸附到 24dp 基准线；index 0..3 一律停在行首。
+// 焦点进入第 5 张（index = 4）起，用 `animateScrollToItem(target)` 把目标卡滚到屏幕正中
+// （首尾 padding 已按 (屏宽 - 卡片宽) / 2 配好）；index 0..3 一律停在行首，避免刚进海报行就整排乱动。
 private const val POSTER_SCROLL_ANCHOR = 4
 
 // 参考 ref_docs/VodRectPresenter.java 第 39-41 行：原实现 hasFocus() ? 1.08f : 1.0f；本项目按定稿取 1.1。

@@ -127,6 +127,13 @@ internal fun KeyboardSection(
      * 调用方需要在自己的 `onKeyMove` 里跳过 [HOUSE_KEY_INDEX]。
      */
     hideHouseKey: Boolean = false,
+    /**
+     * 输入框行下方的可选插槽（TMDB 手动匹配用来放联想词胶囊）。
+     *
+     * 默认 `null` → 搜索页完全不变；弹窗传入时插在输入框与键盘之间。插槽处在本函数的
+     * 缩放子树内 —— 调用方看到的 dp/sp 都是缩放前的布局值，与键盘按键同一坐标系。
+     */
+    belowInput: (@Composable () -> Unit)? = null,
 ) {
     Column(
         // 宽度完全由内容撑开（最宽的是键盘 7×40 + 6×8 = 328dp），绝不写死、绝不拉伸。
@@ -153,6 +160,11 @@ internal fun KeyboardSection(
                 onMoveDown = onSearchDown,
                 onMoveLeft = onSearchLeft,
             )
+        }
+
+        // 输入框行下方的可选插槽。为空时（搜索页）不产生任何布局节点，间距也不会多出来。
+        if (belowInput != null) {
+            belowInput()
         }
 
         // 键盘：6 行 × 7 列 = 42 格，每格 40dp 写死，行/列间距 8dp（SpaceItemDecoration(7, 8)）。

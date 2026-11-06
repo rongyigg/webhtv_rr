@@ -1555,7 +1555,8 @@ private fun HeroDetailTitle(detail: HeroDetail) {
     val logo = detail.logoUrl
     if (!logo.isNullOrBlank()) {
         AsyncImage(
-            model = logo,
+            // 与首页共用同一份请求参数（含 300ms 淡入），首页预热过的艺术字这里直接命中磁盘缓存。
+            model = rememberHeroImageModel(logo),
             contentDescription = detail.title,
             contentScale = ContentScale.Fit,
             // 等比缩放后仍靠左，避免窄 Logo 在 720dp 的盒子里居中。
@@ -1587,8 +1588,8 @@ private fun HeroDetailTitle(detail: HeroDetail) {
     }
 }
 
-/** 背景切换时长（毫秒）：与首页一致，300ms 交叉淡入淡出，首帧 → TMDB 横图不会硬切。 */
-private const val DETAIL_BACKDROP_FADE_MS = 300
+/** 背景切换时长（毫秒）：800ms 与首页一致，首帧 → TMDB 横图是缓慢交叉淡化，不会硬切。 */
+private const val DETAIL_BACKDROP_FADE_MS = 800
 
 /**
  * 全屏背景大图。
@@ -1606,7 +1607,7 @@ private fun HeroDetailBackdrop(url: String) {
         modifier = Modifier.fillMaxSize(),
     ) { backdropUrl ->
         AsyncImage(
-            model = backdropUrl,
+            model = rememberHeroImageModel(backdropUrl),
             contentDescription = null,
             contentScale = ContentScale.Crop,
             modifier = Modifier.fillMaxSize(),
@@ -1670,7 +1671,7 @@ private fun HeroDetailPoster(url: String, modifier: Modifier = Modifier) {
             .padding(POSTER_INNER_PADDING),
     ) {
         AsyncImage(
-            model = url,
+            model = rememberHeroImageModel(url),
             contentDescription = null,
             contentScale = ContentScale.Crop,
             modifier = Modifier.fillMaxSize(),
@@ -1780,7 +1781,7 @@ private fun HeroCastItem(
                 ),
         ) {
             AsyncImage(
-                model = cast.avatarUrl,
+                model = rememberHeroImageModel(cast.avatarUrl),
                 contentDescription = cast.name,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize(),
@@ -1838,7 +1839,7 @@ private fun HeroActorDialog(actor: HeroCast, onDismiss: () -> Unit) {
         HeroDialogShell(modifier = Modifier.fillMaxWidth(ACTOR_DIALOG_WIDTH_FRACTION)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 AsyncImage(
-                    model = actor.avatarUrl,
+                    model = rememberHeroImageModel(actor.avatarUrl),
                     contentDescription = null,
                     contentScale = ContentScale.Crop,
                     modifier = Modifier

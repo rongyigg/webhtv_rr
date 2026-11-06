@@ -3,6 +3,10 @@ package com.fongmi.android.tv.ui.hero
 import android.util.Log
 import android.view.KeyEvent
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -33,8 +37,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.TextRange
@@ -65,16 +74,15 @@ import kotlinx.coroutines.withContext
  * LinearLayout(padding 18dp, wrap_content)                       // = [HeroDialogShell]
  * ├─ Row(height 24dp, marginBottom 12dp)                         // L7-45：顶部行
  * │    ├─ TextView 11sp bold 白 + 4dp 圆角徽标 + paddingH 10dp    // L13-24 tmdbBadge
- * │    ├─ (suggestion：第一段不做联想，占位)                       // L25-34
- * │    └─ (seasonTag：原版默认 gone，第一段隐藏)                   // L35-44
+ * │    └─ (seasonTag：原版默认 gone，暂未启用)                     // L35-44
  * └─ Row                                                         // L46-159
- *      ├─ Column(键盘 328dp = 7×40 + 6×8)                         // L50-99：输入行 40 + 键盘
+ *      ├─ Column(键盘 328dp = 7×40 + 6×8)                         // L50-99：输入行 + 联想词 + 键盘
  *      └─ Column(weight 1f, marginStart 18dp)                     // L100-158：结果标题 + 结果区
  *           ├─ Row：3×14dp 红条 + 13sp 标题 + 11sp 计数            // L106-130
  *           └─ Box(height = 卡高 214dp)：空态文案 / LazyRow        // L131-157
  * ```
  *
- * 三条硬约束：
+ * 四条硬约束：
  * 1. **结果卡只允许用全局唯一组件 [HeroPosterCard]**（120×214dp、四角 8dp 全圆、
  *    2dp 纯红焦点框只包 120×180 海报、34dp 剧名栏）。`AndroidView` 里**绝不加任何尺寸 Modifier**，
  *    容器高度直接取 [HeroPosterCard.CARD_HEIGHT_DP]，否则会把 34dp 剧名栏裁掉。
@@ -87,9 +95,12 @@ import kotlinx.coroutines.withContext
  * 3. **真实网络搜索**：放大镜按钮 / 打开弹窗都走 `TmdbMatcher.search(keyword, vod)`，与首页、
  *    详情页自动匹配共用同一套「清理剧名 + 按标题相似度 / 年份 / 语区 / 评分排序」规则；
  *    不再有任何本地假数据。没配 Key 时不发请求，直接提示先配置 TMDB。
+ * 4. **联想词**：输入框正下方展示 `cleanVideoName` 清洗出的剧名变体（点一下直接搜）；
+ *    复用 [KeyboardSection] 新增的 `belowInput` 插槽，搜索页不传该参数，布局完全不变。
  *
  * 焦点契约：
- * - 进弹窗 → 输入框；输入框 / 放大镜 ↓ → 键盘第一行；
+ * - 进弹窗 → 输入框；输入框 ↓ → 联想词第一颗（有联想词时）/ 键盘第一行（无联想词）；
+ * - 联想词 ↑ → 输入框、↓ → 键盘第一行，←/→ 在胶囊行内横移；
  * - 键盘最后一行 ↓ → 结果区第一张卡；结果卡 ↑ → 键盘第一行；
  * - **结果卡 ← 到第一张再往左 → 放大镜**（否则焦点会卡在第一张卡上出不来）；
  * - 键盘最右列 → 不消费（交原生 2D 焦点搜索）；返回键 → 关闭弹窗，焦点由首页还回长按的那张卡。
@@ -113,10 +124,16 @@ internal fun TmdbMatchDialog(
     // `searching`：请求在途（显示「搜索中」而不是「未找到」）；`needKey`：没配 Key 的专用提示。
     var searching by remember { mutableStateOf(false) }
     var needKey by remember { mutableStateOf(false) }
+    // 联想词（原版 `TmdbMatchDialog.k0()`）：`cleanVideoName` 清洗后的剧名变体，输入框下方横向胶囊。
+    var suggestions by remember { mutableStateOf<List<String>>(emptyList()) }
+    // 只用来跑 `cleanVideoName` 的纯正则清洗（去季集 / 清晰度 / 压制标记），不持有任何网络状态。
+    val matcher = remember { TmdbMatcher(TmdbService(), TmdbConfig.effectiveCurrent()) }
 
     val inputRequester = remember { FocusRequester() }
     val searchRequester = remember { FocusRequester() }
     val keyRequesters = remember { List(HERO_KEYS.size) { FocusRequester() } }
+    // 联想词胶囊同样需要可编程焦点：输入框 ↓ 先落到第一颗胶囊，胶囊 ↓ 再进键盘。
+    val suggestionRequesters = remember { List(TMDB_SUGGESTION_LIMIT) { FocusRequester() } }
     // 结果卡是 Android View，Compose 的 FocusRequester 摸不到它，
     // 用登记表做「下标 → View」的焦点交接，卡片自带的 2dp 红描边才会亮。
     val resultRegistry = remember { HeroPosterViewRegistry() }
@@ -170,6 +187,36 @@ internal fun TmdbMatchDialog(
     fun moveCaret(delta: Int) {
         val caret = (field.selection.start + delta).coerceIn(0, field.text.length)
         field = field.copy(selection = TextRange(caret))
+    }
+
+    /**
+     * 生成联想词（原版 `TmdbMatchDialog.k0()` 的等价物）。
+     *
+     * 三个来源，按优先级排列并去重：
+     * 1. 用户原样输入 —— 有时候源站名就是 TMDB 官方名，清洗反而会改坏它；
+     * 2. [TmdbMatcher.cleanVideoName] 清洗结果 —— 去掉 `S01E03` / `4K` / `国语版` / 压制标记；
+     * 3. 再砍掉尾部「第 N 季 / S2 / Season 2」的更短变体 —— 覆盖「庆余年 第二季」这类命名。
+     *
+     * 纯正则、零网络：输入每变一次都重算是毫秒级开销，不做防抖。
+     */
+    fun generateSuggestions(keyword: String) {
+        val raw = keyword.trim()
+        if (raw.isEmpty()) {
+            suggestions = emptyList()
+            return
+        }
+        val cleaned = matcher.cleanVideoName(raw)
+        val trimmed = TMDB_SUGGESTION_SEASON_TAIL.replace(cleaned, "").trim()
+        suggestions = listOf(raw, cleaned, trimmed)
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+            .distinctBy { it.lowercase() }
+            .take(TMDB_SUGGESTION_LIMIT)
+    }
+
+    // 输入框文字一变就刷新联想词：键盘按键、退格、粘贴全走同一个状态，不用逐处手调。
+    LaunchedEffect(field.text) {
+        generateSuggestions(field.text)
     }
 
     /**
@@ -349,7 +396,15 @@ internal fun TmdbMatchDialog(
                             inputRequester = inputRequester,
                             searchRequester = searchRequester,
                             keyRequesters = keyRequesters,
-                            onInputDown = { focusKeyboard(FIRST_KEY_INDEX) },
+                            onInputDown = {
+                                // 联想词就在输入框正下方：有联想词时 ↓ 先落第一颗胶囊，
+                                // 胶囊里再 ↓ 才进键盘；没有联想词保持原行为（直接进键盘第一行）。
+                                if (suggestions.isNotEmpty()) {
+                                    requestFocus(suggestionRequesters, 0)
+                                } else {
+                                    focusKeyboard(FIRST_KEY_INDEX)
+                                }
+                            },
                             onSearch = { applyFilter() },
                             onSearchDown = { focusKeyboard(FIRST_KEY_INDEX) },
                             onSearchLeft = { focusInput() },
@@ -357,6 +412,25 @@ internal fun TmdbMatchDialog(
                             onKeyMove = { index, key -> onKeyMove(index, key) },
                             // 弹窗没有换源侧边栏，小房子键点了没反应，直接隐藏（索引 5 变空槽）。
                             hideHouseKey = true,
+                            // 输入框正下方：联想词胶囊。点击写入输入框并立刻真实搜索。
+                            // 空列表时插槽不产生任何节点，弹窗高度与没有联想词时一致。
+                            belowInput = {
+                                if (suggestions.isNotEmpty()) {
+                                    TmdbSuggestionRow(
+                                        suggestions = suggestions,
+                                        requesters = suggestionRequesters,
+                                        onMoveUp = { focusInput() },
+                                        onMoveDown = { focusKeyboard(FIRST_KEY_INDEX) },
+                                        onPick = { suggestion ->
+                                            field = TextFieldValue(
+                                                text = suggestion,
+                                                selection = TextRange(suggestion.length),
+                                            )
+                                            applyFilter()
+                                        },
+                                    )
+                                }
+                            },
                         )
                     }
                 }
@@ -501,6 +575,97 @@ internal fun TmdbMatchDialog(
 }
 
 /**
+ * 输入框下方的联想词胶囊行。
+ *
+ * 处在键盘的 [TMDB_KEYBOARD_SCALE] 缩放子树里，所以这里的尺寸都是**缩放前**的布局值：
+ * 行宽 328dp 与键盘同宽（缩放后 217dp），字号 18 → 视觉约 12sp，和结果卡标题同档。
+ * 行高固定，避免联想词出现 / 消失时把下面 6 行键盘整体推动。
+ */
+@Composable
+private fun TmdbSuggestionRow(
+    suggestions: List<String>,
+    requesters: List<FocusRequester>,
+    onMoveUp: () -> Unit,
+    onMoveDown: () -> Unit,
+    onPick: (String) -> Unit,
+) {
+    LazyRow(
+        modifier = Modifier
+            .width(TMDB_SUGGESTION_ROW_WIDTH)
+            .height(TMDB_SUGGESTION_ROW_HEIGHT),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(TMDB_SUGGESTION_GAP),
+        // 2dp 边距给焦点红框留出绘制位置，否则第一颗胶囊的框会被行边界裁掉一条。
+        contentPadding = PaddingValues(horizontal = TMDB_SUGGESTION_EDGE_PADDING),
+    ) {
+        itemsIndexed(items = suggestions) { index, suggestion ->
+            TmdbSuggestionChip(
+                text = suggestion,
+                requester = requesters.getOrNull(index),
+                onMoveUp = onMoveUp,
+                onMoveDown = onMoveDown,
+                onPick = { onPick(suggestion) },
+            )
+        }
+    }
+}
+
+/** 单颗联想词胶囊：半透明白底 + 焦点红框，点击直接写入输入框并触发搜索。 */
+@Composable
+private fun TmdbSuggestionChip(
+    text: String,
+    requester: FocusRequester?,
+    onMoveUp: () -> Unit,
+    onMoveDown: () -> Unit,
+    onPick: () -> Unit,
+) {
+    val interaction = remember { MutableInteractionSource() }
+    val focused by interaction.collectIsFocusedAsState()
+    Text(
+        text = text,
+        color = Color.White,
+        fontSize = TMDB_SUGGESTION_SP.sp,
+        maxLines = 1,
+        modifier = Modifier
+            .clip(TMDB_SUGGESTION_SHAPE)
+            .background(
+                if (focused) TMDB_SUGGESTION_BACKGROUND_FOCUSED else TMDB_SUGGESTION_BACKGROUND,
+            )
+            .then(
+                if (focused) {
+                    Modifier.border(TMDB_SUGGESTION_FOCUS_BORDER, ACCENT_RED, TMDB_SUGGESTION_SHAPE)
+                } else {
+                    Modifier
+                },
+            )
+            // ↑ 回输入框、↓ 进键盘第一行：胶囊夹在两者之间，必须自己把焦点交接出去，
+            // 否则原生 2D 搜索会跳过这一行，遥控器永远选不中联想词。
+            .onPreviewKeyEvent { event ->
+                if (event.type != KeyEventType.KeyDown) {
+                    false
+                } else {
+                    when (event.key) {
+                        Key.DirectionUp -> {
+                            onMoveUp()
+                            true
+                        }
+
+                        Key.DirectionDown -> {
+                            onMoveDown()
+                            true
+                        }
+
+                        else -> false
+                    }
+                }
+            }
+            .then(if (requester != null) Modifier.focusRequester(requester) else Modifier)
+            .clickable(interactionSource = interaction, indication = null, onClick = onPick)
+            .padding(horizontal = TMDB_SUGGESTION_PADDING_H, vertical = TMDB_SUGGESTION_PADDING_V),
+    )
+}
+
+/**
  * 结果卡右下角的年份：真实 [TmdbItem.subtitle] 形如「电影 · 2014-05-23 · 评分 7.8」，
  * 只取第一个 4 位年份；没有日期（未上映 / 未定档）时留空，卡片自动不显示这枚标签。
  */
@@ -514,6 +679,16 @@ private const val TAG_TMDB_DIALOG = "HeroTmdbMatch"
 
 /** TMDB `media_type` 里的剧集标识（其余一律按电影处理）。 */
 private const val TMDB_MEDIA_TV = "tv"
+
+/**
+ * 联想词「尾部季集标记」：从清洗后的名字里再砍掉 `第 2 季 / S02 / Season 2` 及其后内容，
+ * 得到更短、更容易命中 TMDB 的片名。纯正则，匹配不到时原样返回。
+ */
+private val TMDB_SUGGESTION_SEASON_TAIL =
+    Regex("""(?i)\s*(?:第\s*[0-9一二三四五六七八九十百零〇两]+\s*[季部集]|S\d{1,2}|Season\s*\d{1,2}).*$""")
+
+/** 最多展示几个联想词：电视上横向一排看得到 3~4 个，再多只能靠方向键滚，价值不大。 */
+private const val TMDB_SUGGESTION_LIMIT = 6
 
 // ---------------------------------------------------------------------------
 // 尺寸 / 颜色常量（逐条对应逆向 XML 或本工程既有常量，没有一条是目测调出来的）
@@ -583,3 +758,22 @@ private val TMDB_RESULT_BOX_HEIGHT = HeroPosterCard.CARD_HEIGHT_DP.dp
 /** 结果行左右内边距 2dp（L153-154）；卡间距 12dp（与本工程其它海报行一致）。 */
 private val TMDB_RESULT_PADDING_H = 2.dp
 private val TMDB_RESULT_ITEM_SPACING = 12.dp
+
+/**
+ * 联想词胶囊的尺寸（**缩放前**的布局值）。
+ *
+ * 它渲染在 `TMDB_KEYBOARD_SCALE = 0.66` 的子树里：行宽 328 → 物理 217dp（与键盘同宽），
+ * 行高 44 → 物理 29dp，字号 18 → 视觉 12sp，和结果卡标题 / 缩小后的键帽同一档。
+ * 直接写 12sp / 29dp 会被再乘 0.66，字小到看不清 —— 这是原版没有的控件，必须自己定标。
+ */
+private val TMDB_SUGGESTION_ROW_WIDTH = 328.dp
+private val TMDB_SUGGESTION_ROW_HEIGHT = 44.dp
+private val TMDB_SUGGESTION_GAP = 10.dp
+private val TMDB_SUGGESTION_EDGE_PADDING = 2.dp
+private val TMDB_SUGGESTION_SHAPE = RoundedCornerShape(22.dp)
+private val TMDB_SUGGESTION_BACKGROUND = Color(0x33FFFFFF)
+private val TMDB_SUGGESTION_BACKGROUND_FOCUSED = Color(0x66FFFFFF)
+private val TMDB_SUGGESTION_FOCUS_BORDER = 2.dp
+private const val TMDB_SUGGESTION_SP = 18f
+private val TMDB_SUGGESTION_PADDING_H = 16.dp
+private val TMDB_SUGGESTION_PADDING_V = 8.dp
