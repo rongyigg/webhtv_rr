@@ -139,8 +139,8 @@ import kotlinx.coroutines.withContext
  *
  * 主页面（从下往上）：
  * 1. [HeroDetailBackdrop]：全屏背景大图。
- * 2. [HeroDetailMaskHorizontal]：左侧纯黑 → 右侧透明的横向遮罩（`bg_hero_mask_h`）。
- * 3. [HeroDetailMaskVertical]：底部纯黑 → 顶部透明的纵向遮罩（`bg_hero_mask_v`）。
+ * 2. [HeroDetailMaskHorizontal]：左侧 0.85 黑 → 35% 处完全透明（`bg_hero_mask_h`，与首页同参数）。
+ * 3. [HeroDetailMaskVertical]：上 55% 全透明，底部渐到 0.9 黑（`bg_hero_mask_v`，与首页同参数）。
  * 4. 右上角浮动小海报 150dp × 210dp、marginTop 72dp、marginEnd 80dp、内边距 4dp。
  * 5. 左下内容区（整体贴底、paddingBottom 32dp）：剧名/Logo → 元数据 → 简介 → 按钮组 → **演职员行**。
  *    线路与选集已整体移出主页面，收进 [HeroPlayDialog]。
@@ -378,6 +378,9 @@ class HeroDetailActivity : ComponentActivity() {
         val extraBackdrop = intent.getStringExtra(EXTRA_BACKDROP).orEmpty()
         // 只有「确实和竖图不同」才算横图：同值时仍按源站图处理，行为与改动前完全一致。
         val wideBackdrop = extraBackdrop.isNotBlank() && extraBackdrop != pic
+        // 首页信息区此刻显示的 TMDB 艺术字 / 简介：一起直出，避免进来先闪一下文字标题与源站简介。
+        val extraLogo = intent.getStringExtra(EXTRA_LOGO).orEmpty()
+        val extraOverview = intent.getStringExtra(EXTRA_OVERVIEW).orEmpty()
         // 元数据：年份 · 地区 · 分类 · 备注 · 接口源，空字段自动省略，不留多余的 `·`。
         val meta = listOf(
             intent.getStringExtra(EXTRA_YEAR).orEmpty(),
@@ -389,12 +392,24 @@ class HeroDetailActivity : ComponentActivity() {
         return DEMO_DETAIL.copy(
             title = title,
             meta = meta.ifBlank { DEMO_DETAIL.meta },
-            synopsis = intent.getStringExtra(EXTRA_CONTENT).orEmpty().ifBlank { DEMO_DETAIL.synopsis },
+            // 简介优先级：首页预取的 TMDB 译文 → Intent 里的源站简介 → 离线假数据。
+            synopsis = extraOverview
+                .ifBlank { intent.getStringExtra(EXTRA_CONTENT).orEmpty() }
+                .ifBlank { DEMO_DETAIL.synopsis },
             posterUrl = pic,
             // 详情接口只给竖版图：有首页预取的横图就用横图，否则仍用竖图裁 16:9（改动前行为）。
             backdropUrl = if (wideBackdrop) extraBackdrop else pic,
+            // 首帧直接出艺术字：有 Logo 时 `HeroDetailTitle` 走 72dp Logo，否则回落 32sp 文字。
+            logoUrl = extraLogo.takeIf { it.isNotBlank() },
+            // 【关键·不闪小图】首帧就已经是横图时直接判定「有背景大图」：
+            // 否则右上角小海报会先渲染出来、等 TMDB Ready 才消失，正好点进详情时闪一下。
+            // 注意判 `wideBackdrop` 而不是 `extraBackdrop != null`：`start()` 永远会 put 这个 extra，
+            // 空串时它非 null 但不是横图，用 null 判断会把「竖图兜底」也误判成大图。
+            hasTmdbBackdrop = wideBackdrop,
             // 横图标记：`mergeDetail` 据此拒绝用竖图覆盖，`mergeTmdb` 据此保留更高清的档位。
             hasWideBackdrop = wideBackdrop,
+            // 首帧简介已经是 TMDB 译文时，`mergeDetail` 不要再用源站 `vod.content` 盖掉它。
+            hasTmdbOverview = extraOverview.isNotBlank(),
             // 真实条目清空假演员：TMDB 未配置 / 未命中时演员行为空（UI 整行隐藏），
             // 不会出现「真数据 + 10 位假演员」混排；旧 adb 入口走上面的 DEMO_DETAIL 分支，假演员保留。
             cast = emptyList(),
@@ -431,6 +446,15 @@ class HeroDetailActivity : ComponentActivity() {
          * 也不会再用竖图覆盖它 —— 否则点进详情会先看到横图、再硬切成竖图。
          */
         private const val EXTRA_BACKDROP = "extra_backdrop"
+        /**
+         * 首页预取到的 TMDB 艺术字 Logo（透明 PNG）。
+         *
+         * 首页信息区已经显示它了，点进来时若再等 `readDetail → TMDB 请求 → mergeTmdb`，
+         * 会有几百毫秒的「文字标题 → Logo」切换；随 Intent 带过来就能首帧直接出艺术字。
+         */
+        private const val EXTRA_LOGO = "extra_logo"
+        /** 首页预取到的 TMDB 简介：首帧直接显示，不让简介先空着 / 先显示源站短简介。 */
+        private const val EXTRA_OVERVIEW = "extra_overview"
 
         /**
          * 统一入口：首页海报卡确定键、换源弹窗选中后调用。
@@ -445,8 +469,17 @@ class HeroDetailActivity : ComponentActivity() {
          *
          * [backdropUrl]：首页卡片当前显示的横版背景（TMDB 命中时是 w1920）。
          * 空串 = 没有横图，详情页照旧用 `vod.pic` 裁 16:9。
+         * [logoUrl] / [overview]：首页已经预取到的 TMDB 艺术字与简介，空串 = 没有，仍走原来的
+         * 「先显示源站内容、TMDB 到达后再替换」链路。
          */
-        fun start(context: Context, vod: Vod, site: Site, backdropUrl: String = "") {
+        fun start(
+            context: Context,
+            vod: Vod,
+            site: Site,
+            backdropUrl: String = "",
+            logoUrl: String = "",
+            overview: String = "",
+        ) {
             context.startActivity(
                 Intent(context, HeroDetailActivity::class.java)
                     .putExtra(EXTRA_VOD, vod)
@@ -454,6 +487,8 @@ class HeroDetailActivity : ComponentActivity() {
                     .putExtra(EXTRA_TITLE, vod.name)
                     .putExtra(EXTRA_PIC, vod.pic)
                     .putExtra(EXTRA_BACKDROP, backdropUrl)
+                    .putExtra(EXTRA_LOGO, logoUrl)
+                    .putExtra(EXTRA_OVERVIEW, overview)
                     .putExtra(EXTRA_YEAR, vod.year)
                     .putExtra(EXTRA_AREA, vod.area)
                     .putExtra(EXTRA_TYPE, vod.typeName)
@@ -1580,10 +1615,10 @@ private fun HeroDetailBackdrop(url: String) {
 }
 
 /**
- * 横向遮罩（原版 `bg_hero_mask_h`）：左侧纯黑 → 右侧透明。
+ * 横向遮罩（原版 `bg_hero_mask_h` / 首页 `maskLeft`）。
  *
- * 严格使用 `Color.Black` → `Color.Transparent` 两个端点，保证左侧足够暗、右侧海报不被压灰；
- * 中间不做额外插值，避免出现「左不够黑、右又被灰掉」的折中效果。
+ * 与首页同一组参数：只有左侧 35% 之内压黑托住剧名 / 简介，右侧 65% 起完全透亮，
+ * 保证 TMDB 背景大图不被整屏灰掉。
  */
 @Composable
 private fun HeroDetailMaskHorizontal() {
@@ -1592,14 +1627,19 @@ private fun HeroDetailMaskHorizontal() {
             .fillMaxSize()
             .background(
                 Brush.horizontalGradient(
-                    0.0f to Color.Black,
+                    0.0f to Color.Black.copy(alpha = 0.85f),
+                    0.35f to Color.Black.copy(alpha = 0.0f),
                     1.0f to Color.Transparent,
                 ),
             ),
     )
 }
 
-/** 纵向遮罩（原版 `bg_hero_mask_v`）：底部纯黑 → 顶部透明，托住左下角信息区。 */
+/**
+ * 纵向遮罩（原版 `bg_hero_mask_v` / 首页 `maskBottom`）。
+ *
+ * 上 55% 全亮（背景图保持原亮度），底部渐到 0.9 黑，只托住左下角信息区与演员行。
+ */
 @Composable
 private fun HeroDetailMaskVertical() {
     Box(
@@ -1608,7 +1648,8 @@ private fun HeroDetailMaskVertical() {
             .background(
                 Brush.verticalGradient(
                     0.0f to Color.Transparent,
-                    1.0f to Color.Black,
+                    0.55f to Color.Transparent,
+                    1.0f to Color.Black.copy(alpha = 0.9f),
                 ),
             ),
     )
@@ -2893,6 +2934,13 @@ private data class HeroDetail(
      * 详情接口只给竖图，覆盖会让首帧从 16:9 横图硬切成竖图，还会让 Coil 重新解码一次。
      */
     val hasWideBackdrop: Boolean = false,
+    /**
+     * 当前 [synopsis] 是否已经是 TMDB 译文（首页预取随 Intent 带来的 `extra_overview`）。
+     *
+     * 为 true 时 [mergeDetail] 不再用源站 `vod.content` 覆盖简介：用户点进来看到的就是 TMDB 简介，
+     * 详情接口回来再换成源站短简介、等 TMDB 再换回去，会明显闪一次。
+     */
+    val hasTmdbOverview: Boolean = false,
 ) {
     /** 导演 / 主演单行文案；两者都为空时返回空串（不占位、不显示）。 */
     fun creditLine(): String = buildString {
@@ -2922,7 +2970,9 @@ private fun HeroDetail.mergeDetail(vod: Vod?, siteName: String): HeroDetail {
     return copy(
         title = vod.name.ifBlank { title },
         meta = realMeta.ifBlank { meta },
-        synopsis = vod.content.ifBlank { synopsis },
+        // 【锁死简介】首帧已经是首页预取的 TMDB 译文时，不再用源站 `vod.content` 覆盖，
+        // 否则「TMDB 简介 → 源站短简介 → TMDB 简介」会明显闪两次。
+        synopsis = if (hasTmdbOverview) synopsis else vod.content.ifBlank { synopsis },
         posterUrl = vod.pic.ifBlank { posterUrl },
         // 【锁死横图】首帧已经是横图（首页 extra_backdrop / TMDB）时，源站详情回来的 `vod.pic`
         // 是竖图，覆盖它只会让背景从 16:9 硬切成竖图 + Coil 重新解码，所以直接跳过背景赋值。
@@ -2939,6 +2989,7 @@ private fun HeroDetail.mergeDetail(vod: Vod?, siteName: String): HeroDetail {
  * 字段策略：
  * - 剧名：只有「手动匹配命中」才覆盖，自动匹配保留源站名（源站名是用户点进来的那部剧的证据）；
  * - 简介：TMDB 译文非空且**比现有更长**才覆盖（照抄 `TmdbUIAdapter.enrichVod` 的长度策略）；
+ *   首帧若已带首页预取的 TMDB 简介，`mergeDetail` 已保证不会先被源站简介盖掉；
  * - 背景：TMDB 有值且**不是同一张图**才覆盖（同一张只差档位时保留首帧那份，见 `keepBackdrop`）；
  *   海报同理，空值保留详情接口给的图；
  * - 评分：并入 [meta] 尾段，不新增控件；演员：整份替换，与 [tmdbPersons] 同序同长；
@@ -2975,9 +3026,10 @@ private fun HeroDetail.mergeTmdb(
         synopsis = if (tmdbSynopsis.length > synopsis.length) tmdbSynopsis else synopsis,
         posterUrl = item.posterUrl.orEmpty().ifBlank { posterUrl },
         backdropUrl = if (keepBackdrop) backdropUrl else tmdbBackdrop,
-        // 只有 TMDB 真的给了 backdrop 才算「有背景大图」：空值时保留详情接口的竖图当背景，
-        // 并保持 false（继续显示右上角小海报），视觉与改动前一致。
-        hasTmdbBackdrop = tmdbBackdrop.isNotBlank(),
+        // 只有「确实有背景大图」才隐藏右上角小海报：TMDB 自己给了 backdrop，或首帧已经是
+        // 首页带来的横图（`hasWideBackdrop`）。后者必须一起认：否则 TMDB 没有 backdrop 时，
+        // 第二帧会把小海报从无到有「冒」出来，和进来时的无小海报状态对不上。
+        hasTmdbBackdrop = tmdbBackdrop.isNotBlank() || hasWideBackdrop,
         // 一旦拿到横图（首页 / TMDB），后续 `mergeDetail` 就不能再用竖图把它盖回去。
         hasWideBackdrop = hasWideBackdrop || tmdbBackdrop.isNotBlank(),
         // 艺术字 Logo：TMDB `images.logos` 里优先中文，命中就替换 32sp 文字标题；

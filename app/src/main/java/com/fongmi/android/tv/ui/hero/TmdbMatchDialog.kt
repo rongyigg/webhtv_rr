@@ -1,5 +1,6 @@
 package com.fongmi.android.tv.ui.hero
 
+import android.util.Log
 import android.view.KeyEvent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -23,7 +24,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -47,10 +47,18 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.fongmi.android.tv.R
+import com.fongmi.android.tv.bean.TmdbConfig
+import com.fongmi.android.tv.bean.TmdbItem
+import com.fongmi.android.tv.bean.Vod
+import com.fongmi.android.tv.service.TmdbService
+import com.fongmi.android.tv.ui.helper.TmdbMatcher
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
- * TMDB 手动匹配弹窗（Compose，**第一段：骨架 + 假结果**）。
+ * TMDB 手动匹配弹窗（Compose，**真实搜索**）。
  *
  * 版式基准 = `ref_docs/dialog_tmdb_match.xml`（原版 `TmdbMatchDialog` / `pc3`）：
  * ```
@@ -76,8 +84,9 @@ import kotlinx.coroutines.launch
  *    （输入框行 + 6 行 × 7 列键位），再在弹窗内部用 `CompositionLocalProvider(LocalDensity)`
  *    把整棵键盘子树等比缩到原版左列的 217dp 宽（[TMDB_KEYBOARD_SCALE]），不改共享组件的常量。
  *    弹窗没有换源侧边栏，所以 `hideHouseKey = true` 把无行为的小房子键隐藏成空槽。
- * 3. **第一段零网络**：结果全部来自 [TMDB_MOCK_RESULTS]，放大镜按钮只按关键字过滤这份假数据。
- *    TODO(第二段)：`TmdbApi.searchMulti(keyword)` 真实请求 + Gson 解析 + API Key 输入。
+ * 3. **真实网络搜索**：放大镜按钮 / 打开弹窗都走 `TmdbMatcher.search(keyword, vod)`，与首页、
+ *    详情页自动匹配共用同一套「清理剧名 + 按标题相似度 / 年份 / 语区 / 评分排序」规则；
+ *    不再有任何本地假数据。没配 Key 时不发请求，直接提示先配置 TMDB。
  *
  * 焦点契约：
  * - 进弹窗 → 输入框；输入框 / 放大镜 ↓ → 键盘第一行；
@@ -88,7 +97,9 @@ import kotlinx.coroutines.launch
 @Composable
 internal fun TmdbMatchDialog(
     initialKeyword: String,
-    onConfirm: (TmdbMatchItem) -> Unit,
+    // 当前海报对应的源站条目：`TmdbMatcher` 用它取年份 / 季号 / 备注给候选排序。
+    vod: Vod?,
+    onConfirm: (TmdbItem) -> Unit,
     onDismiss: () -> Unit,
 ) {
     val scope = rememberCoroutineScope()
@@ -98,8 +109,10 @@ internal fun TmdbMatchDialog(
     var field by remember {
         mutableStateOf(TextFieldValue(initialKeyword, TextRange(initialKeyword.length)))
     }
-    var results by remember { mutableStateOf(TMDB_MOCK_RESULTS) }
-    var resultCount by remember { mutableIntStateOf(TMDB_MOCK_RESULTS.size) }
+    var results by remember { mutableStateOf<List<TmdbItem>>(emptyList()) }
+    // `searching`：请求在途（显示「搜索中」而不是「未找到」）；`needKey`：没配 Key 的专用提示。
+    var searching by remember { mutableStateOf(false) }
+    var needKey by remember { mutableStateOf(false) }
 
     val inputRequester = remember { FocusRequester() }
     val searchRequester = remember { FocusRequester() }
@@ -160,22 +173,39 @@ internal fun TmdbMatchDialog(
     }
 
     /**
-     * 放大镜按钮：第一段只过滤本地假数据，**不发任何网络请求**。
-     * 关键字为空 = 恢复全部；否则按剧名包含匹配（忽略大小写）。
+     * 放大镜按钮 / 打开弹窗：走 [TmdbMatcher.search] 的**真实网络搜索**。
+     *
+     * 空关键字不发请求；搜索中重复点按直接忽略（避免连点让早到的旧结果盖掉新结果）。
+     * 没配置 TMDB 时一条请求都不发，只把空态文案换成「请先配置 TMDB」。
      */
     fun applyFilter() {
         val keyword = field.text.trim()
-        if (keyword.isEmpty()) {
-            results = TMDB_MOCK_RESULTS
-            resultCount = TMDB_MOCK_RESULTS.size
-        } else {
-            val filtered = TMDB_MOCK_RESULTS.filter { it.title.contains(keyword, ignoreCase = true) }
-            results = filtered
-            resultCount = filtered.size
+        if (keyword.isEmpty() || searching) return
+        scope.launch {
+            val config = TmdbConfig.effectiveCurrent()
+            if (!config.isReady()) {
+                results = emptyList()
+                needKey = true
+                return@launch
+            }
+            needKey = false
+            searching = true
+            // 搜索包含网络 + 磁盘缓存读写，必须离开主线程；取消时原样抛出，交给协程机制。
+            val found = withContext(Dispatchers.IO) {
+                try {
+                    TmdbMatcher(TmdbService(), config).search(keyword, vod)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    Log.w(TAG_TMDB_DIALOG, "tmdb 手动匹配搜索失败: $keyword | ${e.message}")
+                    emptyList<TmdbItem>()
+                }
+            }
+            searching = false
+            results = found
+            // 结果集变了就把列表拉回最左，避免停留在已不存在的位置。
+            if (found.isNotEmpty()) resultState.scrollToItem(0)
         }
-        // 结果集变了就把列表拉回最左，避免停留在已不存在的位置。
-        scope.launch { resultState.scrollToItem(0) }
-        // TODO(第二段)：这里改为 TmdbApi.searchMulti(keyword) 真实请求。
     }
 
     fun onKeyClick(key: HeroKey) {
@@ -254,6 +284,9 @@ internal fun TmdbMatchDialog(
     LaunchedEffect(Unit) {
         withFrameNanos { }
         requestFocus(inputRequester)
+        // 打开即按当前剧名真实搜一次：长按进来第一屏就是真实候选，不用再按放大镜。
+        // 没配 Key / 关键字为空时 applyFilter 自己会跳过，不会白发请求。
+        if (field.text.isNotBlank()) applyFilter()
     }
 
     Dialog(
@@ -356,7 +389,7 @@ internal fun TmdbMatchDialog(
                         )
                         Spacer(modifier = Modifier.width(TMDB_RESULT_COUNT_GAP))
                         Text(
-                            text = stringResource(R.string.home_tmdb_match_count, resultCount),
+                            text = stringResource(R.string.home_tmdb_match_count, results.size),
                             color = TMDB_RESULT_COUNT_COLOR,
                             fontSize = TMDB_RESULT_COUNT_SP.sp,
                             maxLines = 1,
@@ -370,7 +403,12 @@ internal fun TmdbMatchDialog(
                     ) {
                         if (results.isEmpty()) {
                             Text(
-                                text = stringResource(R.string.home_tmdb_match_empty),
+                                text = when {
+                                    // 首次搜索还没结果时显示「搜索中」，避免一闪「未找到」再出结果。
+                                    searching -> stringResource(R.string.detail_tmdb_searching)
+                                    needKey -> stringResource(R.string.detail_tmdb_need_key)
+                                    else -> stringResource(R.string.home_tmdb_match_empty)
+                                },
                                 color = TMDB_RESULT_COUNT_COLOR,
                                 fontSize = TMDB_EMPTY_SP.sp,
                                 modifier = Modifier.align(Alignment.Center),
@@ -383,16 +421,20 @@ internal fun TmdbMatchDialog(
                             contentPadding = PaddingValues(horizontal = TMDB_RESULT_PADDING_H),
                             horizontalArrangement = Arrangement.spacedBy(TMDB_RESULT_ITEM_SPACING),
                         ) {
-                            itemsIndexed(items = results, key = { _, item -> item.id }) { index, item ->
+                            // key 必须带 mediaType：TMDB 的电影 / 剧集 id 来自两套独立序列，
+                            // 同一个数字可能同时是「某部电影」和「某部剧」，只用 tmdbId 会撞 key。
+                            itemsIndexed(items = results, key = { _, item -> "${item.mediaType}:${item.tmdbId}" }) { index, item ->
                                 // 类型标签必须走 R.string（红线：不写裸字面量），
                                 // 又因为它要在非 @Composable 的 update 里用，所以在组合期先取出来。
                                 val typeTag = stringResource(
-                                    if (item.mediaType == TMDB_MEDIA_TV) {
+                                    if (item.mediaType.equals(TMDB_MEDIA_TV, ignoreCase = true)) {
                                         R.string.home_tmdb_match_type_tv
                                     } else {
                                         R.string.home_tmdb_match_type_movie
                                     },
                                 )
+                                // 年份从真实 `subtitle`（「电影 · 2014-05-23 · 评分 7.8」）里取，组合期算一次。
+                                val year = tmdbMatchYear(item)
                                 // 【红线】HeroPosterCard 自己 onMeasure 死锁 120×214dp，
                                 // 这里绝不加 Modifier.size()/width()/height()，直接放进去。
                                 AndroidView(
@@ -411,11 +453,13 @@ internal fun TmdbMatchDialog(
                                         resultRegistry.bind(index, card)
                                         // 只在值变化时写，避免每次重组都触发卡片内部的图片重载。
                                         if (card.title != item.title) card.title = item.title
-                                        if (card.imageUrl != item.poster) card.imageUrl = item.poster
+                                        if (card.imageUrl != item.posterUrl) card.imageUrl = item.posterUrl
                                         if (card.topStartTag != typeTag) card.topStartTag = typeTag
-                                        if (card.bottomStartTag != item.year) card.bottomStartTag = item.year
+                                        if (card.bottomStartTag != year) card.bottomStartTag = year
                                         if (!card.tmdbTag) card.tmdbTag = true
                                         card.setOnClickListener {
+                                            // 回调真实 TmdbItem：调用方直接拿 tmdbId / mediaType / 海报 / 横图，
+                                            // 不再从一份精简模型手工拼 TmdbItem。
                                             onConfirm(item)
                                             onDismiss()
                                         }
@@ -457,35 +501,16 @@ internal fun TmdbMatchDialog(
 }
 
 /**
- * 一条 TMDB 匹配结果（`ref_docs/TmdbMatchItem.java` 的字段子集，第一段只保留展示需要的部分）。
- *
- * [mediaType] 取 `"movie"` / `"tv"`，与 TMDB `search/multi` 的 `media_type` 一致，
- * 展示时映射成左上角标签 TV / MOV。
+ * 结果卡右下角的年份：真实 [TmdbItem.subtitle] 形如「电影 · 2014-05-23 · 评分 7.8」，
+ * 只取第一个 4 位年份；没有日期（未上映 / 未定档）时留空，卡片自动不显示这枚标签。
  */
-internal data class TmdbMatchItem(
-    val id: Int,
-    val title: String,
-    val year: String,
-    val poster: String,
-    val mediaType: String,   // "movie" / "tv"
-    val genres: String,
-    val rating: String,
-)
+private fun tmdbMatchYear(item: TmdbItem): String =
+    TMDB_YEAR_PATTERN.find(item.subtitle)?.value.orEmpty()
 
-/**
- * 第一段假数据（**不接 TMDB 网络**，仅用于验证版式与焦点）。
- * 图片走 picsum 稳定 seed，和首页 / 搜索页的 mock 海报同一套路。
- */
-private val TMDB_MOCK_RESULTS: List<TmdbMatchItem> = listOf(
-    TmdbMatchItem(1, "后会无期", "2014", "https://picsum.photos/seed/tmdb-0/400/600", "movie", "剧情 / 公路", "7.8"),
-    TmdbMatchItem(2, "后会无期", "2026", "https://picsum.photos/seed/tmdb-1/400/600", "tv", "剧情 / 都市", "8.1"),
-    TmdbMatchItem(3, "后会无期 特别篇", "2026", "https://picsum.photos/seed/tmdb-2/400/600", "tv", "剧情", "7.2"),
-    TmdbMatchItem(4, "尚公主", "2026", "https://picsum.photos/seed/tmdb-3/400/600", "tv", "古装 / 爱情", "8.4"),
-    TmdbMatchItem(5, "小城良方", "2026", "https://picsum.photos/seed/tmdb-4/400/600", "tv", "都市 / 家庭", "7.9"),
-    TmdbMatchItem(6, "嫁金钗", "2025", "https://picsum.photos/seed/tmdb-5/400/600", "tv", "古装", "7.5"),
-    TmdbMatchItem(7, "玉簟秋", "2025", "https://picsum.photos/seed/tmdb-6/400/600", "tv", "剧情", "8.0"),
-    TmdbMatchItem(8, "醉梦", "2025", "https://picsum.photos/seed/tmdb-7/400/600", "movie", "悬疑", "7.6"),
-)
+private val TMDB_YEAR_PATTERN = Regex("(?:19|20)\\d{2}")
+
+/** 弹窗日志标签（搜索失败只记一条 warn，不弹 Toast 打扰遥控器操作）。 */
+private const val TAG_TMDB_DIALOG = "HeroTmdbMatch"
 
 /** TMDB `media_type` 里的剧集标识（其余一律按电影处理）。 */
 private const val TMDB_MEDIA_TV = "tv"

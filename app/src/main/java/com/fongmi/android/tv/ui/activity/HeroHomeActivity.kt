@@ -293,9 +293,11 @@ class HeroHomeActivity : ComponentActivity() {
                     siteViewModel = siteViewModel,
                     // 首次加载与切源后重载都走这里，日志只在一个地方打。
                     onRefreshHome = { refreshHome("界面请求") },
-                    // 卡片确定键 → 真实详情页，带上真实的 (Vod, Site) 与这张卡当前的横版背景。
+                    // 卡片确定键 → 真实详情页，带上真实的 (Vod, Site)、当前横版背景，以及首页已预取的 TMDB 艺术字 / 简介。
                     // folder 条目（网盘聚合壳，如 atvp_detail:）交给原版分类页，其余进 Hero 详情页。
-                    onOpenDetail = { vod, site, backdrop -> openHeroDetailOrFolder(this, vod, site, backdrop) },
+                    onOpenDetail = { vod, site, backdrop, logo, overview ->
+                        openHeroDetailOrFolder(this, vod, site, backdrop, logo, overview)
+                    },
                     // 顶栏「设置」：SettingActivity 只存在于 leanback flavor，见 openSettings 的说明。
                     onOpenSettings = { openSettings() },
                 )
@@ -455,9 +457,9 @@ private fun HeroHomeScreen(
     siteViewModel: SiteViewModel,
     // 重新拉首页数据。首次进入、小房子切源、设置页返回都走这一个入口。
     onRefreshHome: () -> Unit,
-    // 卡片确定键：回传真实的 (Vod, Site) 与这张卡当前显示的横版背景（TMDB 命中时是 w1920），
-    // 由 Activity 交给 HeroDetailActivity，详情页首帧直接拿它当背景。
-    onOpenDetail: (Vod, Site, String) -> Unit,
+    // 卡片确定键：回传真实的 (Vod, Site)、这张卡当前显示的横版背景（TMDB 命中时是 w1920），
+    // 以及首页已经预取好的 TMDB 艺术字 / 简介 —— 详情页首帧就能出完整画面。
+    onOpenDetail: (Vod, Site, String, String, String) -> Unit,
     // 顶栏「设置」：真正打开页面的逻辑在 HeroHomeActivity 里（需要按 flavor 反射），由调用方传 lambda。
     onOpenSettings: () -> Unit,
 ) {
@@ -933,8 +935,9 @@ private fun HeroHomeScreen(
                     // 用户在弹窗里选中了另一部剧：vod 已由 SiteApi.searchContent 盖过 site，
                     // 两者同源，直接用它俩打开该源的真实详情页，不再按剧名二次搜索。
                     Log.d(TAG_HOME, "换源选中: ${site.displayName} / ${vod.name}")
-                    // 换源结果是新的竖版海报，没有首页预热过的横图，交空串让详情页按 `vod.pic` 裁切。
-                    onOpenDetail(vod, site, "")
+                    // 换源结果是新的竖版海报，没有首页预热过的横图 / 艺术字 / 简介，交空串让详情页
+                    // 按 `vod.pic` 裁切、由 TMDB 到达后再补 Logo 与简介。
+                    onOpenDetail(vod, site, "", "", "")
                 },
                 onClosed = {
                     showSourceDialog = false
@@ -1144,8 +1147,18 @@ private fun HeroHomeScreen(
                     moduleFocused = true
                 },
                 // 卡片确定键：打开这条数据**所属源**的真实详情页（Vod 与 Site 一起带过去）。
-                // 同时把这张卡当前显示的横图带过去：TMDB 命中时是 w1920，详情页首帧不用等网络。
-                onClick = { poster -> onOpenDetail(poster.vod, poster.site, poster.backdropUrl) },
+                // 同时把这张卡此刻已经显示出来的横图（TMDB 命中时是 w1920）、艺术字 Logo、
+                // TMDB 简介一起带过去：详情页首帧就是完整画面，不闪背景 / 不闪文字标题、不闪小海报。
+                onClick = { poster ->
+                    val tmdbData = tmdbOverrides[poster.posterKey]
+                    onOpenDetail(
+                        poster.vod,
+                        poster.site,
+                        poster.backdropUrl,
+                        tmdbData?.logoUrl.orEmpty(),
+                        tmdbData?.overview.orEmpty(),
+                    )
+                },
                 // 卡片长按确定键：呼出换源弹窗（见 changeSource）。
                 onLongPress = { poster ->
                     Log.e("ChangeSource", "卡片长按触发，准备执行 changeSource")
@@ -1172,22 +1185,24 @@ private fun HeroHomeScreen(
         if (showTmdbDialog && tmdbPoster != null) {
             TmdbMatchDialog(
                 initialKeyword = tmdbPoster.title,
+                // 真实搜索要带上这条目的源站身份：`TmdbMatcher.search(keyword, vod)` 用它取年份、
+                // 季号与备注来排序候选，和自动匹配完全是同一套规则。
+                vod = tmdbPoster.vod,
                 onConfirm = { item ->
                     val key = tmdbPoster.posterKey
                     // 同一条 TMDB 记录 → 保留已经拉到的简介 / Logo / 演员 / 真横图；
                     // 换了条目 → 旧数据必须整体作废，否则会出现「海报是这部、背景或简介是另一部」。
-                    val prev = tmdbOverrides[key]?.takeIf { it.item.tmdbId == item.id }
+                    val prev = tmdbOverrides[key]?.takeIf { it.item.tmdbId == item.tmdbId }
                     if (prev == null) HeroTmdbPrefetchCache.remove(key)
-                    // 弹窗模型只有竖图；横图缺省时用竖图兜底（与改动前「手动匹配用竖图当背景」一致）。
-                    val manualItem = TmdbItem(item.id, item.mediaType, item.title, "", "", item.poster, "")
+                    // 直接用真实搜索结果：标题 / 副标题 / 简介 / 海报 / 横图都是 TMDB 原值。
+                    // 横图统一提到 w1920，与自动预匹配（`toHomeTmdbData`）逐字一致，避免同一张图两个档位。
                     val manualData = HeroTmdbData(
-                        item = manualItem,
+                        item = item,
                         detail = prev?.detail,
                         cast = prev?.cast.orEmpty(),
-                        overview = prev?.overview.orEmpty(),
+                        overview = prev?.overview.orEmpty().ifBlank { item.overview },
                         logoUrl = prev?.logoUrl,
-                        highResBackdrop = prev?.highResBackdrop.orEmpty()
-                            .ifBlank { upgradeTmdbImage(item.poster, "w1920") },
+                        highResBackdrop = upgradeTmdbImage(item.backdropUrl.ifBlank { item.posterUrl }, "w1920"),
                         manual = true,
                     )
                     tmdbOverrides = tmdbOverrides + (key to manualData)
