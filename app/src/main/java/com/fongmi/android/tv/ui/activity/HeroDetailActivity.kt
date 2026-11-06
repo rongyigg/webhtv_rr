@@ -454,7 +454,7 @@ private fun needsSpecialParse(vodId: String): Boolean =
 /**
  * 猫源 / 网盘聚合源在 `vod_play_url` 里塞的**动作指令**集数。
  *
- * 这类源把「📄 媒体信息 / 🔍 全局搜索 / ➕ 稍后再看 / ➖ 取消追剧」伪装成集数：
+ * 这类源把「📄 媒体信息 / 🔍 全局搜索 / ➕ 稍后再看 / ➖ 取消追剧 / ➕ 加入追剧」伪装成集数：
  * ```
  * 📄 媒体信息$msubinfo-db%3A36675942%7C小城良方#🔍 全局搜索$msubsearch-小城良方#...
  * ```
@@ -465,11 +465,17 @@ private fun needsSpecialParse(vodId: String): Boolean =
  * 且 type=4 时把 action 当 URL 直接 GET），所以这里做**识别 + 剔除**：
  * 选集弹窗在渲染前就把它们过滤掉，绝不把动作串送进起播；
  * 若某条线路过滤后一集不剩，弹窗显示「该源无可用剧集」。
+ *
+ * 名单只用于「灰显 / 打日志」；判断当前源能不能直接播必须看 [Episode.hasRealVideoUrl]：
+ * 动作名可能继续增加，但「不是 http 链接」这一条永远不会变。
  */
-private val ACTION_EPISODE_NAMES = listOf("msubinfo", "msubsearch", "msubdel", "watchadd")
+private val ACTION_EPISODE_NAMES = listOf("msubinfo", "msubsearch", "msubdel", "msubadd", "watchadd")
 
 /** 播放目标为 folder 时的最大下探层数（detail → category → detail …），防止目录套目录死循环。 */
 private const val MAX_PLAY_DRILL = 3
+
+/** 当前源不可播、预搜索结果还没到时最多等这么久，避免「正在寻找可用源」无限转圈。 */
+private const val PLAY_FALLBACK_WAIT_MS = 10_000L
 
 /** 网盘聚合插件的 folder 壳前缀（与 `ChangeSourceDialog` / `HeroEntryRoute` 的判定一致）。 */
 private const val ATVP_FOLDER_PREFIX = "atvp_detail:"
@@ -485,14 +491,33 @@ private fun Episode.isActionCommand(): Boolean {
 }
 
 /**
- * 这条线路过滤掉动作指令后是否还有**真实集数**。
+ * 这条线路过滤掉动作指令后是否还有**真实集数**（宽松判定）。
  *
- * 网盘聚合源（片单 / 猫源）的 `flags` 非空，但 `episodes` 全是
- * `📄 媒体信息$msubinfo-...` 这类动作项 —— `flags.isNotEmpty()` 会被骗过去，
- * 必须按「真实集数」判断，才能正确回落到预搜索源。
+ * 只用于「换源目标 / folder 子条目」：网盘插件解析出的集数可能是插件内部地址，
+ * 不能一律要求 http，否则快映这类源拿到的 29 集会全部被丢掉。
+ * 判断「当前源能不能直接播」必须用更严格的 [Flag.hasRealVideoUrl]。
  */
 private fun Flag.hasPlayableEpisode(): Boolean =
     episodes.orEmpty().any { !it.isActionCommand() }
+
+/**
+ * 这条集数是不是**真正能起播的视频地址**。
+ *
+ * 片单 / 猫源会把「➕ 加入追剧$msubadd-...」这类动作项伪装成普通集数，
+ * 旧规则只按动作名过滤，名单缺一个就会弹出一个「只有动作项」的空选集。
+ * 这里改成看地址本身：必须是 http(s) 或 m3u8，其余（空地址 / 动作指令 / 插件伪协议）都不算。
+ */
+private fun Episode.hasRealVideoUrl(): Boolean {
+    val url = getUrl().trim()
+    if (url.isEmpty() || isActionCommand()) return false
+    return url.startsWith("http://", ignoreCase = true) ||
+        url.startsWith("https://", ignoreCase = true) ||
+        url.contains(".m3u8", ignoreCase = true)
+}
+
+/** 这条线路是否至少有一条真实 http/m3u8 播放地址（当前源可播的唯一标准）。 */
+private fun Flag.hasRealVideoUrl(): Boolean =
+    episodes.orEmpty().any { it.hasRealVideoUrl() }
 
 /**
  * 目录里的「动作伪条目」（`vod_tag=action` / 带动作 JSON 的卡片）。
@@ -595,6 +620,10 @@ private fun HeroDetailScreen(
     var pendingPlayDrill by remember { mutableIntStateOf(0) }
     /** 非 null = 正在等 folder 的二级目录回包（`categoryContent`），回包后继续拉子条目详情。 */
     var pendingPlayCategory by remember { mutableStateOf<String?>(null) }
+    /** true = 当前源不可播、预搜索结果还没到：显示 Loading，结果一到自动继续（见 LaunchedEffect）。 */
+    var pendingPlayFallback by remember { mutableStateOf(false) }
+    /** true = 这次播放来自「跨源兜底」：选集弹窗真正拿到真实剧集后提示用户已自动换源。 */
+    var autoSwitchNotice by remember { mutableStateOf(false) }
     // 本页是否真的拥有 `result` 通道：只有「自己发过详情请求」的页面才有资格消费它。
     // 内联源 / 没有主键 / 需要特殊解析的页面从不发详情请求，任何 result 都不是给本页的。
     val ownsResultChannel = vodId.isNotBlank() && !needsSpecialParse(vodId) && inlineVod == null
@@ -640,6 +669,33 @@ private fun HeroDetailScreen(
             siteViewModel.detailContent(site.key, vod.id)
         }
     }
+    // 预搜索是异步的：当前源不可播、结果还没到时先登记等待，结果一到自动继续下探 / 拉详情。
+    LaunchedEffect(firstSearchVod, firstSearchSite, pendingPlayFallback) {
+        if (!pendingPlayFallback) return@LaunchedEffect
+        val vod = firstSearchVod
+        val site = firstSearchSite
+        if (vod == null || site == null || vod.id.isBlank()) return@LaunchedEffect
+        pendingPlayFallback = false
+        autoSwitchNotice = true
+        Log.e(TAG_DETAIL, "预搜索结果到达，自动切换: site=${site.key} id=${vod.id}")
+        requestPlayTarget(vod, site)
+    }
+    // 兜底等待不能无限转圈：预搜索完全没有结果时给一次明确反馈。
+    LaunchedEffect(pendingPlayFallback) {
+        if (!pendingPlayFallback) return@LaunchedEffect
+        delay(PLAY_FALLBACK_WAIT_MS)
+        if (!pendingPlayFallback) return@LaunchedEffect
+        pendingPlayFallback = false
+        playLoading = false
+        Log.e(TAG_DETAIL, "等待预搜索超时: 仍没有可用源")
+        Notify.show(emptyHint)
+    }
+    // 跨源兜底成功：选集弹窗真正拿到真实剧集后再提示，避免网络失败时误报。
+    LaunchedEffect(showPlayDialog, autoSwitchNotice) {
+        if (!showPlayDialog || !autoSwitchNotice) return@LaunchedEffect
+        autoSwitchNotice = false
+        Notify.show("已为您自动切换至可用源")
+    }
     DisposableEffect(siteViewModel, vodId) {
         val observer = Observer<Result?> { result ->
             if (result == null) return@Observer
@@ -656,16 +712,18 @@ private fun HeroDetailScreen(
                 )
                 val previousVod = detailResult?.vod
                 detailResult = result
-                // 只有「过滤动作指令后还有真集数」才算能播：纯 `$msubinfo` 线路不算。
-                if (incomingFlags.any { it.hasPlayableEpisode() }) {
+                // 只有「存在真实 http/m3u8 地址」才算当前源能播：动作项 / 伪集数 / 空地址都不算。
+                if (incomingFlags.any { it.hasRealVideoUrl() }) {
                     playFlags = incomingFlags
                     // 详情回包没带剧名时退回当前页已有的 Vod，绝不让弹窗丢标题。
                     playVod = incoming.takeIf { it.name.isNotBlank() } ?: previousVod
                     playSiteKey = siteKey
+                    // 本页自己就能播：清掉可能残留的「已自动换源」提示标记。
+                    autoSwitchNotice = false
                     showPlayDialog = true
                     return@Observer
                 }
-                // 本页只有动作指令 / 没有集数：改拉预搜索第一个结果（按钮上显示的那个源）。
+                // 本页只有动作指令 / 伪集数 / 没有集数：改拉预搜索第一个结果（按钮上显示的那个源）。
                 val fallbackVod = latestSearchVod
                 val fallbackSite = latestSearchSite
                 if (fallbackVod != null && fallbackSite != null && fallbackVod.id.isNotBlank()) {
@@ -673,10 +731,14 @@ private fun HeroDetailScreen(
                         TAG_DETAIL,
                         "准备拉取换源目标详情: site=${latestSearchVod?.site?.key}, id=${latestSearchVod?.id}",
                     )
-                    Notify.show("当前源无剧集，改用 ${fallbackSite.displayName}")
+                    autoSwitchNotice = true
+                    Notify.show("当前源不可播，正在切换可用源…")
                     requestPlayTarget(fallbackVod, fallbackSite)
                 } else {
-                    Notify.show(emptyHint)
+                    // 预搜索还没回来：登记等待，结果一到由 LaunchedEffect 自动继续。
+                    pendingPlayFallback = true
+                    playLoading = true
+                    Log.e(TAG_DETAIL, "播放等待详情无真实视频链接，等待预搜索结果…")
                 }
                 return@Observer
             }
@@ -1095,45 +1157,47 @@ private fun HeroDetailScreen(
                     when (index) {
                         DETAIL_ACTION_PLAY -> {
                             // 【唯一数据源】选集弹窗只认 `flags`（`Vod.setFlags()` 从 playFrom/playUrl 解析）。
-                            // 当前源有真实集数 → 直接弹；只有动作指令 / 没有集数 → 拉预搜索第一个结果
-                            // （也就是换源按钮上显示的那个源）的真实详情，回包由观察者接管。
+                            // 判定标准不再看「有没有集数」：网盘源会把 `msubadd` 这类动作项伪装成集数，
+                            // 只有存在真实 http/m3u8 地址才算当前源可播；否则一律走预搜索兜底。
                             val fallbackVod = firstSearchVod
                             val fallbackSite = firstSearchSite
+                            val currentPlayable = flags.any { it.hasRealVideoUrl() }
                             when {
                                 playLoading -> Notify.show("正在加载剧集，请稍候")
-                                // 1) 当前源有**真实集数**（`$msubinfo` 这类动作指令不算）：直接弹选集。
-                                flags.any { it.hasPlayableEpisode() } -> {
+                                // 1) 当前源有**真实视频链接**：直接弹自己的选集。
+                                currentPlayable -> {
+                                    autoSwitchNotice = false
                                     playFlags = flags
                                     playVod = vod
                                     playSiteKey = siteKey
                                     showPlayDialog = true
                                 }
-                                // 2) 详情还在加载：只登记「加载完再决定」，不重复发请求。
+                                // 2) 详情还在加载：等回包后按同一套「真实链接」规则再判断。
                                 detailState == DetailState.Loading -> {
                                     pendingPlayOpen = true
                                     playLoading = true
                                     Notify.show("正在加载剧集，请稍候")
                                 }
-                                // 3) 当前源只有动作指令 / 空结果：改用预搜索第一个结果
-                                //    （换源按钮上显示的那个源），拉它的真实详情再弹选集。
+                                // 3) 当前源不可播（动作项 / 伪集数 / 空地址）：改拉预搜索第一个结果。
                                 fallbackVod != null && fallbackSite != null && fallbackVod.id.isNotBlank() -> {
                                     Log.e(
                                         TAG_DETAIL,
-                                        "准备拉取换源目标详情: site=${firstSearchVod?.site?.key}, id=${firstSearchVod?.id}",
+                                        "当前源无真实视频链接，自动切换: site=${fallbackSite.key} " +
+                                            "id=${fallbackVod.id} " +
+                                            "集数=${flags.sumOf { it.episodes.orEmpty().size }} " +
+                                            "真实链接线路=${flags.count { it.hasRealVideoUrl() }}",
                                     )
-                                    Notify.show("当前源无剧集，改用 ${fallbackSite.displayName}")
+                                    autoSwitchNotice = true
+                                    Notify.show("当前源不可播，正在切换可用源…")
                                     requestPlayTarget(fallbackVod, fallbackSite)
                                 }
-                                // 4) 没有预搜索结果、但本页有详情通道：重拉一次详情（refresh 绕过坏缓存）。
-                                ownsResultChannel && vodId.isNotBlank() -> {
+                                // 4) 预搜索还没回来：显示 Loading 等待，结果一到自动继续（见 LaunchedEffect）。
+                                else -> {
+                                    pendingPlayFallback = true
                                     playLoading = true
-                                    pendingPlayOpen = true
-                                    // 回到 Loading：页面上出现加载圈，用户知道点了有反应。
-                                    detailResult = null
-                                    Log.e(TAG_DETAIL, "播放: 当前无线路，重新请求详情 site=$siteKey id=$vodId")
-                                    siteViewModel.detailContent(siteKey, vodId, true)
+                                    Log.e(TAG_DETAIL, "当前源无真实视频链接，等待预搜索结果…")
+                                    Notify.show("正在寻找可用源，请稍候")
                                 }
-                                else -> Notify.show(emptyHint)
                             }
                         }
                         DETAIL_ACTION_CHANGE_SOURCE -> {
