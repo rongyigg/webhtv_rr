@@ -826,7 +826,12 @@ private boolean runtimeSourceOnly;
         intent.putExtra("key", key);
         intent.putExtra("id", id);
         intent.putExtra(EXTRA_RESUME_FROM_HISTORY, resumeFromHistory);
-        if (startFullscreen) intent.putExtra(EXTRA_START_FULLSCREEN, true);
+        if (startFullscreen) {
+            intent.putExtra(EXTRA_START_FULLSCREEN, true);
+            // 与 startDirectResolved 一致：Hero UI 起播就是「直达播放」，不进详情增强/融合流程。
+            intent.putExtra("detail_mode", Setting.DETAIL_OPEN_DIRECT);
+            intent.putExtra(EXTRA_DETAIL_RUNTIME_MODE, Setting.DETAIL_OPEN_DIRECT);
+        }
         if (resumeHistory != null) {
             intent.putExtra(EXTRA_RESUME_HISTORY_CID, resumeHistory.getCid());
             intent.putExtra(EXTRA_RESUME_HISTORY_KEY, HistoryResumePayload.encode(resumeHistory));
@@ -8034,7 +8039,14 @@ private boolean runtimeSourceOnly;
         } else if (isVisible(mBinding.widget.center)) {
             hideCenter();
         } else if (isFullscreen()) {
-            exitFullscreen();
+            // Hero UI 起播（startDirectFullscreen：DIRECT + 启动即全屏）要求：
+            // 全屏按返回直接退出播放页回详情页，不再退成「左侧小窗 + 右侧选集」的嵌入式页面。
+            // 只认显式 extra：原版其它入口即使全局设置恰好是 DIRECT，也保持原来的小窗行为。
+            if (isRuntimeDirectMode() && getIntent().getBooleanExtra(EXTRA_START_FULLSCREEN, false)) {
+                finishVideoPlayback();
+            } else {
+                exitFullscreen();
+            }
         } else {
             finishVideoPlayback();
         }

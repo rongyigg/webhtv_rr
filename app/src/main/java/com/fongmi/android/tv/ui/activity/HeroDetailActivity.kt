@@ -629,6 +629,7 @@ private fun HeroDetailScreen(
         if (vod.isFolderTarget()) {
             // 目录壳：绝不调 detailContent，直接拉二级目录。
             pendingPlayCategory = vod.id
+            Log.e("HeroDetail", "准备下探目录: site=${site.key}, id=${vod.id}")
             Log.e(
                 TAG_DETAIL,
                 "播放目标是 folder，直接拉目录: site=${site.key} folder=${vod.id}",
@@ -689,24 +690,12 @@ private fun HeroDetailScreen(
                 val items = result.list.map { child ->
                     if (child.site == null && targetSite != null) child.apply { site = targetSite } else child
                 }
+                Log.e("HeroDetail", "下探结果: listSize=${result.list.size}")
                 Log.e(
                     TAG_DETAIL,
                     "预搜索源目录返回: folder=$pendingFolder listSize=${items.size} " +
                         "code=${result.code} msg=${result.msg}",
                 )
-                // 目录条目自带真实线路（部分聚合源）→ 直接弹选集，不再多发一轮详情。
-                val inline = items.firstOrNull { child -> child.flags.any { it.hasPlayableEpisode() } }
-                if (inline != null && targetSite != null) {
-                    playLoading = false
-                    playFlags = inline.flags
-                    playVod = inline
-                    playSiteKey = targetSite.key
-                    showPlayDialog = true
-                    pendingPlaySite = null
-                    pendingPlayVod = null
-                    pendingPlayDrill = 0
-                    return@Observer
-                }
                 // 跳过动作伪条目，并排除「刚展开的这一个 folder」自己（防自环，层数上限是最后一道闸）。
                 // 按需求取**第一个**有效条目：是剧集就补详情弹选集，还是目录就继续下探。
                 val child = items.firstOrNull {
@@ -722,6 +711,18 @@ private fun HeroDetailScreen(
                 }
                 pendingPlayVod = child
                 pendingPlayDrill++
+                // 目录条目自带真实线路（部分聚合源）→ 直接弹选集，不再多发一轮详情。
+                if (child.flags.any { it.hasPlayableEpisode() }) {
+                    playLoading = false
+                    playFlags = child.flags
+                    playVod = child
+                    playSiteKey = targetSite.key
+                    showPlayDialog = true
+                    pendingPlaySite = null
+                    pendingPlayVod = null
+                    pendingPlayDrill = 0
+                    return@Observer
+                }
                 if (child.isFolderTarget()) {
                     // folder 套 folder：层数用完就停，绝不死循环。
                     if (pendingPlayDrill >= MAX_PLAY_DRILL) {
