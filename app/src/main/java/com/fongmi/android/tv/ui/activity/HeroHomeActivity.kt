@@ -75,8 +75,8 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.nativeKeyEvent
 import androidx.compose.ui.input.key.onPreviewKeyEvent
-import androidx.compose.ui.input.key.repeatCount
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.TextStyle
@@ -1601,7 +1601,7 @@ private fun PosterCard(
                         if (event.type == KeyEventType.KeyDown) {
                             // 系统长按会重复发 KeyDown：只有首次按下（repeatCount == 0）才起计时，
                             // 其余重复事件一律吞掉，绝不透传给底层 clickable 触发一次点击。
-                            if (event.repeatCount == 0) {
+                            if (event.nativeKeyEvent.repeatCount == 0) {
                                 isLongPressTriggered = false
                                 longPressJob?.cancel()
                                 longPressJob = scope.launch {
@@ -1630,7 +1630,7 @@ private fun PosterCard(
                 // 否则 KeyUp 会被直接放行，永远算不出按住了多久。
                 if (event.key == Key.DirectionDown) {
                     if (event.type == KeyEventType.KeyDown) {
-                        if (event.repeatCount == 0) {
+                        if (event.nativeKeyEvent.repeatCount == 0) {
                             isDownLongPressTriggered = false
                             downLongPressJob?.cancel()
                             downLongPressJob = scope.launch {
