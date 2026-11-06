@@ -126,6 +126,7 @@ import com.fongmi.android.tv.ui.hero.KEYWORD_MAX_LENGTH
 import com.fongmi.android.tv.ui.hero.KeyboardSection
 import com.fongmi.android.tv.ui.hero.PLACEHOLDER_INDEX
 import com.fongmi.android.tv.ui.hero.SourceSidebar
+import com.fongmi.android.tv.ui.hero.SourceSelectionStore
 import com.fongmi.android.tv.ui.hero.SourceSidebarMode
 import com.fongmi.android.tv.ui.hero.requestFocus
 import com.fongmi.android.tv.utils.Notify
@@ -665,6 +666,10 @@ private fun HeroSearchScreen(
     /** 顶部放大镜 / 键盘搜索键：走同一个入口（兼容原有调用点）。 */
     fun confirmSearch() = requestSearch()
 
+    /** 侧边栏勾选（持久化）：搜索页、首页、换源弹窗共用同一份，避免各页各选一套。 */
+    fun readCheckedFlags(sites: List<Site>): BooleanArray =
+        SourceSelectionStore.checkedFlags(context, sites)
+
     /**
      * 小房子键 → 全局接口源侧边栏（复用 [SourceSidebar]，绝不自造 Dialog）。
      *
@@ -674,14 +679,26 @@ private fun HeroSearchScreen(
     fun openSourceSidebar() {
         // 真实接口源：隐藏源与用户屏蔽源由 SiteBlockSetting 过滤（与首页小房子、换源弹窗同一套）。
         val sites = SiteBlockSetting.filter(VodConfig.get().getSites(), false)
+        // 勾选变化才需要重搜：用户在侧边栏里连点几次，只发最后一轮请求。
+        var selectionChanged = false
         SourceSidebar.show(
             context = context,
             entries = HeroSourceEntry.of(sites),
             mode = SourceSidebarMode.Multi,
-            initialChecked = BooleanArray(sites.size) { true },
-            onCheckedChanged = { },
+            // 与首页 / 换源弹窗共用同一份持久化勾选：打开时先还原，不再默认全选。
+            initialChecked = readCheckedFlags(sites),
+            onCheckedChanged = { flags ->
+                // 落盘：下次搜索 / 换源 / 预搜索都只请求勾选了的源。
+                SourceSelectionStore.save(context, sites, flags)
+                selectionChanged = true
+            },
             onSiteSelected = { },
             onClosed = {
+                // 勾选变了且已经搜过：按新勾选立刻重搜一轮（没勾的源不会再发请求）。
+                if (selectionChanged && searchedKeyword.isNotBlank()) {
+                    selectionChanged = false
+                    searchSerial++
+                }
                 // Dialog 关闭后当前窗口尚未拿到焦点，延时一帧再 requestFocus 才不会被丢。
                 scope.launch {
                     withFrameNanos { }
@@ -903,9 +920,20 @@ private fun HeroSearchScreen(
             searching = true
             searchProgress = null
             // 2. 收集可搜索站点：与 `f2()` 完全一致，只过滤 isSearchable()。
-            val sites = VodConfig.get().getSites().filter { it.isSearchable() }
-            Log.d(TAG_SEARCH, "开始搜索: keyword=$text 可搜索站点=${sites.size}")
+            val searchable = VodConfig.get().getSites().filter { it.isSearchable() }
+            // 侧边栏勾选（持久化）→ 允许发请求的源集合：没勾的源连请求都不发。
+            val enabledSiteKeys = SourceSelectionStore.checkedSites(context, searchable)
+                .map { it.key }
+                .toSet()
+            val sites = searchable.filter { it.key in enabledSiteKeys }
+            Log.d(
+                TAG_SEARCH,
+                "开始搜索: keyword=$text 可搜索站点=${searchable.size}, " +
+                    "勾选=${sites.size}, 跳过=${searchable.size - sites.size}",
+            )
             if (sites.isEmpty()) {
+                // 一个都没勾：不发请求，直接收掉加载态（与换源弹窗的空勾选行为一致）。
+                Log.e(TAG_SEARCH, "搜索跳过: 侧边栏没有勾选任何源")
                 searching = false
                 return@LaunchedEffect
             }

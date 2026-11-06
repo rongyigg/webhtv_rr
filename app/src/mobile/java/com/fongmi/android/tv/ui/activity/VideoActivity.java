@@ -783,6 +783,17 @@ private final Task.Scope mPersonalRecommendationTasks = new Task.Scope(Task.reco
         startDirect(activity, key, id, name, pic, mark, playFlag, playEpisodeName, playEpisodeUrl, false);
     }
 
+    /**
+     * Hero UI 专用入口：与 [startDirect] 完全一致。
+     *
+     * 手机版播放页本身就是全屏播放（没有 leanback 的「左侧小窗 + 右侧选集」嵌入式首屏），
+     * 这里只做签名对齐，保证 `main` 源集里的 Hero UI 在两种 flavor 下都能编译、行为一致。
+     */
+    public static void startDirectFullscreen(Activity activity, String key, String id, String name, String pic, String mark,
+            String playFlag, String playEpisodeName, String playEpisodeUrl) {
+        startDirect(activity, key, id, name, pic, mark, playFlag, playEpisodeName, playEpisodeUrl);
+    }
+
     public static void startDirect(Activity activity, String key, String id, String name, String pic, String mark,
             String playFlag, String playEpisodeName, String playEpisodeUrl, boolean resumeFromHistory) {
         startDirect(activity, key, id, name, pic, mark, playFlag, "", playEpisodeName, playEpisodeUrl, resumeFromHistory, null);

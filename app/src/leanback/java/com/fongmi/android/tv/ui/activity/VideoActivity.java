@@ -353,6 +353,8 @@ private boolean runtimeSourceOnly;
     private static final String EXTRA_DETAIL_RUNTIME_MODE = "detail_runtime_mode";
     private static final String EXTRA_IMMERSIVE_AUDIO_CACHE_KEY = "immersive_audio_cache_key";
     private static final String EXTRA_SEARCH_KEYWORD = "search_keyword";
+    /** 启动即全屏：Hero UI 点集数起播时带上，跳过「左侧小窗 + 右侧选集」的嵌入式首屏。 */
+    private static final String EXTRA_START_FULLSCREEN = "start_fullscreen";
     private static final java.util.concurrent.ConcurrentHashMap<String, AudioPlaybackResolver.Resolved> IMMERSIVE_AUDIO_LAUNCHES = new java.util.concurrent.ConcurrentHashMap<>();
 
     private ActivityVideoBinding mBinding;
@@ -775,6 +777,17 @@ private boolean runtimeSourceOnly;
         startDirect(activity, key, id, name, pic, mark, playFlag, playEpisodeName, playEpisodeUrl, false);
     }
 
+    /**
+     * Hero UI 专用：起播后**直接全屏**，不显示「左侧小窗 + 右侧选集」的嵌入式首屏。
+     *
+     * 只多带一个 [EXTRA_START_FULLSCREEN] 标记，其余与 [startDirect] 完全一致；
+     * 全屏切换发生在 [initView] 末尾，既不影响原版入口，也不会闪一下小窗。
+     */
+    public static void startDirectFullscreen(Activity activity, String key, String id, String name, String pic, String mark,
+                                             String playFlag, String playEpisodeName, String playEpisodeUrl) {
+        startDirect(activity, key, id, name, pic, mark, playFlag, "", playEpisodeName, playEpisodeUrl, false, null, true);
+    }
+
     public static void startDirect(Activity activity, String key, String id, String name, String pic, String mark,
                                     String playFlag, String playEpisodeName, String playEpisodeUrl, boolean resumeFromHistory) {
         startDirect(activity, key, id, name, pic, mark, playFlag, "", playEpisodeName, playEpisodeUrl, resumeFromHistory, null);
@@ -796,6 +809,13 @@ private boolean runtimeSourceOnly;
     private static void startDirect(Activity activity, String key, String id, String name, String pic, String mark,
                                     String playFlag, String playFlagKey, String playEpisodeName, String playEpisodeUrl,
                                     boolean resumeFromHistory, History resumeHistory) {
+        startDirect(activity, key, id, name, pic, mark, playFlag, playFlagKey, playEpisodeName, playEpisodeUrl,
+                resumeFromHistory, resumeHistory, false);
+    }
+
+    private static void startDirect(Activity activity, String key, String id, String name, String pic, String mark,
+                                    String playFlag, String playFlagKey, String playEpisodeName, String playEpisodeUrl,
+                                    boolean resumeFromHistory, History resumeHistory, boolean startFullscreen) {
         if (AudioActivity.startSite(activity, key, id, name, pic, mark)) return;
         Intent intent = new Intent(activity, VideoActivity.class);
         intent.putExtra("collect", false);
@@ -806,6 +826,7 @@ private boolean runtimeSourceOnly;
         intent.putExtra("key", key);
         intent.putExtra("id", id);
         intent.putExtra(EXTRA_RESUME_FROM_HISTORY, resumeFromHistory);
+        if (startFullscreen) intent.putExtra(EXTRA_START_FULLSCREEN, true);
         if (resumeHistory != null) {
             intent.putExtra(EXTRA_RESUME_HISTORY_CID, resumeHistory.getCid());
             intent.putExtra(EXTRA_RESUME_HISTORY_KEY, HistoryResumePayload.encode(resumeHistory));
@@ -1430,7 +1451,25 @@ private boolean runtimeSourceOnly;
         SpiderDebug.log("video-flow", "initView video view ready cost=%dms", System.currentTimeMillis() - start);
         setViewModel();
         checkId();
+        applyStartFullscreenIfRequested();
         SpiderDebug.log("video-flow", "initView end cost=%dms sinceLaunch=%dms", System.currentTimeMillis() - start, getLaunchCost(System.currentTimeMillis()));
+    }
+
+    /**
+     * Hero UI 起播：进页就把「左侧小窗 + 右侧选集」的嵌入式首屏切成全屏。
+     *
+     * `post` 到首帧之后执行，此时 `mBinding.video` 已有真实布局与焦点，
+     * [enterFullscreen] 里的布局参数 / 焦点处理才是安全的。
+     * 只有显式带 [EXTRA_START_FULLSCREEN] 的入口（[startDirectFullscreen]）才会走到这里，
+     * 原版 `startDirect` / `start` 的行为完全不变。
+     */
+    private void applyStartFullscreenIfRequested() {
+        if (!getIntent().getBooleanExtra(EXTRA_START_FULLSCREEN, false)) return;
+        mBinding.video.post(() -> {
+            if (isFinishing() || isDestroyed() || isFullscreen()) return;
+            enterFullscreen();
+            SpiderDebug.log("video-flow", "start fullscreen on launch key=%s id=%s", getKey(), getId());
+        });
     }
 
     private void applyPlaybackOverlay() {

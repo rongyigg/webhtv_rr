@@ -504,6 +504,16 @@ private fun Vod.isActionItem(): Boolean =
     "action".equals(getTag(), ignoreCase = true) || getAction().isNotBlank()
 
 /**
+ * 这个目标是不是「目录」而不是剧集详情。
+ *
+ * 网盘聚合源（🍍快映等）在搜索结果里给的是 `atvp_detail:507769` 这种 folder 壳 id，
+ * 它**只能**走 `categoryContent`；一旦拿去调 `detailContent`，插件会把整串壳 id
+ * 当成上游详情主键转发，必然 500（日志里就是 `Connection refused`）。
+ */
+private fun Vod.isFolderTarget(): Boolean =
+    isFolder || id.startsWith(ATVP_FOLDER_PREFIX, ignoreCase = true)
+
+/**
  * 传入的 [Vod] 是否已经自带可播放线路；顺手把「只有 urls、还没拆成 episodes」的线路补好。
  *
  * `Flag.setEpisodes("")` 会造出一条空地址剧集，所以只在 `urls` 非空时才补，
@@ -604,18 +614,30 @@ private fun HeroDetailScreen(
     /**
      * 「播放目标」统一入口：当前源没有真实集数时，改拉预搜索第一个结果（按钮上显示的那个源）。
      *
-     * 回包由 result 观察者的 `pendingPlayId` 分支接管：有真实集数直接弹选集，
-     * 没有就用 `categoryContent` 下探二级目录（网盘源 / folder）。
+     * **folder 必须先分流**：`atvp_detail:` / `vod_tag=folder` 的 id 是目录壳，
+     * 拿去调 `detailContent` 会被插件当成上游详情主键 → 500。
+     * 所以这类目标直接走 `categoryContent`，由观察者的 `pendingPlayCategory` 分支接管，
+     * 逐级下探到真正的剧集再弹选集。
      */
     fun requestPlayTarget(vod: Vod, site: Site) {
         playLoading = true
         pendingPlayOpen = false
-        pendingPlayId = vod.id
+        pendingPlayId = null
         pendingPlaySite = site
         pendingPlayVod = vod
         pendingPlayDrill = 0
-        pendingPlayCategory = null
-        siteViewModel.detailContent(site.key, vod.id)
+        if (vod.isFolderTarget()) {
+            // 目录壳：绝不调 detailContent，直接拉二级目录。
+            pendingPlayCategory = vod.id
+            Log.e(
+                TAG_DETAIL,
+                "播放目标是 folder，直接拉目录: site=${site.key} folder=${vod.id}",
+            )
+            siteViewModel.categoryContent(site.key, vod.id, "1", true, hashMapOf())
+        } else {
+            pendingPlayCategory = null
+            siteViewModel.detailContent(site.key, vod.id)
+        }
     }
     DisposableEffect(siteViewModel, vodId) {
         val observer = Observer<Result?> { result ->
@@ -686,6 +708,7 @@ private fun HeroDetailScreen(
                     return@Observer
                 }
                 // 跳过动作伪条目，并排除「刚展开的这一个 folder」自己（防自环，层数上限是最后一道闸）。
+                // 按需求取**第一个**有效条目：是剧集就补详情弹选集，还是目录就继续下探。
                 val child = items.firstOrNull {
                     it.id.isNotBlank() && it.id != pendingFolder && !it.isActionItem()
                 }
@@ -699,7 +722,7 @@ private fun HeroDetailScreen(
                 }
                 pendingPlayVod = child
                 pendingPlayDrill++
-                if (child.isFolder()) {
+                if (child.isFolderTarget()) {
                     // folder 套 folder：层数用完就停，绝不死循环。
                     if (pendingPlayDrill >= MAX_PLAY_DRILL) {
                         playLoading = false
@@ -761,8 +784,9 @@ private fun HeroDetailScreen(
                 }
                 // 0 集数：只有「看起来是 folder」或「详情带动作指令（网盘聚合源）」才下探；
                 // 普通源真的没有剧集时绝不去拉分类页，否则可能把别的剧当成选集播出去。
-                val looksLikeFolder = incoming.isFolder() ||
-                    incoming.id.startsWith(ATVP_FOLDER_PREFIX, ignoreCase = true)
+                // 回包可能丢掉 folder 壳 id（日志里 id 直接为空），所以把「发起请求的那条」也算上。
+                val looksLikeFolder = incoming.isFolderTarget() ||
+                    pendingPlayVod?.isFolderTarget() == true
                 val hasActionEpisodes = incomingFlags.any { flag ->
                     flag.episodes.orEmpty().any { it.isActionCommand() }
                 }
@@ -2628,11 +2652,12 @@ private fun HeroDetail.mergeDetail(vod: Vod?, siteName: String): HeroDetail {
 }
 
 /**
- * 真实起播：只调用原版公开入口 [VideoActivity.startDirect]，绝不自己拼 Intent、
+ * 真实起播：只调用原版公开入口 [VideoActivity.startDirectFullscreen]，绝不自己拼 Intent、
  * 也不碰 PlayerManager / PlaybackActivity。
  *
- * 签名已按源码核对（`app/src/leanback/.../VideoActivity.java`）：
- * `startDirect(activity, key, id, name, pic, mark, playFlag, playEpisodeName, playEpisodeUrl)`。
+ * 用「Fullscreen」变体而不是 [VideoActivity.startDirect]：leanback 的 `VideoActivity`
+ * 默认是「左侧小窗 + 右侧选集」的嵌入式首屏，Hero UI 点集数要**直接全屏起播**。
+ * 两种 flavor 的签名一致（手机版内部就是原 `startDirect`）。
  */
 internal fun startEpisode(
     activity: Activity,
@@ -2652,7 +2677,7 @@ internal fun startEpisode(
         return
     }
     Log.d(TAG_DETAIL, "起播: site=$siteKey id=$id flag=${flag.getFlag()} 集=${episode.getName()}")
-    VideoActivity.startDirect(
+    VideoActivity.startDirectFullscreen(
         activity,
         siteKey,
         id,
