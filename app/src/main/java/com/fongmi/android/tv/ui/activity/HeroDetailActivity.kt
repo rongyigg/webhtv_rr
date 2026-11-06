@@ -2936,7 +2936,8 @@ private fun HeroDetail.mergeTmdb(
                 // 下标入 key：同一演员被判给多个角色时 personId 可能重复，LazyRow 的 key 必须唯一。
                 id = "${person.personId}-$index",
                 name = person.name.orEmpty(),
-                avatarUrl = person.profileUrl.orEmpty(),
+                // 与首页 `preloadHeroAvatars` 用同一表达式：URL 必须逐字一致，预热才能命中磁盘缓存。
+                avatarUrl = upgradeTmdbImage(person.profileUrl.orEmpty(), "w342"),
             )
         },
         rating = rating,

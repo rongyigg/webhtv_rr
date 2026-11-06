@@ -140,20 +140,21 @@ import kotlinx.coroutines.withContext
 /**
  * 首页 override 里的一条完整 TMDB 数据。
  *
- * 首页要三样东西：提档后的图（[highResPoster] / [highResBackdrop]）、简介（[overview]）、
- * 艺术字 Logo（[logoUrl]）；详情页还要 [item] / [detail] / [cast] 才能零请求直接拼出 `Ready`。
+ * 首页只用其中三样：提档后的横图（[highResBackdrop]）、简介（[overview]）、艺术字 Logo（[logoUrl]）；
+ * 详情页还要 [item] / [detail] / [cast] 才能零请求直接拼出 `Ready`。
  * 所以首页内存 overrides 与 [HeroTmdbPrefetchCache] 共用这一个模型，不维护两套字段。
+ *
+ * **不含竖版海报**：接口卡片图（`poster.url`）一律保持源站原图，TMDB 只增强背景 / 简介 / Logo。
  */
 internal data class HeroTmdbData(
     val item: TmdbItem,
-    /** `TmdbService.detail` 的原始 JSON：阶段 1（只换图）为 null，阶段 2 补齐。 */
+    /** `TmdbService.detail` 的原始 JSON：只有「匹配 + 横图」时为 null，焦点条目补详情后才有值。 */
     val detail: JsonObject? = null,
     val cast: List<TmdbPerson> = emptyList(),
     /** 已按当前语言取过译文的简介；空串 = 不覆盖源站简介。 */
     val overview: String = "",
     /** 艺术字 Logo 的完整地址；null / 空串 = 回落 32sp 文字标题。 */
     val logoUrl: String? = null,
-    val highResPoster: String = "",
     val highResBackdrop: String = "",
     /** 是否手动匹配命中：只有手动命中才允许覆盖剧名（历史决策）。 */
     val manual: Boolean = false,
@@ -165,7 +166,7 @@ internal data class HeroTmdbData(
  * 键 = [heroTmdbKey]（站点 + 条目 id）：与首页 `posterKey`、详情页 `siteKey + vodId` 是同一套规则，
  * 不同源里 id 相同的条目不会互相串数据。
  *
- * **只收完整数据**：[HeroTmdbData.detail] 为 null（只换了图的阶段 1 结果）一律不入缓存 ——
+ * **只收完整数据**：[HeroTmdbData.detail] 为 null（只匹配到条目、还没拉详情）一律不入缓存 ——
  * 详情页拿到它时要能做到一条请求都不发。
  */
 internal object HeroTmdbPrefetchCache {
@@ -180,7 +181,7 @@ internal object HeroTmdbPrefetchCache {
 
     private val entries = ConcurrentHashMap<String, HeroTmdbData>()
 
-    /** 写入一条完整数据；`detail` 为空时忽略（调用方无需自己判断阶段）。 */
+    /** 写入一条完整数据；`detail` 为空时忽略（调用方无需自己判断数据是否完整）。 */
     fun put(key: String, data: HeroTmdbData) {
         if (key.isBlank() || data.detail == null) return
         // 超上限就丢一条（任意一条）：只求有界，精确 LRU 对「进详情页即取走」的场景没有价值。
@@ -621,22 +622,22 @@ private fun HeroHomeScreen(
     var showTmdbDialog by remember { mutableStateOf(false) }
     var pendingPosterFocus by remember { mutableIntStateOf(-1) }
 
-    // TMDB 匹配结果：按「站点 key | 条目 id → 完整 TMDB 数据」记一份 override，
-    // 命中时把首页这张卡的海报、背景、简介一起换成 TMDB 内容（只换展示，不动 Vod 本身）。
-    // key 不能用剧名：同名不同季 / 重制版会互相覆盖，`Vod.id` 才是站点内唯一键。
+    // TMDB 匹配结果：按「站点 key | 条目 id → 完整 TMDB 数据」记一份 override。
+    // 【只增强，不替换卡片图】接口返回的竖版海报（`poster.url`）一律保持原样，
+    // 这里只替换全屏背景（横图）、信息区简介、剧名行的艺术字 Logo。
     var tmdbOverrides by remember { mutableStateOf<Map<String, HeroTmdbData>>(emptyMap()) }
+    // 手动匹配确认后 +1：手动换了条目（或上次详情没拉成功）时强制焦点详情 effect 重跑一次。
+    // 用「计数器」而不是在弹窗回调里自己发请求，避免同一个条目被并发请求两遍。
+    var tmdbFocusRevision by remember { mutableIntStateOf(0) }
     val posters = remember(homePosters, tmdbOverrides) {
         homePosters.map { poster ->
             val override = tmdbOverrides[poster.posterKey]
             if (override == null) {
                 poster
             } else {
-                // 图片在写入 override 时已经提档过（`TmdbItem.toHomeTmdbData`）：
-                // 搜索结果默认 w342 竖图 / w780 横图，1080p 全屏下明显糊；这里只做空值回落。
+                // 只有「有值」才覆盖：TMDB 没给横图 / 译文时，源站的图与简介原样保留。
                 poster.copy(
-                    url = override.highResPoster.ifBlank { poster.url },
                     backdropUrl = override.highResBackdrop.ifBlank { poster.backdropUrl },
-                    // 简介同理：TMDB 译文为空时保留源站简介，绝不把整段文案变成空白。
                     synopsis = override.overview.ifBlank { poster.synopsis },
                 )
             }
@@ -644,41 +645,43 @@ private fun HeroHomeScreen(
     }
 
     /**
-     * 阶段 1 落库：只写图片，先让首屏清晰起来，不被详情请求拖住。
+     * 列表级落库：只写「匹配到的条目 + 提档后的横图」，**不拉详情**。
      *
-     * 有并发块在途时手动匹配可能已经抢先写入同一个 key，这里以先到的为准（手动永远优先）。
-     * 返回真正写进 override 的条目，交给阶段 2 补详情。
+     * 目的只是让整排卡片的背景先就位（换焦点时不再闪回源站竖图）；详情 / 演员 / Logo 太重，
+     * 只在焦点真正停住的条目上拉一次，见下面的 `LaunchedEffect(heroPosterKey, heroTmdbId)`。
+     * 已存在 override（手动 / 焦点条目先到）的 key 以先到的为准。
      */
-    fun mergeHomeTmdbMatches(matches: List<HomeTmdbMatch?>): List<HomeTmdbMatch> {
-        val accepted = ArrayList<HomeTmdbMatch>(matches.size)
+    fun mergeHomeTmdbMatches(matches: List<HomeTmdbMatch?>): Int {
         var merged: Map<String, HeroTmdbData>? = null
+        var added = 0
         for (match in matches) {
             if (match == null) continue
             val key = match.poster.posterKey
             if (key in (merged ?: tmdbOverrides)) continue
             merged = (merged ?: tmdbOverrides) + (key to match.item.toHomeTmdbData(manual = match.manual))
-            accepted += match
+            added++
         }
         merged?.let { tmdbOverrides = it }
-        return accepted
+        return added
     }
 
     /**
-     * 阶段 2 落库：详情到齐后补简介 / Logo / 演员，并把同一条数据写进 [HeroTmdbPrefetchCache]。
+     * 焦点条目的详情落库：补简介 / Logo / 演员，并把同一条数据写进 [HeroTmdbPrefetchCache]。
      *
      * 两道闸门：
-     * 1. 期间手动改成了别的 TMDB 条目 → 丢弃（否则「海报是这部、简介是另一部」）；
+     * 1. 期间手动改成了别的 TMDB 条目 → 丢弃（否则「背景是这部、简介是另一部」）；
      * 2. 手动优先于自动 → 自动结果不允许盖掉手动结果。
-     * 空值不覆盖已有图：手动条目本身没有 backdrop，详情也是从竖图兜底来的。
+     * 空值不覆盖已有值：列表级匹配可能已经写过横图，详情里没有就保留它。
      */
     fun mergeHomeTmdbDetail(key: String, data: HeroTmdbData) {
-        val current = tmdbOverrides[key] ?: return
-        if (current.item.tmdbId != data.item.tmdbId) return
-        if (current.manual && !data.manual) return
+        val current = tmdbOverrides[key]
+        if (current != null) {
+            if (current.item.tmdbId != data.item.tmdbId) return
+            if (current.manual && !data.manual) return
+        }
         val merged = data.copy(
-            highResPoster = data.highResPoster.ifBlank { current.highResPoster },
-            highResBackdrop = data.highResBackdrop.ifBlank { current.highResBackdrop },
-            manual = current.manual || data.manual,
+            highResBackdrop = data.highResBackdrop.ifBlank { current?.highResBackdrop.orEmpty() },
+            manual = current?.manual == true || data.manual,
         )
         tmdbOverrides = tmdbOverrides + (key to merged)
         // 只在「这条数据此刻仍然有效」时写缓存：详情页拿到的一定是当前这条条目的数据。
@@ -700,12 +703,14 @@ private fun HeroHomeScreen(
     }
 
     // ------------------------------------------------------------------
-    // TMDB 自动预匹配：给首页每张卡补高清海报 / 背景
+    // TMDB 自动预匹配：给首页每张卡补高清横图 / 简介（不动卡片竖图）
     // ------------------------------------------------------------------
     // 1. 只写内存 override，**不写** `TmdbMatchCache`：自动匹配可能判错，缓存留给手动匹配与详情页，
     //    一次误判不该把整部剧的图片永久钉死；
     // 2. key 用「站点|条目 id」列表而不是 `homePosters` 本身：`Vod` 没有值相等语义，
-    //    用列表内容做 key，切 Tab 回来内容没变就不会把整轮搜索再跑一遍。
+    //    用列表内容做 key，切 Tab 回来内容没变就不会把整轮搜索再跑一遍；
+    // 3. 这一轮**只匹配、不拉详情**：搜索走 1 天磁盘缓存，整排背景先就位；
+    //    详情 / 演员 / Logo 太重，只给焦点真正停住的那一张拉（见下面的焦点 effect）。
     val posterKeys = remember(homePosters) { homePosters.map { it.posterKey } }
     LaunchedEffect(posterKeys) {
         if (homePosters.isEmpty()) return@LaunchedEffect
@@ -725,23 +730,11 @@ private fun HeroHomeScreen(
                 // 分块并发：TMDB 没有批量接口，串行 20+ 次要十几秒；
                 // 每块 3 个既能压住并发，又让排在前面的（首屏可见）最先出结果、先换图。
                 for (chunk in targets.chunked(TMDB_PREMATCH_CONCURRENCY)) {
-                    // 阶段 1：只换图（搜索结果 / 一天磁盘缓存即返回），首屏先清晰起来。
                     val matches = chunk.map { poster ->
                         async(Dispatchers.IO) { resolveHomeTmdb(poster, cache, service, config) }
                     }.awaitAll()
                     // 逐块落库：切 Tab / 换源取消时，已经完成的块不会白跑。
-                    val accepted = mergeHomeTmdbMatches(matches)
-                    applied += accepted.size
-                    if (accepted.isEmpty()) continue
-                    // 阶段 2：同一批补详情 / 演员 / 简介 / 艺术字 Logo，
-                    // 顺带把详情写进 `HeroTmdbPrefetchCache`，详情页点进去就能直出。
-                    val details = accepted.map { match ->
-                        async(Dispatchers.IO) { loadHomeTmdbData(match, service, config) }
-                    }.awaitAll()
-                    for (index in accepted.indices) {
-                        val data = details[index] ?: continue
-                        mergeHomeTmdbDetail(accepted[index].poster.posterKey, data)
-                    }
+                    applied += mergeHomeTmdbMatches(matches)
                 }
             }
         } catch (e: CancellationException) {
@@ -758,6 +751,50 @@ private fun HeroHomeScreen(
     }
 
     // ------------------------------------------------------------------
+    // 焦点条目：补详情 / 演员 / 简介 / 艺术字 Logo，并预载演员头像
+    // ------------------------------------------------------------------
+    // 这里**只补详情、不再搜索**：条目由上面的列表级匹配写进 override。
+    // effect 的第二个 key 就是「这张卡匹配到的 tmdbId」，匹配一落库 effect 就重跑，
+    // 所以既不用等固定时间，也不会把同一次搜索发两遍。
+    // 方向键滑过时焦点每 ~50ms 换一张，防抖到停住才发；切走即随 key 变化取消。
+    val heroPosterKey = heroPoster?.posterKey
+    val heroTmdbId = heroPosterKey?.let { tmdbOverrides[it]?.item?.tmdbId }
+    LaunchedEffect(heroPosterKey, heroTmdbId, tmdbFocusRevision) {
+        val poster = heroPoster ?: return@LaunchedEffect
+        // 列表级匹配还没结果（或这部本来就没匹配上）：没有条目就没有详情可拉，等下一次 key 变化。
+        val existing = tmdbOverrides[poster.posterKey] ?: return@LaunchedEffect
+        if (existing.detail != null) {
+            // 详情已经在内存里（手动匹配拉过 / 刚才停在这张）：不重复请求，只补写跨页缓存
+            // （切 Tab 回来时 override 还在，但缓存条目可能已被别的 Tab 挤掉）。
+            HeroTmdbPrefetchCache.put(poster.posterKey, existing)
+            return@LaunchedEffect
+        }
+        val config = TmdbConfig.effectiveCurrent()
+        if (!config.isReady()) return@LaunchedEffect
+        delay(HERO_TMDB_FOCUS_DEBOUNCE_MS)
+
+        val data = try {
+            withContext(Dispatchers.IO) {
+                loadHomeTmdbData(HomeTmdbMatch(poster, existing.item, existing.manual), TmdbService(), config)
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: TmdbService.AuthException) {
+            Log.w(TAG_HOME, "tmdb 焦点详情鉴权失败: ${e.message}")
+            return@LaunchedEffect
+        } catch (e: Exception) {
+            Log.w(TAG_HOME, "tmdb 焦点详情失败: ${e.message}")
+            null
+        }
+        if (data == null) return@LaunchedEffect
+        // 落库走的是同一个 `mergeHomeTmdbDetail`：期间手动改成别的条目时它自己会丢弃这次结果。
+        mergeHomeTmdbDetail(poster.posterKey, data)
+        // 演员头像一起入队：详情页点进去时头像已经落在 Coil 磁盘缓存里，不用再等一轮。
+        preloadHeroAvatars(context, data.cast)
+        Log.d(TAG_HOME, "tmdb 焦点详情完成: ${poster.title} cast=${data.cast.size}")
+    }
+
+    // ------------------------------------------------------------------
     // 焦点前后各 3 张预加载
     // ------------------------------------------------------------------
     // 用 `posters`（已提档）而不是 `homePosters`：预热源站糊图等于白做。
@@ -767,7 +804,7 @@ private fun HeroHomeScreen(
         posters.getOrNull(focusedPosterIndex)?.let { current ->
             enqueuePreload(loader, context, current.backdropUrl, HERO_BACKDROP_PRELOAD_WIDTH)
             // 焦点条目补写跨页缓存：切 Tab 回来时 override 还在，但缓存条目可能已被别的 Tab 挤掉。
-            // `put` 会忽略「还没补到详情」的阶段 1 数据，所以这里不会把空壳塞进去。
+            // `put` 会忽略「只匹配到、还没拉详情」的数据，所以这里不会把空壳塞进去。
             tmdbOverrides[current.posterKey]?.let { data ->
                 HeroTmdbPrefetchCache.put(current.posterKey, data)
                 // 艺术字 Logo 一起预热：否则「文字标题消失 → Logo 才到」中间会空一段。
@@ -1125,8 +1162,8 @@ private fun HeroHomeScreen(
         }
 
         // ---- 最上层：TMDB 手动匹配弹窗（Compose Dialog，层级盖在首页之上）----
-        // 确定键写回 override → 首页对应卡片的海报/背景换成 TMDB 海报；
-        // 关闭后由 LaunchedEffect(showTmdbDialog) 把焦点还给长按的那张卡。
+        // 确定键写回 override → 首页这张卡的背景 / 简介 / 艺术字 Logo 换成 TMDB 内容
+        // （卡片竖图始终是接口原图，不替换）；关闭后由 LaunchedEffect(showTmdbDialog) 把焦点还给长按的那张卡。
         // 真实数据可能为空（切到空源 / 请求失败），此时没有剧名可匹配，弹窗直接不渲染。
         val tmdbPoster = heroPoster
         if (showTmdbDialog && tmdbPoster != null) {
@@ -1146,29 +1183,15 @@ private fun HeroHomeScreen(
                         cast = prev?.cast.orEmpty(),
                         overview = prev?.overview.orEmpty(),
                         logoUrl = prev?.logoUrl,
-                        highResPoster = upgradeTmdbImage(item.poster, "w500"),
                         highResBackdrop = prev?.highResBackdrop.orEmpty()
                             .ifBlank { upgradeTmdbImage(item.poster, "w1920") },
                         manual = true,
                     )
                     tmdbOverrides = tmdbOverrides + (key to manualData)
-                    // 手动条目本身没有详情：已有就顺手写缓存，没有就后台补一次（不阻塞弹窗关闭）。
+                    // 手动条目本身没有详情：已有就顺手写缓存；没有就交给焦点详情 effect 补拉
+                    // （`tmdbFocusRevision` 变化会强制它重跑一次，避免这里与 effect 并发发同一个请求）。
                     HeroTmdbPrefetchCache.put(key, manualData)
-                    if (prev?.detail == null) {
-                        scope.launch {
-                            val config = TmdbConfig.effectiveCurrent()
-                            if (!config.isReady()) return@launch
-                            val service = TmdbService()
-                            val data = withContext(Dispatchers.IO) {
-                                loadHomeTmdbData(
-                                    HomeTmdbMatch(tmdbPoster, manualItem, true),
-                                    service = service,
-                                    config = config,
-                                )
-                            } ?: return@launch
-                            mergeHomeTmdbDetail(key, data)
-                        }
-                    }
+                    if (prev?.detail == null) tmdbFocusRevision++
                     showTmdbDialog = false
                 },
                 onDismiss = { showTmdbDialog = false },
@@ -2026,6 +2049,24 @@ private const val HERO_BACKDROP_PRELOAD_WIDTH = 960
 private const val HERO_LOGO_PRELOAD_WIDTH = 600
 
 /**
+ * 焦点详情请求的防抖窗口（毫秒）。
+ *
+ * 电视端按住方向键时焦点每 ~50ms 换一张卡，若每次焦点变化都发详情请求，滑过一排就是十几次。
+ * 220ms 与 Tab 切换的防抖同档：用户停手后到请求发出几乎无感，滑过则一次都不发。
+ */
+private const val HERO_TMDB_FOCUS_DEBOUNCE_MS = 220L
+
+/** 演员头像的预热解码宽度：详情页头像约 60dp，2x 屏 120~192px，给 192 足够。 */
+private const val HERO_AVATAR_PRELOAD_WIDTH = 192
+
+/**
+ * 每次最多预热几个演员头像。
+ *
+ * `TmdbService.cast` 上限 18 人，详情页首屏只看得到前几个；预热太多会跟背景 / 海报抢磁盘与网络。
+ */
+private const val HERO_CAST_PRELOAD_LIMIT = 12
+
+/**
  * 首页一张海报卡。
  *
  * 前六个字段只服务 UI；[vod] / [site] 是**真实数据本体**，点确定键时直接交给详情页，
@@ -2094,8 +2135,11 @@ private val TMDB_IMAGE_WIDTHS =
  * - `/t/p/w342/abc.jpg` → `/t/p/w500/abc.jpg`；
  * - 已经是更大的档位、`original`、或自定义图床（不在 `/t/p/` 下）时原样返回，
  *   用户自己配的 `imageBase` / `backdropBase` 不会被改写。
+ *
+ * `internal`（而不是 private）：详情页拼演员头像也要用同一套提档规则，
+ * 两处表达式必须逐字一致，否则首页预热与详情页显示是两个 URL，磁盘缓存白热。
  */
-private fun upgradeTmdbImage(url: String, targetWidth: String): String {
+internal fun upgradeTmdbImage(url: String, targetWidth: String): String {
     if (url.isBlank()) return url
     val marker = "/t/p/"
     val markerIndex = url.indexOf(marker)
@@ -2151,12 +2195,12 @@ private suspend fun resolveHomeTmdb(
 }
 
 /**
- * 首页阶段 2：补详情 / 演员 / 译文简介 / 艺术字 Logo。
+ * 焦点条目的详情补全：补详情 / 演员 / 译文简介 / 艺术字 Logo。
  *
  * 只发**一次**请求：`detail` 走 7 天磁盘缓存（`includeRelated = false`，少带推荐 / 相似，响应体小一半），
  * `cast` 与 `translatedOverview` 都在这份 JSON 上本地解析，不再发网络。
  *
- * 失败返回 null：首页继续用阶段 1 的图 + 源站简介，详情页下次进来再走原来的「缓存 → 搜索」链路。
+ * 失败返回 null：首页继续用已匹配到的横图 + 源站简介，详情页下次进来再走原来的「缓存 → 搜索」链路。
  */
 private suspend fun loadHomeTmdbData(
     match: HomeTmdbMatch,
@@ -2184,8 +2228,8 @@ private suspend fun loadHomeTmdbData(
 /**
  * `TmdbItem` → 首页 override 用的完整数据（[HeroTmdbData]）。
  *
- * 提档在这里一次做完：w342 竖图 → w500、w780 横图 → w1920（TMDB 图床实测支持 w1920）；
- * `original` / 自定义图床原样保留，绝不改写用户自己配的图床。
+ * 只提档横图：w780 → w1920（TMDB 图床实测支持 w1920）；`original` / 自定义图床原样保留，
+ * 绝不改写用户自己配的图床。竖版海报**不提档也不替换**：卡片图始终是接口返回的那张。
  * 没有横图时退回竖图当全屏背景（与首页原来「竖图裁 16:9」的行为一致）。
  */
 private fun TmdbItem.toHomeTmdbData(
@@ -2200,7 +2244,6 @@ private fun TmdbItem.toHomeTmdbData(
     cast = cast,
     overview = overview,
     logoUrl = logoUrl,
-    highResPoster = upgradeTmdbImage(posterUrl, "w500"),
     highResBackdrop = upgradeTmdbImage(backdropUrl.ifBlank { posterUrl }, "w1920"),
     manual = manual,
 )
@@ -2220,6 +2263,32 @@ private fun enqueuePreload(loader: ImageLoader, context: Context, url: String, w
             .build()
     )
 }
+
+/**
+ * 预载焦点条目的演员头像。
+ *
+ * 详情页演员卡是 [HERO_AVATAR_PRELOAD_WIDTH] 量级（60dp 上下，电视 2x 屏约 192px），
+ * 所以解码尺寸给到 192 就够；只入队、不等待，失败也不影响首页。
+ *
+ * URL 走 [homeCastAvatarUrl]，与详情页 `mergeTmdb` 的 `avatarUrl` 是**同一个表达式**：
+ * 两边只要有一个字不同，用户点进去时就会重新下一张，预热等于白做。
+ */
+private fun preloadHeroAvatars(context: Context, cast: List<TmdbPerson>) {
+    if (cast.isEmpty()) return
+    val loader = SingletonImageLoader.get(context)
+    var queued = 0
+    for (person in cast) {
+        if (queued >= HERO_CAST_PRELOAD_LIMIT) break
+        val url = homeCastAvatarUrl(person.profileUrl)
+        if (url.isBlank()) continue
+        enqueuePreload(loader, context, url, HERO_AVATAR_PRELOAD_WIDTH)
+        queued++
+    }
+}
+
+/** 演员头像地址：统一提到 w342（与详情页 `mergeTmdb` 的 `avatarUrl` 逐字一致）。 */
+private fun homeCastAvatarUrl(profileUrl: String): String =
+    upgradeTmdbImage(profileUrl.orEmpty(), "w342")
 
 /** 元数据行：`年份 · 分类 · 备注`，空字段自动省略，不会留下多余的 `·`。 */
 private fun buildMeta(vod: Vod): String = listOf(vod.year, vod.typeName, vod.remarks)
