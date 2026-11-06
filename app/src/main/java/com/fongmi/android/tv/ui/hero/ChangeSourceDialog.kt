@@ -176,6 +176,8 @@ internal class ChangeSourceDialog private constructor(
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // 【排查日志】能走到这里 = Dialog 已经构造成功，接下来只剩「窗口有没有显示」。
+        Log.e(TAG, "弹窗 onCreate: sites=${sites.size}, keyword=[$keyword], quick=$quick")
         setContentView(R.layout.dialog_source)
         setupWindow()
         bindHeader()
@@ -187,6 +189,8 @@ internal class ChangeSourceDialog private constructor(
 
     override fun onStart() {
         super.onStart()
+        // 【排查日志】onStart = 窗口已经真正显示；没有这一行说明 show() 之前就失败了。
+        Log.e(TAG, "弹窗 onStart: 候选源=${sites.size}, 已有 Tab=${tabSites.size}")
         // 焦点进出结果区时同步站点标签的红框（规则 ②③）。
         // 与 onStop 的移除成对，保证弹窗被复用/重新显示时监听不会丢也不会重复添加。
         window?.decorView?.viewTreeObserver?.addOnGlobalFocusChangeListener(focusListener)
@@ -378,12 +382,20 @@ internal class ChangeSourceDialog private constructor(
                 "keys=${targets.joinToString { it.key }}",
         )
         if (keyword.isBlank() || targets.isEmpty()) {
+            // 【致命日志】这里 return = 一个请求都不会发，必须把原因写清楚，
+            // 否则界面只会停在空态，看起来像「弹窗坏了」。
+            Log.e(
+                TAG,
+                "全局搜索跳过: keyword空=${keyword.isBlank()}, 启用源=${targets.size}, " +
+                    "候选源=${sites.size}, 勾选=${enabledSiteKeys.size}",
+            )
             searching = false
             render()
             return
         }
         searching = true
         render()
+        Log.e(TAG, "调用 searchContent(List): 源=${targets.size}, keyword=[$keyword], quick=$quick")
         viewModel.searchContent(targets, keyword, quick)
     }
 
@@ -420,6 +432,11 @@ internal class ChangeSourceDialog private constructor(
             tabSites.add(site)
             // 用插入通知而不是全量重绑：结果是一个个回来的，全量重绑会把焦点打飞。
             siteAdapter.notifyItemInserted(tabSites.lastIndex)
+            Log.e(
+                TAG,
+                "新增 Tab: index=${tabSites.lastIndex}, site=$siteKey(${site.displayName}), " +
+                    "已出结果的源=${tabSites.size}",
+            )
             if (tabSites.size == 1) {
                 // 第一个 Tab 出现：把它设为当前 Tab 并接管焦点（此刻焦点通常还停在空站点栏上）。
                 selectedSite = 0
@@ -700,8 +717,9 @@ internal class ChangeSourceDialog private constructor(
          * @param viewModel Activity 作用域的 [SiteViewModel]（**必须复用**，不能在这里 new）。
          * @param sites 候选源，直接用 [candidates] 的返回值；为空时自动退回「所有可搜索源」。
          * @param keyword 检索关键词（首页当前这张卡的剧名）。
-         * @param quick 是否只搜 quick 源。与原版 `VideoActivity.startSearch` 一致传 `true`：
-         *   `SearchTask` 只跳过**显式**配置 `quickSearch=0` 的源（`Site.getQuickSearch()` 默认 1）。
+         * @param quick 是否只搜 quick 源。换源默认 `false`：`quick=true` 时 `SearchTask` 会跳过
+         *   `quickSearch=0` 的源（很多源都是这种），表现为整屏「该源暂无此剧」。
+         *   原版 `VideoActivity.startSearch` 用 `true`，但换源场景为了多搜出结果先走 `false`。
          * @param onSourceSelected 结果卡片确定键回调，回传**真实 `(Vod, Site)`**。
          * @param onClosed 关闭回调，调用方在这里把焦点交还给首页卡片。
          */
@@ -710,7 +728,7 @@ internal class ChangeSourceDialog private constructor(
             viewModel: SiteViewModel,
             sites: List<Site>,
             keyword: String,
-            quick: Boolean = true,
+            quick: Boolean = false,
             onSourceSelected: (Vod, Site) -> Unit = { _, _ -> },
             onClosed: () -> Unit = {},
         ): ChangeSourceDialog {

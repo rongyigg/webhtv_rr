@@ -574,32 +574,48 @@ private fun HeroHomeScreen(
 
     // 长按卡片确定键 → 换源弹窗（View 体系独立 Dialog，见 [ChangeSourceDialog]，层级盖在首页之上）。
     // 打开期间用 [showSourceDialog] 占位，关闭后由下面的 LaunchedEffect 把焦点还给长按的那张卡。
-    fun changeSource() {
+    //
+    // [poster] 由长按的那张卡直接传进来：**不能只依赖 [heroPoster]**，
+    // 否则首屏数据还没回填 / 焦点刚落上去时 heroPoster 为空，长按会被这里直接吃掉。
+    fun changeSource(poster: HeroPoster? = null) {
         // 【排查日志】长按到底有没有触发：没有这一行 = 按键事件根本没进来。
         Log.e("ChangeSource", "长按触发，准备呼出换源弹窗")
         // 关键词 = 当前这张卡对应的**真实剧名**（`Vod.getName()`）。
-        // 还没有数据时换源没有意义，直接忽略这次长按。
-        val poster = heroPoster
-        if (poster == null) {
-            Log.e("ChangeSource", "长按忽略: 当前没有海报数据（heroPoster=null）")
+        // 优先用长按的这张卡自己的剧名；拿不到才退回首页信息区当前海报。
+        val target = poster ?: heroPoster
+        if (target == null) {
+            Log.e("ChangeSource", "换源忽略: 没有海报数据（既没传卡片，heroPoster 也为空）")
+            Notify.show("当前没有可换源的剧集")
             return
         }
-        val keyword = poster.title
+        val keyword = target.title
+        if (keyword.isBlank()) {
+            Log.e("ChangeSource", "换源忽略: 剧名为空，无法检索")
+            Notify.show("剧名为空，无法换源")
+            return
+        }
         val currentSiteKey = VodConfig.get().getHome().key
         // 候选源规则集中在 ChangeSourceDialog.candidates：
         // isSearchable + isChangeable + 非隐藏 + 未被屏蔽 + 非当前源，最后按站点健康度排序，
         // 与 TmdbDetailActivity 的换源完全一致。
-        val candidates = ChangeSourceDialog.candidates(currentSiteKey)
+        var candidates = ChangeSourceDialog.candidates(currentSiteKey)
         Log.e(
             "ChangeSource",
             "换源候选源: size=${candidates.size}, keyword=[$keyword], current=$currentSiteKey",
         )
         if (candidates.isEmpty()) {
-            // 候选源为空时不弹空壳，但必须留下证据（不是「弹窗崩了」）。
-            Log.e("ChangeSource", "换源候选源为空 → 不弹窗，直接提示")
+            // 【兜底】真实数据下候选源可能因为「当前源不可换 / 全被屏蔽」而空：
+            // 直接退回全部可搜索源再试一次，绝不静默失败。
+            candidates = VodConfig.get().getSites().filter { it.isSearchable }
+            Log.e("ChangeSource", "候选源为空 → 兜底全部可搜索源: size=${candidates.size}")
+        }
+        if (candidates.isEmpty()) {
+            Log.e("ChangeSource", "兜底后仍无可搜索源 → 不弹窗，直接提示")
             Notify.show(context.getString(R.string.play_change_empty))
             return
         }
+        // 【排查日志】真正呼出前的入参：候选源数量 + 关键词（首尾空格肉眼不可见，用 [] 包住）。
+        Log.e("ChangeSource", "准备呼出: keyword=[$keyword], sites=${candidates.size}")
         pendingPosterFocus = focusedPosterIndex
         showSourceDialog = true
         try {
@@ -609,8 +625,8 @@ private fun HeroHomeScreen(
                 viewModel = siteViewModel,
                 sites = candidates,
                 keyword = keyword,
-                // 与原版 VideoActivity.startSearch 一致：全局并发搜，quick = true。
-                quick = true,
+                // 全局并发搜索：先按 quick = false 跑，把不支持 quick 的源也搜一遍。
+                quick = false,
                 onSourceSelected = { vod, site ->
                     // 用户在弹窗里选中了另一部剧：vod 已由 SiteApi.searchContent 盖过 site，
                     // 两者同源，直接用它俩打开该源的真实详情页，不再按剧名二次搜索。
@@ -621,7 +637,7 @@ private fun HeroHomeScreen(
             )
         } catch (e: Throwable) {
             // 【排查日志】弹窗构造 / show() 抛异常时不再静默闪退：打全栈 + 复位占位状态。
-            Log.e("ChangeSource", "呼出换源弹窗失败", e)
+            Log.e("ChangeSource", "弹窗呼出崩溃", e)
             showSourceDialog = false
             Notify.show("换源弹窗打开失败: ${e.message}")
         }
@@ -823,7 +839,10 @@ private fun HeroHomeScreen(
                 // 卡片确定键：打开这条数据**所属源**的真实详情页（Vod 与 Site 一起带过去）。
                 onClick = { poster -> onOpenDetail(poster.vod, poster.site) },
                 // 卡片长按确定键：呼出换源弹窗（见 changeSource）。
-                onLongPress = { changeSource() },
+                onLongPress = { poster ->
+                    Log.e("ChangeSource", "卡片长按触发，准备执行 changeSource")
+                    changeSource(poster)
+                },
                 // 卡片长按方向下键 1.5s：呼出 TMDB 手动匹配弹窗（见下面的 TmdbMatchDialog）。
                 onLongPressTmdb = { index ->
                     pendingPosterFocus = index
@@ -1406,7 +1425,7 @@ private fun PosterArea(
     requesters: List<FocusRequester>,
     onFocused: (Int) -> Unit,
     onClick: (HeroPoster) -> Unit,
-    onLongPress: () -> Unit,
+    onLongPress: (HeroPoster) -> Unit,
     onLongPressTmdb: (Int) -> Unit,
     onMoveUp: (Int) -> Unit,
     onMoveDown: (Int) -> Unit,
@@ -1428,8 +1447,8 @@ private fun PosterArea(
                 requester = requesters[index],
                 onFocused = { onFocused(index) },
                 onClick = { onClick(poster) },
-                // 长按确定键 = 呼出换源弹窗（与这张卡具体是哪部剧无关，换的是接口源）。
-                onLongPress = { onLongPress() },
+                // 长按确定键 = 呼出换源弹窗：把这张卡自己带上去，上层不用再猜 heroPoster。
+                onLongPress = { onLongPress(poster) },
                 // 长按方向下键 1.5s = 呼出 TMDB 手动匹配弹窗（按这张卡自己的剧名去匹配）。
                 onLongPressTmdb = { onLongPressTmdb(index) },
                 // 把“从哪一张发起”带回上层：滚动锚点与左右边界都在上层统一处理。

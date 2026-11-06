@@ -369,8 +369,9 @@ private fun needsSpecialParse(vodId: String): Boolean =
  * 于是 HeroUI 会把它当成普通集数渲染 —— 点下去必然起播失败。
  *
  * 本项目**没有**这套动作的分发器（`SiteApi.action` 只处理 `vod_tag=action` 的整条记录，
- * 且 type=4 时把 action 当 URL 直接 GET），所以这里只做**识别**：
- * 选集弹窗把它们灰显 + 提示「该线路仅用于元数据操作」，绝不把动作串送进起播。
+ * 且 type=4 时把 action 当 URL 直接 GET），所以这里做**识别 + 剔除**：
+ * 选集弹窗在渲染前就把它们过滤掉，绝不把动作串送进起播；
+ * 若某条线路过滤后一集不剩，弹窗显示「该源无可用剧集」。
  */
 private val ACTION_EPISODE_NAMES = listOf("msubinfo", "msubsearch", "msubdel", "watchadd")
 
@@ -378,8 +379,10 @@ private val ACTION_EPISODE_NAMES = listOf("msubinfo", "msubsearch", "msubdel", "
 private fun Episode.isActionCommand(): Boolean {
     val raw = getUrl().trim()
     if (raw.isEmpty()) return false
-    val value = raw.removePrefix("$")
-    return ACTION_EPISODE_NAMES.any { name -> value == name || value.startsWith("${name}-") }
+    // 以 `$` 开头的整串本身就是动作指令（`$msubinfo-...` / `$msubsearch-...`），
+    // 不管后面跟的是什么名字，都不是可播放地址。
+    if (raw.startsWith("$")) return true
+    return ACTION_EPISODE_NAMES.any { name -> raw == name || raw.startsWith("${name}-") }
 }
 
 /**
@@ -727,15 +730,31 @@ private fun HeroDetailScreen(
                             // 候选源规则与首页完全一致：
                             // isSearchable + isChangeable + 非隐藏 + 未被屏蔽 + 非当前源，再按站点健康度排序。
                             // 「当前源」= 这条数据自己的源（首页带过来的 site.key），不是首页源。
-                            val candidates = ChangeSourceDialog.candidates(siteKey)
+                            var candidates = ChangeSourceDialog.candidates(siteKey)
                             Log.e(
                                 "ChangeSource",
                                 "详情页换源候选源: size=${candidates.size}, keyword=[${page.title}], current=$siteKey",
                             )
                             if (candidates.isEmpty()) {
-                                Log.e("ChangeSource", "详情页换源候选源为空 → 不弹窗，直接提示")
+                                // 【兜底】真实数据下候选源可能因为「当前源不可换 / 全被屏蔽」而空：
+                                // 退回全部可搜索源再试一次，绝不静默失败。
+                                candidates = VodConfig.get().getSites().filter { it.isSearchable }
+                                Log.e(
+                                    "ChangeSource",
+                                    "详情页候选源为空 → 兜底全部可搜索源: size=${candidates.size}",
+                                )
+                            }
+                            if (candidates.isEmpty() || page.title.isBlank()) {
+                                Log.e(
+                                    "ChangeSource",
+                                    "详情页换源不弹窗: sites=${candidates.size}, keyword=[${page.title}]",
+                                )
                                 Notify.show(context.getString(R.string.play_change_empty))
                             } else {
+                                Log.e(
+                                    "ChangeSource",
+                                    "准备呼出: keyword=[${page.title}], sites=${candidates.size}",
+                                )
                                 pendingActionFocus = DETAIL_ACTION_CHANGE_SOURCE
                                 showSourceDialog = true
                                 // 换源弹窗改为 View 体系独立 Dialog；showSourceDialog 只用于关闭后的焦点交还。
@@ -746,8 +765,8 @@ private fun HeroDetailScreen(
                                         sites = candidates,
                                         // 详情页的剧名现在是真实值（来自首页 / 上一次换源），直接用它检索。
                                         keyword = page.title,
-                                        // 与原版 VideoActivity.startSearch 一致：全局并发搜，quick = true。
-                                        quick = true,
+                                        // 全局并发搜索：先按 quick = false 跑，把不支持 quick 的源也搜一遍。
+                                        quick = false,
                                         onSourceSelected = { vod, site ->
                                             Notify.show(
                                                 context.getString(
@@ -763,7 +782,7 @@ private fun HeroDetailScreen(
                                     )
                                 } catch (e: Throwable) {
                                     // 【排查日志】弹窗构造 / show() 抛异常时不再静默闪退。
-                                    Log.e("ChangeSource", "详情页呼出换源弹窗失败", e)
+                                    Log.e("ChangeSource", "弹窗呼出崩溃", e)
                                     showSourceDialog = false
                                     Notify.show("换源弹窗打开失败: ${e.message}")
                                 }
@@ -1364,10 +1383,21 @@ internal fun HeroPlayDialog(
     var selectedFlag by remember { mutableIntStateOf(0) }
     val currentFlag = flags[selectedFlag.coerceIn(0, flags.lastIndex)]
 
+    // 【动作指令过滤】网盘聚合 / 猫源把「📄 媒体信息 / 🔍 全局搜索 / ➕ 稍后再看」伪装成集数
+    // （`📄 媒体信息$msubinfo-db%3A...`）。这类 url 不是播放地址，直接**从选集里剔掉**，
+    // 不再灰显：用户看到的每一格都保证能起播。
+    val lineEpisodes = remember(flags) {
+        flags.map { flag -> flag.episodes.orEmpty().filterNot { it.isActionCommand() } }
+    }
+    // 全部线路过滤后都没集数 = 这个源只给了动作指令，UI 显示「该源无可用剧集」。
+    val hasPlayableEpisode = lineEpisodes.any { it.isNotEmpty() }
+
     // 基准表直接用源站返回的 `Episode` 顺序：**不再按集号重排**。
     // 很多源的集名根本没有数字（`Episode.number` 全是 0），按 number 排序会把顺序打乱；
     // 源站顺序本身就是正序，历史索引 / 倒序镜像都以它为坐标原点。
-    val ascending = remember(currentFlag.episodes) { currentFlag.episodes.orEmpty().toList() }
+    val ascending = remember(lineEpisodes, selectedFlag) {
+        lineEpisodes.getOrElse(selectedFlag.coerceIn(0, lineEpisodes.lastIndex)) { emptyList() }
+    }
     val ordered = remember(descending, ascending) { if (descending) ascending.asReversed() else ascending }
     val columns = if (fewColumns) EPISODE_COLUMNS_FEW else EPISODE_COLUMNS_MANY
     // 组容量 = 4 排 × 当前列数：多列 16 集 / 少列 8 集，永远刚好填满 4 排。
@@ -1757,7 +1787,9 @@ internal fun HeroPlayDialog(
                         contentAlignment = Alignment.Center,
                     ) {
                         Text(
-                            text = "该线路暂无集数",
+                            // 全部线路过滤后都没集数 → 这个源只给了动作指令；
+                            // 只有当前线路为空 → 单条线路没集数。
+                            text = if (hasPlayableEpisode) "该线路暂无集数" else "该源无可用剧集",
                             color = Color(0x99FFFFFF),
                             fontSize = DIALOG_SECTION_TITLE_SP.sp,
                         )
@@ -1782,7 +1814,8 @@ internal fun HeroPlayDialog(
                                     // 原版推荐文案：`desc + name`（TMDB 刮削后是「S01E02 标题」，普通源就是集名）。
                                     label = episode.getDisplayName(),
                                     playing = episode === playingEpisode,
-                                    // 动作指令（媒体信息 / 全局搜索 / 稍后再看 / 取消追剧）不是播放地址，灰显。
+                                    // 动作指令（媒体信息 / 全局搜索 / 稍后再看 / 取消追剧）已在 `lineEpisodes`
+                                    // 里被过滤掉，这里的灰显只作兜底（未来若有别的入口绕过过滤）。
                                     actionOnly = episode.isActionCommand(),
                                     requester = cellRequesters[index],
                                     onFocused = {
