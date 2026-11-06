@@ -87,6 +87,7 @@ import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.Observer
 import androidx.lifecycle.ViewModelProvider
 import coil3.compose.AsyncImage
+import com.google.gson.JsonObject
 import com.fongmi.android.tv.R
 import com.fongmi.android.tv.api.SiteApi
 import com.fongmi.android.tv.api.config.VodConfig
@@ -94,8 +95,16 @@ import com.fongmi.android.tv.bean.Episode
 import com.fongmi.android.tv.bean.Flag
 import com.fongmi.android.tv.bean.Result
 import com.fongmi.android.tv.bean.Site
+import com.fongmi.android.tv.bean.TmdbConfig
+import com.fongmi.android.tv.bean.TmdbItem
+import com.fongmi.android.tv.bean.TmdbPerson
 import com.fongmi.android.tv.bean.Vod
 import com.fongmi.android.tv.model.SiteViewModel
+import com.fongmi.android.tv.service.TmdbService
+import com.fongmi.android.tv.setting.Setting
+import com.fongmi.android.tv.setting.TmdbSitePolicy
+import com.fongmi.android.tv.ui.helper.TmdbMatcher
+import com.fongmi.android.tv.ui.helper.TmdbRatingFormatter
 import com.fongmi.android.tv.ui.hero.ChangeSourceDialog
 import com.fongmi.android.tv.ui.hero.HeroAccentColor
 import com.fongmi.android.tv.ui.hero.HeroDialogShell
@@ -105,6 +114,7 @@ import com.fongmi.android.tv.ui.hero.HeroSectionTitle
 import com.fongmi.android.tv.ui.hero.SourceSelectionStore
 import com.fongmi.android.tv.ui.hero.openHeroDetailOrFolder
 import com.fongmi.android.tv.utils.Notify
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
@@ -352,8 +362,9 @@ class HeroDetailActivity : ComponentActivity() {
      * 剧名、海报、元数据、简介先按 Intent 直出，详情接口回来后再由
      * [mergeDetail] 用真实 [Vod] 整体覆盖（含年份 / 地区 / 分类 / 简介 / 导演 / 主演）。
      *
-     * 演职员头像行仍取 [DEMO_DETAIL]（TMDB 刮削尚未接入），线路与选集则完全来自
-     * `SiteViewModel.detailContent` 返回的 `Vod.flags`，不再有假数据。
+     * 演职员：真实条目**不再**沿用 [DEMO_DETAIL] 的假演员（TMDB 到达前整行隐藏，
+     * 命中后由 TMDB 真演员整体替换）；只有旧 adb 入口（`EXTRA_PIC` 为空）才保留假演员用于离线验证。
+     * 线路与选集则完全来自 `SiteViewModel.detailContent` 返回的 `Vod.flags`，不再有假数据。
      */
     private fun readDetail(): HeroDetail {
         val title = intent.getStringExtra(EXTRA_TITLE).orEmpty().ifBlank { return DEMO_DETAIL }
@@ -374,6 +385,9 @@ class HeroDetailActivity : ComponentActivity() {
             posterUrl = pic,
             // 详情接口只给竖版图：背景同样用它，由 Coil 的 Crop 裁成 16:9。
             backdropUrl = pic,
+            // 真实条目清空假演员：TMDB 未配置 / 未命中时演员行为空（UI 整行隐藏），
+            // 不会出现「真数据 + 10 位假演员」混排；旧 adb 入口走上面的 DEMO_DETAIL 分支，假演员保留。
+            cast = emptyList(),
         )
     }
 
@@ -600,6 +614,8 @@ private fun HeroDetailScreen(
         // 传入 Vod 已经带线路：直接当成详情结果，首帧就是 Ready，不等任何网络。
         mutableStateOf(inlineVod?.let { Result.vod(it) })
     }
+    // TMDB 元数据状态：与详情接口并行，到达后由 `page` 重新合并（不阻塞首帧，失败也不影响起播）。
+    var tmdbState by remember { mutableStateOf<TmdbDetailState>(TmdbDetailState.Idle) }
     // ---- 弹窗 / 跨源播放状态：**必须声明在 result 观察者之前**（观察者要用它们分流）----
     var showSourceDialog by remember { mutableStateOf(false) }
     var showPlayDialog by remember { mutableStateOf(false) }
@@ -975,7 +991,76 @@ private fun HeroDetailScreen(
     }
     val detailError = result?.msg.orEmpty()
     // Intent 字段用于首帧直出；详情到达后整体换成真实 Vod（年份 / 地区 / 分类 / 简介 / 导演 / 主演）。
-    val page = remember(detail, detailResult, siteName) { detail.mergeDetail(vod, siteName) }
+    // `tmdbState` 是 key：TMDB 到达后在这层**基于新 base 重新合并**，绝不叠加在上一次 page 上
+    //（否则评分会被追加两次）。key 变化也会让 `cast` / `meta` 与演员下标同步刷新。
+    val page = remember(detail, detailResult, siteName, tmdbState) {
+        val base = detail.mergeDetail(vod, siteName)
+        val ready = tmdbState as? TmdbDetailState.Ready ?: return@remember base
+        base.mergeTmdb(
+            item = ready.item,
+            detail = ready.detail,
+            persons = ready.persons,
+            config = TmdbConfig.effectiveCurrent(),
+            manualHit = ready.manual,
+        )
+    }
+    // ------------------------------------------------------------------
+    // TMDB 元数据（阶段 1：展示 + 读 TmdbMatchCache）
+    // ------------------------------------------------------------------
+    // 为什么独立成 LaunchedEffect，而不是塞进 `detailResult` 的观察者：
+    // 1. 观察者在主线程回调，且播放兜底 / folder 下探都会让它重入，TMDB 的同步 OkHttp 请求会被触发多次；
+    // 2. LaunchedEffect 随 key 变化自动取消、离开页面随组合销毁自动停止，不必手写摘除。
+    // 闸门：没有 Key / 本页源被排除 / 没有真实 vodId（旧 adb 入口）时**一次网络都不发**，页面与改动前一致。
+    LaunchedEffect(vodId, siteKey, vod?.name, vod?.year) {
+        // 已经拿到（或正在拉）TMDB 数据时不再重发：folder 下探 / 预搜索回包都会让 `detailResult` 变化，
+        // 但剧集身份没变；不守卫会把已 Ready 的元数据覆盖成 Error。
+        if (tmdbState is TmdbDetailState.Ready || tmdbState is TmdbDetailState.Loading) return@LaunchedEffect
+        val current = vod ?: return@LaunchedEffect
+        val config = TmdbConfig.effectiveCurrent()
+        if (!config.isReady() || vodId.isBlank() || !TmdbSitePolicy.isEnabled(config, siteKey, vodId)) {
+            tmdbState = TmdbDetailState.Idle
+            return@LaunchedEffect
+        }
+        if (activity.isFinishing) return@LaunchedEffect
+
+        tmdbState = TmdbDetailState.Loading
+        val ready = withContext(Dispatchers.IO) {
+            try {
+                val service = TmdbService()
+                // 1) 先读手动匹配缓存，再读自动匹配缓存（与 TmdbUIAdapter.getCachedMatch 语义一致）。
+                val cache = Setting.getTmdbMatchCache()
+                val manual = cache.findManual(siteKey, vodId, current.name)
+                // 2) 缓存未命中才搜索：详情页要的是「单条最佳」，不是候选列表。
+                val item = manual
+                    ?: cache.find(siteKey, vodId, current.name)
+                    ?: TmdbMatcher(service, config).searchAndMatch(current.name, current)
+                    ?: return@withContext null
+                // 3) 详情与演员必须来自同一份 JSON（append_to_response 已在服务端拼好，且带 7 天磁盘缓存）。
+                val detail = service.detail(item, config)
+                TmdbDetailState.Ready(item, detail, service.cast(detail, config), manual != null)
+            } catch (e: CancellationException) {
+                // 页面已退出 / key 已变化：原样抛出，交给协程取消机制。
+                throw e
+            } catch (e: TmdbService.AuthException) {
+                // Key 失效 / 被拒：不崩页，按「无 TMDB 数据」处理。
+                Log.w(TAG_DETAIL, "tmdb 鉴权失败: ${e.message}")
+                null
+            } catch (e: Exception) {
+                Log.w(TAG_DETAIL, "tmdb 加载失败: ${e.message}")
+                null
+            }
+        }
+        if (ready == null) {
+            tmdbState = TmdbDetailState.Error("")
+            Log.d(TAG_DETAIL, "tmdb 无可用数据（未命中或请求失败）")
+            return@LaunchedEffect
+        }
+        tmdbState = ready
+        Log.d(
+            TAG_DETAIL,
+            "tmdb ready manual=${ready.manual} id=${ready.item.tmdbId} persons=${ready.persons.size}",
+        )
+    }
     // 两组可聚焦区域：按钮组 + 演职员行。跨区移动全部显式 requestFocus，不依赖 2D 焦点搜索。
     val actionRequesters = remember { List(DETAIL_ACTIONS.size) { FocusRequester() } }
     // 换源按钮文案：后台预搜索出第一个源之后，直接把源名写在按钮上（没结果时保持「换源」）。
@@ -1023,6 +1108,12 @@ private fun HeroDetailScreen(
             if (requestDetailFocus(actionRequesters, DETAIL_ACTION_PLAY)) return@LaunchedEffect
             withFrameNanos { }
         }
+    }
+    // TMDB 演员列表整体替换占位数据后，旧的演员下标可能越界：夹回合法范围，空列表直接关闭弹窗。
+    //（`HeroActorDialog` 消费处另有 getOrNull 兜底，避免「重组先于本效果」的那一帧越界。）
+    LaunchedEffect(page.cast.size) {
+        val index = actorDialogIndex ?: return@LaunchedEffect
+        actorDialogIndex = if (page.cast.isEmpty()) null else index.coerceIn(0, page.cast.lastIndex)
     }
 
     Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
@@ -1302,22 +1393,31 @@ private fun HeroDetailScreen(
             )
 
             // 5. 演职员行（最底部）：可横向浏览、可点击，↑ 回按钮组。
-            Spacer(modifier = Modifier.height(DETAIL_CAST_TOP_GAP))
-            HeroCastSection(
-                cast = page.cast,
-                requesters = castRequesters,
-                onFocused = { index -> focusedCast = index },
-                // 点击瞬间先记下「要回到哪个头像」，再同步打开弹窗（不等网络）。
-                onConfirm = { index ->
-                    pendingCastFocus = index
-                    actorDialogIndex = index
-                },
-                onMoveUp = { focusAction(actionRequesters, DETAIL_ACTION_PLAY) { focusedAction = it } },
-                onMoveLeft = { index -> if (index > 0) focusCast(castRequesters, index - 1) },
-                onMoveRight = { index ->
-                    if (index < castRequesters.lastIndex) focusCast(castRequesters, index + 1)
-                },
-            )
+            // 真实条目在 TMDB 到达前演员为空（不再显示假演员）：整行隐藏，避免只剩一个空标题。
+            if (page.cast.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(DETAIL_CAST_TOP_GAP))
+                HeroCastSection(
+                    cast = page.cast,
+                    requesters = castRequesters,
+                    onFocused = { index -> focusedCast = index },
+                    // 命中 TMDB → 进 View 版人物页（首帧用 extras，随后按 personId 全量刷新）；
+                    // 未命中 → 保持原行为：记下「要回到哪个头像」并打开本地占位弹窗（不等网络）。
+                    onConfirm = { index ->
+                        val person = page.tmdbPersons.getOrNull(index)
+                        if (person != null) {
+                            TmdbPersonActivity.start(activity, person, siteKey, Setting.getDetailOpenMode())
+                        } else {
+                            pendingCastFocus = index
+                            actorDialogIndex = index
+                        }
+                    },
+                    onMoveUp = { focusAction(actionRequesters, DETAIL_ACTION_PLAY) { focusedAction = it } },
+                    onMoveLeft = { index -> if (index > 0) focusCast(castRequesters, index - 1) },
+                    onMoveRight = { index ->
+                        if (index < castRequesters.lastIndex) focusCast(castRequesters, index + 1)
+                    },
+                )
+            }
         }
     }
 
@@ -1353,11 +1453,14 @@ private fun HeroDetailScreen(
     }
 
     // 演员详情：点击即弹出，数据在弹窗内部异步加载。
+    // 演员列表可能因 TMDB 到达 / 未命中而变短或清空：这里用 getOrNull 兜底，绝不抛 IndexOutOfBounds。
     actorDialogIndex?.let { index ->
-        HeroActorDialog(
-            actor = page.cast[index],
-            onDismiss = { actorDialogIndex = null },
-        )
+        page.cast.getOrNull(index)?.let { actor ->
+            HeroActorDialog(
+                actor = actor,
+                onDismiss = { actorDialogIndex = null },
+            )
+        }
     }
 }
 
@@ -2654,7 +2757,14 @@ private data class HeroDetailAction(
     val iconSize: Dp,
 )
 
-/** 演职员：TMDB person id + 姓名 + 头像地址（picsum 稳定图，不依赖 TMDB）。 */
+/**
+ * 演职员：稳定 key + 姓名 + 头像地址。
+ *
+ * 真实入口下三个字段全部来自 TMDB（[HeroDetail.tmdbPersons]），[id] 由 personId + 下标拼成，
+ * 只服务 `LazyRow` 的稳定 key（同一演员在同一影片里出现两次也不会撞 key）；
+ * 点击时改用下标去 [HeroDetail.tmdbPersons] 取完整 `TmdbPerson` 交给人物页。
+ * 旧 adb 入口仍是 picsum 占位数据。
+ */
 private data class HeroCast(val id: String, val name: String, val avatarUrl: String)
 
 /**
@@ -2666,6 +2776,28 @@ private data class HeroCast(val id: String, val name: String, val avatarUrl: Str
  * - [Error]：请求失败 / 接口没返回数据（`Result.list` 为空），必须和 [Empty] 区分开。
  */
 private enum class DetailState { Loading, Ready, Empty, Error }
+
+/**
+ * TMDB 元数据加载状态（与 [DetailState] 完全独立：TMDB 失败绝不影响详情 / 选集 / 起播）。
+ *
+ * - [Idle]：没有 Key、本页源被排除、或旧 adb 入口（无 vodId）——不展示任何 TMDB 内容；
+ * - [Loading]：请求在途（UI 仍显示源站数据，不阻塞首帧）；
+ * - [Ready]：[manual] 为 true 表示命中来自手动匹配缓存，只有这种情况才允许覆盖剧名；
+ * - [Error]：未命中 / 鉴权失败 / 网络失败——同样不改变页面数据，只是不展示 TMDB 内容。
+ */
+private sealed class TmdbDetailState {
+    object Idle : TmdbDetailState()
+    object Loading : TmdbDetailState()
+
+    class Ready(
+        val item: TmdbItem,
+        val detail: JsonObject,
+        val persons: List<TmdbPerson>,
+        val manual: Boolean,
+    ) : TmdbDetailState()
+
+    class Error(val message: String) : TmdbDetailState()
+}
 
 private data class HeroDetail(
     val title: String,
@@ -2679,6 +2811,14 @@ private data class HeroDetail(
     /** 真实详情里的导演 / 主演；旧入口或接口没返回时为空，UI 自动隐藏这一行。 */
     val director: String = "",
     val actor: String = "",
+    /** TMDB 评分文案（如 `8.6` / `8.6 · 7.9`）：已并入 [meta] 尾段，这里保留原值便于排查。 */
+    val rating: String = "",
+    /** TMDB 条目 id；0 = 未命中（阶段 2 写缓存 / 跳 TMDB 详情要用）。 */
+    val tmdbId: Int = 0,
+    /** `movie` / `tv`；空串 = 未命中。 */
+    val tmdbMediaType: String = "",
+    /** 演员点击载荷：与 [cast] 同序同长，直接交给 `TmdbPersonActivity.start`。 */
+    val tmdbPersons: List<TmdbPerson> = emptyList(),
 ) {
     /** 导演 / 主演单行文案；两者都为空时返回空串（不占位、不显示）。 */
     fun creditLine(): String = buildString {
@@ -2694,7 +2834,7 @@ private data class HeroDetail(
  * 详情接口返回后，用真实 [Vod] 覆盖首帧的 Intent 数据。
  *
  * 只覆盖接口真的给了的字段：空字段保留 Intent 里的值，避免「接口缺 year 就把年份抹掉」。
- * 演职员头像行仍走 TMDB 占位数据（尚未接入），导演 / 主演先以文字行展示真实值。
+ * 导演 / 主演先以文字行展示真实值；演职员头像行不在本函数处理，由 [mergeTmdb] 填 TMDB 真演员。
  */
 private fun HeroDetail.mergeDetail(vod: Vod?, siteName: String): HeroDetail {
     if (vod == null || vod.id.isBlank()) return this
@@ -2713,6 +2853,59 @@ private fun HeroDetail.mergeDetail(vod: Vod?, siteName: String): HeroDetail {
         backdropUrl = vod.pic.ifBlank { backdropUrl },
         director = vod.director,
         actor = vod.actor,
+    )
+}
+
+/**
+ * TMDB 数据合并：**必须**基于 [mergeDetail] 的结果执行（调用方每次都从
+ * `detail.mergeDetail(...)` 重算，所以评分只会追加一次，不会随重组叠加）。
+ *
+ * 字段策略：
+ * - 剧名：只有「手动匹配命中」才覆盖，自动匹配保留源站名（源站名是用户点进来的那部剧的证据）；
+ * - 简介：TMDB 译文非空且**比现有更长**才覆盖（照抄 `TmdbUIAdapter.enrichVod` 的长度策略）；
+ * - 背景 / 海报：TMDB 有值才覆盖，空值保留详情接口给的图（详情接口只有竖版图）；
+ * - 评分：并入 [meta] 尾段，不新增控件；演员：整份替换，与 [tmdbPersons] 同序同长；
+ * - `logoUrl` 不动：第一轮不接 TMDB 艺术字 Logo，保持 32sp 文字标题回落。
+ *
+ * 手动命中已由调用方算好并通过 [manualHit] 传入，本函数不再重复查缓存。
+ */
+private fun HeroDetail.mergeTmdb(
+    item: TmdbItem?,
+    detail: JsonObject?,
+    persons: List<TmdbPerson>,
+    config: TmdbConfig,
+    manualHit: Boolean,
+): HeroDetail {
+    if (item == null) return this
+    val rating = TmdbRatingFormatter.format(item)
+    // 合并函数在组合期执行：TMDB JSON 结构异常时不能把整页炸掉，失败就当没有简介。
+    val tmdbSynopsis = runCatching { TmdbService().translatedOverview(detail, config) }
+        .getOrNull()
+        .orEmpty()
+        .ifBlank { item.overview.orEmpty() }
+    val mergedMeta = when {
+        rating.isBlank() -> meta
+        meta.isBlank() -> rating
+        else -> "$meta · $rating"
+    }
+    return copy(
+        title = if (manualHit) item.title.orEmpty().ifBlank { title } else title,
+        meta = mergedMeta,
+        synopsis = if (tmdbSynopsis.length > synopsis.length) tmdbSynopsis else synopsis,
+        posterUrl = item.posterUrl.orEmpty().ifBlank { posterUrl },
+        backdropUrl = item.backdropUrl.orEmpty().ifBlank { backdropUrl },
+        cast = persons.mapIndexed { index, person ->
+            HeroCast(
+                // 下标入 key：同一演员被判给多个角色时 personId 可能重复，LazyRow 的 key 必须唯一。
+                id = "${person.personId}-$index",
+                name = person.name.orEmpty(),
+                avatarUrl = person.profileUrl.orEmpty(),
+            )
+        },
+        rating = rating,
+        tmdbId = item.tmdbId,
+        tmdbMediaType = item.mediaType.orEmpty(),
+        tmdbPersons = persons,
     )
 }
 
