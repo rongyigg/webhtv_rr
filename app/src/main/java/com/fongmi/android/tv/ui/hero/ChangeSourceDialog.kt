@@ -113,11 +113,14 @@ internal class ChangeSourceDialog private constructor(
     /** 是否有请求在途（决定进度条 / 空态 / 列表三选一）。 */
     private var searching = false
 
-    /** 侧边栏勾选快照，关闭再打开时保持上次状态；默认全选。 */
-    private var checkedFlags: BooleanArray = BooleanArray(sites.size) { true }
+    /** 侧边栏勾选快照：从 [SourceSelectionStore] 恢复，关闭再打开（甚至下次启动）都保持上次状态。 */
+    private var checkedFlags: BooleanArray = SourceSelectionStore.checkedFlags(context, sites)
 
     /** 允许发起检索的源 key 集合：侧边栏没勾的源连请求都不发。 */
-    private var enabledSiteKeys: Set<String> = sites.map { it.key }.toSet()
+    private var enabledSiteKeys: Set<String> = sites
+        .filterIndexed { index, _ -> checkedFlags.getOrElse(index) { true } }
+        .map { it.key }
+        .toSet()
 
     /**
      * 每个源搜到过的结果（含空结果），避免来回切 Tab 时重复请求。
@@ -897,6 +900,8 @@ internal class ChangeSourceDialog private constructor(
             .filterIndexed { index, _ -> flags.getOrElse(index) { false } }
             .map { it.key }
             .toSet()
+        // 勾选持久化：下次打开弹窗 / 详情页预搜索只请求勾选了的源。
+        SourceSelectionStore.save(context, sites, flags)
         startGlobalSearch()
     }
 
@@ -1174,3 +1179,46 @@ private const val ATVP_FOLDER_PREFIX = "atvp_detail:"
  */
 private fun Vod.isDrillDownFolder(): Boolean =
     isFolder || id.startsWith(ATVP_FOLDER_PREFIX, ignoreCase = true)
+
+/**
+ * 换源侧边栏勾选持久化（SharedPreferences）。
+ *
+ * 只记录**被取消勾选**的源 key：首次启动 / 站点配置新增的源默认勾选，
+ * 用户主动取消的才落盘。这样下次打开换源弹窗、发起全局搜索时，
+ * 只有勾选了的源会真正发请求（详情页进页的预搜索同样按这份勾选过滤）。
+ */
+internal object SourceSelectionStore {
+    private const val PREF_NAME = "hero_source_selection"
+    private const val KEY_EXCLUDED = "excluded_site_keys"
+
+    private fun prefs(context: Context) =
+        context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
+
+    private fun excluded(context: Context): Set<String> =
+        // `getStringSet` 返回的集合不允许修改，先复制一份再使用。
+        prefs(context).getStringSet(KEY_EXCLUDED, emptySet()).orEmpty().toSet()
+
+    /** 与 [sites] 一一对应的勾选状态（未记录过的源默认勾选）。 */
+    fun checkedFlags(context: Context, sites: List<Site>): BooleanArray {
+        val excluded = excluded(context)
+        return BooleanArray(sites.size) { index -> sites[index].key !in excluded }
+    }
+
+    /** 按持久化勾选过滤源：全局搜索只请求勾选了的源。 */
+    fun checkedSites(context: Context, sites: List<Site>): List<Site> {
+        val excluded = excluded(context)
+        return sites.filter { it.key !in excluded }
+    }
+
+    /** 保存本次勾选：只落盘被取消的源，新源默认保持勾选。 */
+    fun save(context: Context, sites: List<Site>, checked: BooleanArray) {
+        val currentKeys = sites.map { it.key }.toSet()
+        val nowUnchecked = sites
+            .filterIndexed { index, _ -> !checked.getOrElse(index) { true } }
+            .map { it.key }
+            .filter { it.isNotBlank() }
+        // 保留「不在本次候选列表里」的源的历史选择，避免被本轮候选覆盖丢掉。
+        val kept = excluded(context) - currentKeys
+        prefs(context).edit().putStringSet(KEY_EXCLUDED, kept + nowUnchecked).apply()
+    }
+}

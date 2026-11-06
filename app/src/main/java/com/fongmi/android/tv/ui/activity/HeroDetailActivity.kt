@@ -102,6 +102,7 @@ import com.fongmi.android.tv.ui.hero.HeroDialogShell
 import com.fongmi.android.tv.ui.hero.HeroFocusBrush
 import com.fongmi.android.tv.ui.hero.HeroImageLoader
 import com.fongmi.android.tv.ui.hero.HeroSectionTitle
+import com.fongmi.android.tv.ui.hero.SourceSelectionStore
 import com.fongmi.android.tv.ui.hero.openHeroDetailOrFolder
 import com.fongmi.android.tv.utils.Notify
 import kotlinx.coroutines.Dispatchers
@@ -271,13 +272,19 @@ class HeroDetailActivity : ComponentActivity() {
             val searchable = candidates.ifEmpty {
                 VodConfig.get().getSites().filter { it.isSearchable }
             }
-            siteViewModel.search.observeForever(preSearchObserver)
+            // 侧边栏勾选持久化：没勾的源连请求都不发（与换源弹窗的全局检索保持一致）。
+            val checked = SourceSelectionStore.checkedSites(this, searchable)
             Log.e(
                 TAG_DETAIL,
                 "进页后台预搜索: keyword=[$searchKeyword], 源=${searchable.size}, " +
-                    "候选源=${candidates.size}, quick=false",
+                    "勾选=${checked.size}, 候选源=${candidates.size}, quick=false",
             )
-            siteViewModel.searchContent(searchable, searchKeyword, false)
+            if (checked.isEmpty()) {
+                Log.e(TAG_DETAIL, "预搜索跳过: 侧边栏没有勾选任何源")
+            } else {
+                siteViewModel.search.observeForever(preSearchObserver)
+                siteViewModel.searchContent(checked, searchKeyword, false)
+            }
         }
         setContent {
             MaterialTheme(colorScheme = darkColorScheme()) {
@@ -306,7 +313,10 @@ class HeroDetailActivity : ComponentActivity() {
     private fun onPreSearchResult(result: Result?) {
         if (result == null) return
         val items = result.list
-        val site = items.firstOrNull()?.site
+        // 第一条**有效**结果：有 id 且不是动作伪条目（`vod_tag=action` / 动作 JSON 卡）。
+        // 它既决定「换源」按钮上显示的源名，也是点「播放」时要优先拉取的目标。
+        val firstValid = items.firstOrNull { it.id.isNotBlank() && !it.isActionItem() }
+        val site = firstValid?.site ?: items.firstOrNull()?.site
         if (site == null) {
             // 空结果是「这个源没搜到」，属于正常；有结果却没有 site 才是异常（无法归因到源）。
             if (items.isNotEmpty()) {
@@ -320,8 +330,8 @@ class HeroDetailActivity : ComponentActivity() {
         )
         preSearchResults.value = (preSearchResults.value + items)
             .distinctBy { vod -> "${vod.siteKey}:${vod.id}" }
-        if (preSearchVod.value == null) {
-            preSearchVod.value = items.first()
+        if (preSearchVod.value == null && firstValid != null) {
+            preSearchVod.value = firstValid
             preSearchSite.value = site
         }
     }
@@ -458,6 +468,12 @@ private fun needsSpecialParse(vodId: String): Boolean =
  */
 private val ACTION_EPISODE_NAMES = listOf("msubinfo", "msubsearch", "msubdel", "watchadd")
 
+/** 播放目标为 folder 时的最大下探层数（detail → category → detail …），防止目录套目录死循环。 */
+private const val MAX_PLAY_DRILL = 3
+
+/** 网盘聚合插件的 folder 壳前缀（与 `ChangeSourceDialog` / `HeroEntryRoute` 的判定一致）。 */
+private const val ATVP_FOLDER_PREFIX = "atvp_detail:"
+
 /** 这条集数的地址是不是动作指令（`msubinfo-...`，兼容整串带前导 `$` 的写法）。 */
 private fun Episode.isActionCommand(): Boolean {
     val raw = getUrl().trim()
@@ -467,6 +483,25 @@ private fun Episode.isActionCommand(): Boolean {
     if (raw.startsWith("$")) return true
     return ACTION_EPISODE_NAMES.any { name -> raw == name || raw.startsWith("${name}-") }
 }
+
+/**
+ * 这条线路过滤掉动作指令后是否还有**真实集数**。
+ *
+ * 网盘聚合源（片单 / 猫源）的 `flags` 非空，但 `episodes` 全是
+ * `📄 媒体信息$msubinfo-...` 这类动作项 —— `flags.isNotEmpty()` 会被骗过去，
+ * 必须按「真实集数」判断，才能正确回落到预搜索源。
+ */
+private fun Flag.hasPlayableEpisode(): Boolean =
+    episodes.orEmpty().any { !it.isActionCommand() }
+
+/**
+ * 目录里的「动作伪条目」（`vod_tag=action` / 带动作 JSON 的卡片）。
+ *
+ * 网盘源的二级目录常混入「📄 媒体信息 / 🔍 全局搜索」这类条目，它们不是可播放文件；
+ * 播放兜底下探时直接跳过，避免把动作卡当剧集继续请求。
+ */
+private fun Vod.isActionItem(): Boolean =
+    "action".equals(getTag(), ignoreCase = true) || getAction().isNotBlank()
 
 /**
  * 传入的 [Vod] 是否已经自带可播放线路；顺手把「只有 urls、还没拆成 episodes」的线路补好。
@@ -546,6 +581,10 @@ private fun HeroDetailScreen(
     var pendingPlayOpen by remember { mutableStateOf(false) }
     /** 选集数据加载中：点过「播放」到回包之间显示加载圈，并挡掉重复请求。 */
     var playLoading by remember { mutableStateOf(false) }
+    /** 播放目标无真实集数时的 folder 下探层数（detail → category → detail …），到上限就停。 */
+    var pendingPlayDrill by remember { mutableIntStateOf(0) }
+    /** 非 null = 正在等 folder 的二级目录回包（`categoryContent`），回包后继续拉子条目详情。 */
+    var pendingPlayCategory by remember { mutableStateOf<String?>(null) }
     // 本页是否真的拥有 `result` 通道：只有「自己发过详情请求」的页面才有资格消费它。
     // 内联源 / 没有主键 / 需要特殊解析的页面从不发详情请求，任何 result 都不是给本页的。
     val ownsResultChannel = vodId.isNotBlank() && !needsSpecialParse(vodId) && inlineVod == null
@@ -561,6 +600,22 @@ private fun HeroDetailScreen(
         vodId.isBlank() -> "缺少剧集 ID，无法加载剧集"
         special -> "该源需要特殊解析，暂不支持直接播放"
         else -> "该资源暂无可用剧集"
+    }
+    /**
+     * 「播放目标」统一入口：当前源没有真实集数时，改拉预搜索第一个结果（按钮上显示的那个源）。
+     *
+     * 回包由 result 观察者的 `pendingPlayId` 分支接管：有真实集数直接弹选集，
+     * 没有就用 `categoryContent` 下探二级目录（网盘源 / folder）。
+     */
+    fun requestPlayTarget(vod: Vod, site: Site) {
+        playLoading = true
+        pendingPlayOpen = false
+        pendingPlayId = vod.id
+        pendingPlaySite = site
+        pendingPlayVod = vod
+        pendingPlayDrill = 0
+        pendingPlayCategory = null
+        siteViewModel.detailContent(site.key, vod.id)
     }
     DisposableEffect(siteViewModel, vodId) {
         val observer = Observer<Result?> { result ->
@@ -578,7 +633,8 @@ private fun HeroDetailScreen(
                 )
                 val previousVod = detailResult?.vod
                 detailResult = result
-                if (incomingFlags.isNotEmpty()) {
+                // 只有「过滤动作指令后还有真集数」才算能播：纯 `$msubinfo` 线路不算。
+                if (incomingFlags.any { it.hasPlayableEpisode() }) {
                     playFlags = incomingFlags
                     // 详情回包没带剧名时退回当前页已有的 Vod，绝不让弹窗丢标题。
                     playVod = incoming.takeIf { it.name.isNotBlank() } ?: previousVod
@@ -586,57 +642,158 @@ private fun HeroDetailScreen(
                     showPlayDialog = true
                     return@Observer
                 }
-                // 本页确实没有线路：用后台预搜索到的第一个结果再试一次（附加排查要求）。
+                // 本页只有动作指令 / 没有集数：改拉预搜索第一个结果（按钮上显示的那个源）。
                 val fallbackVod = latestSearchVod
                 val fallbackSite = latestSearchSite
                 if (fallbackVod != null && fallbackSite != null && fallbackVod.id.isNotBlank()) {
-                    Notify.show("当前源无剧集，改用 ${fallbackSite.displayName}")
-                    playLoading = true
-                    pendingPlayId = fallbackVod.id
-                    pendingPlaySite = fallbackSite
-                    pendingPlayVod = fallbackVod
                     Log.e(
                         TAG_DETAIL,
-                        "播放兜底: 本页仍无线路，改拉 ${fallbackSite.key} 的详情 id=${fallbackVod.id}",
+                        "准备拉取换源目标详情: site=${latestSearchVod?.site?.key}, id=${latestSearchVod?.id}",
                     )
-                    siteViewModel.detailContent(fallbackSite.key, fallbackVod.id)
+                    Notify.show("当前源无剧集，改用 ${fallbackSite.displayName}")
+                    requestPlayTarget(fallbackVod, fallbackSite)
                 } else {
                     Notify.show(emptyHint)
                 }
                 return@Observer
             }
-            // 1) 跨源播放兜底：这条 result 是「播放 → 预搜索源详情」，拿到线路直接弹选集。
-            //    不覆盖本页详情 —— 那是另一个源的数据，混进来会把页面元数据改掉。
+            // 1) folder 下探：`categoryContent` 的二级目录回来了 → 选第一个条目继续拉详情。
+            //    分类接口和详情共用 `result` 通道，所以必须先于普通详情分支判断。
+            val pendingFolder = pendingPlayCategory
+            if (pendingFolder != null) {
+                pendingPlayCategory = null
+                val targetSite = pendingPlaySite
+                // 分类接口不会给每条结果盖 site（原版整页共用一个 key），这里补上。
+                val items = result.list.map { child ->
+                    if (child.site == null && targetSite != null) child.apply { site = targetSite } else child
+                }
+                Log.e(
+                    TAG_DETAIL,
+                    "预搜索源目录返回: folder=$pendingFolder listSize=${items.size} " +
+                        "code=${result.code} msg=${result.msg}",
+                )
+                // 目录条目自带真实线路（部分聚合源）→ 直接弹选集，不再多发一轮详情。
+                val inline = items.firstOrNull { child -> child.flags.any { it.hasPlayableEpisode() } }
+                if (inline != null && targetSite != null) {
+                    playLoading = false
+                    playFlags = inline.flags
+                    playVod = inline
+                    playSiteKey = targetSite.key
+                    showPlayDialog = true
+                    pendingPlaySite = null
+                    pendingPlayVod = null
+                    pendingPlayDrill = 0
+                    return@Observer
+                }
+                // 跳过动作伪条目，并排除「刚展开的这一个 folder」自己（防自环，层数上限是最后一道闸）。
+                val child = items.firstOrNull {
+                    it.id.isNotBlank() && it.id != pendingFolder && !it.isActionItem()
+                }
+                if (child == null || targetSite == null) {
+                    playLoading = false
+                    Notify.show("该源暂无可用剧集")
+                    pendingPlaySite = null
+                    pendingPlayVod = null
+                    pendingPlayDrill = 0
+                    return@Observer
+                }
+                pendingPlayVod = child
+                pendingPlayDrill++
+                if (child.isFolder()) {
+                    // folder 套 folder：层数用完就停，绝不死循环。
+                    if (pendingPlayDrill >= MAX_PLAY_DRILL) {
+                        playLoading = false
+                        Notify.show("目录层级过深，暂不支持播放")
+                        pendingPlaySite = null
+                        pendingPlayVod = null
+                        pendingPlayDrill = 0
+                        return@Observer
+                    }
+                    pendingPlayCategory = child.id
+                    Log.e(
+                        TAG_DETAIL,
+                        "目录条目仍是 folder，继续下探: id=${child.id} depth=$pendingPlayDrill",
+                    )
+                    siteViewModel.categoryContent(targetSite.key, child.id, "1", true, hashMapOf())
+                } else {
+                    pendingPlayId = child.id
+                    Log.e(
+                        TAG_DETAIL,
+                        "目录条目补详情: site=${targetSite.key} id=${child.id} depth=$pendingPlayDrill",
+                    )
+                    siteViewModel.detailContent(targetSite.key, child.id)
+                }
+                return@Observer
+            }
+            // 2) 播放目标（预搜索第一个源 / 其 folder 子条目）的详情回来了：
+            //    有真实集数 → 直接弹选集；没有 → 用 `categoryContent` 下探二级目录。
             val pendingId = pendingPlayId
             if (pendingId != null) {
                 pendingPlayId = null
-                playLoading = false
                 val incoming = result.vod
                 val incomingFlags = incoming.flags
+                // 需求指定的排查日志：先看这条详情到底有没有 flags / episodes。
+                Log.e(
+                    "HeroDetail",
+                    "预搜索源详情返回: flagsSize=${result?.vod?.flags?.size}, " +
+                        "episodesSize=${result?.vod?.flags?.firstOrNull()?.episodes?.size}",
+                )
                 Log.e(
                     TAG_DETAIL,
-                    "跨源播放详情返回: id=${incoming.id} flags=${incomingFlags.size} " +
-                        "集数=${incomingFlags.sumOf { it.episodes.orEmpty().size }} code=${result.code}",
+                    "播放目标详情: id=${incoming.id} flags=${incomingFlags.size} " +
+                        "真实集数=${incomingFlags.sumOf { flag -> flag.episodes.orEmpty().count { !it.isActionCommand() } }} " +
+                        "code=${result.code} depth=$pendingPlayDrill",
                 )
-                if (incomingFlags.isEmpty()) {
-                    Notify.show("该剧暂无可用线路")
-                } else {
+                val targetSite = pendingPlaySite
+                if (incomingFlags.any { it.hasPlayableEpisode() }) {
+                    playLoading = false
                     playFlags = incomingFlags
-                    playVod = incoming.takeIf { it.name.isNotBlank() } ?: pendingPlayVod
-                    playSiteKey = pendingPlaySite?.key ?: siteKey
+                    // 详情回包没带剧名 / 主键时退回发起请求的那条 Vod：跨源起播只认请求时的 id。
+                    playVod = incoming.takeIf { it.name.isNotBlank() && it.id.isNotBlank() }
+                        ?: pendingPlayVod
+                        ?: incoming
+                    playSiteKey = targetSite?.key ?: siteKey
                     showPlayDialog = true
+                    pendingPlaySite = null
+                    pendingPlayVod = null
+                    pendingPlayDrill = 0
+                    return@Observer
                 }
-                pendingPlaySite = null
-                pendingPlayVod = null
+                // 0 集数：只有「看起来是 folder」或「详情带动作指令（网盘聚合源）」才下探；
+                // 普通源真的没有剧集时绝不去拉分类页，否则可能把别的剧当成选集播出去。
+                val looksLikeFolder = incoming.isFolder() ||
+                    incoming.id.startsWith(ATVP_FOLDER_PREFIX, ignoreCase = true)
+                val hasActionEpisodes = incomingFlags.any { flag ->
+                    flag.episodes.orEmpty().any { it.isActionCommand() }
+                }
+                if (targetSite != null && pendingPlayDrill < MAX_PLAY_DRILL &&
+                    (looksLikeFolder || hasActionEpisodes)
+                ) {
+                    pendingPlayDrill++
+                    pendingPlayCategory = pendingId
+                    playLoading = true
+                    Log.e(
+                        TAG_DETAIL,
+                        "预搜索源无集数，下探目录: site=${targetSite.key} folder=$pendingId " +
+                            "depth=$pendingPlayDrill",
+                    )
+                    siteViewModel.categoryContent(targetSite.key, pendingId, "1", true, hashMapOf())
+                } else {
+                    playLoading = false
+                    Notify.show("该源暂无可用剧集")
+                    pendingPlaySite = null
+                    pendingPlayVod = null
+                    pendingPlayDrill = 0
+                }
                 return@Observer
             }
-            // 2) 换源弹窗打开期间，`result` 通道归弹窗（folder 下探 / 卡片补详情）。
+            // 3) 换源弹窗打开期间，`result` 通道归弹窗（folder 下探 / 卡片补详情）。
             //    本页必须让路：目录结果没有 flags，会把详情页误判成「该资源暂无可用剧集」。
             if (showSourceDialog) {
                 Log.d(TAG_DETAIL, "换源弹窗打开中，详情页忽略 result 通道")
                 return@Observer
             }
-            // 3) 本页不发详情请求的页面：任何 result 都是别人的（弹窗 / 其它页面），一律不接。
+            // 4) 本页不发详情请求的页面：任何 result 都是别人的（弹窗 / 其它页面），一律不接。
             if (!ownsResultChannel) {
                 Log.d(TAG_DETAIL, "本页不拥有 result 通道，忽略: site=$siteKey id=$vodId")
                 return@Observer
@@ -913,27 +1070,36 @@ private fun HeroDetailScreen(
                     when (index) {
                         DETAIL_ACTION_PLAY -> {
                             // 【唯一数据源】选集弹窗只认 `flags`（`Vod.setFlags()` 从 playFrom/playUrl 解析）。
-                            // 有线路 → 直接弹；没有 → 先向当前源要一次详情，回包由 result 观察者的
-                            // `pendingPlayOpen` 分支接管，拿到 flags 自动弹选集。
+                            // 当前源有真实集数 → 直接弹；只有动作指令 / 没有集数 → 拉预搜索第一个结果
+                            // （也就是换源按钮上显示的那个源）的真实详情，回包由观察者接管。
                             val fallbackVod = firstSearchVod
                             val fallbackSite = firstSearchSite
                             when {
                                 playLoading -> Notify.show("正在加载剧集，请稍候")
-                                // 1) 已有线路：直接弹选集（不再多发一次详情请求）。
-                                flags.isNotEmpty() -> {
+                                // 1) 当前源有**真实集数**（`$msubinfo` 这类动作指令不算）：直接弹选集。
+                                flags.any { it.hasPlayableEpisode() } -> {
                                     playFlags = flags
                                     playVod = vod
                                     playSiteKey = siteKey
                                     showPlayDialog = true
                                 }
-                                // 2) 详情还在加载：只登记「加载完就弹选集」，不重复发请求。
+                                // 2) 详情还在加载：只登记「加载完再决定」，不重复发请求。
                                 detailState == DetailState.Loading -> {
                                     pendingPlayOpen = true
                                     playLoading = true
                                     Notify.show("正在加载剧集，请稍候")
                                 }
-                                // 3) 本页有详情通道但没线路（失败 / 空结果）：重拉一次详情，
-                                //    refresh=true 绕过可能已经坏掉的缓存。
+                                // 3) 当前源只有动作指令 / 空结果：改用预搜索第一个结果
+                                //    （换源按钮上显示的那个源），拉它的真实详情再弹选集。
+                                fallbackVod != null && fallbackSite != null && fallbackVod.id.isNotBlank() -> {
+                                    Log.e(
+                                        TAG_DETAIL,
+                                        "准备拉取换源目标详情: site=${firstSearchVod?.site?.key}, id=${firstSearchVod?.id}",
+                                    )
+                                    Notify.show("当前源无剧集，改用 ${fallbackSite.displayName}")
+                                    requestPlayTarget(fallbackVod, fallbackSite)
+                                }
+                                // 4) 没有预搜索结果、但本页有详情通道：重拉一次详情（refresh 绕过坏缓存）。
                                 ownsResultChannel && vodId.isNotBlank() -> {
                                     playLoading = true
                                     pendingPlayOpen = true
@@ -941,20 +1107,6 @@ private fun HeroDetailScreen(
                                     detailResult = null
                                     Log.e(TAG_DETAIL, "播放: 当前无线路，重新请求详情 site=$siteKey id=$vodId")
                                     siteViewModel.detailContent(siteKey, vodId, true)
-                                }
-                                // 4) 本页没有详情通道（内联源 / 缺主键 / 特殊解析）：
-                                //    直接用后台预搜索到的第一个结果兜底。
-                                fallbackVod != null && fallbackSite != null && fallbackVod.id.isNotBlank() -> {
-                                    Notify.show("当前源无剧集，改用 ${fallbackSite.displayName}")
-                                    playLoading = true
-                                    pendingPlayId = fallbackVod.id
-                                    pendingPlaySite = fallbackSite
-                                    pendingPlayVod = fallbackVod
-                                    Log.e(
-                                        TAG_DETAIL,
-                                        "播放兜底: 改拉 ${fallbackSite.key} 的详情 id=${fallbackVod.id}",
-                                    )
-                                    siteViewModel.detailContent(fallbackSite.key, fallbackVod.id)
                                 }
                                 else -> Notify.show(emptyHint)
                             }
@@ -999,6 +1151,8 @@ private fun HeroDetailScreen(
                                 pendingPlayId = null
                                 pendingPlaySite = null
                                 pendingPlayVod = null
+                                pendingPlayDrill = 0
+                                pendingPlayCategory = null
                                 // 换源弹窗改为 View 体系独立 Dialog；showSourceDialog 只用于关闭后的焦点交还。
                                 try {
                                     ChangeSourceDialog.show(
