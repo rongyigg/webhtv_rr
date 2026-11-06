@@ -54,7 +54,6 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -77,6 +76,7 @@ import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.repeatCount
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.TextStyle
@@ -116,6 +116,7 @@ import com.fongmi.android.tv.ui.hero.TmdbMatchItem
 import com.fongmi.android.tv.ui.hero.openHeroDetailOrFolder
 import com.fongmi.android.tv.utils.Notify
 import com.fongmi.android.tv.utils.PushParser
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -394,6 +395,9 @@ private fun HeroHomeScreen(
     // 这里用行为完全等价的 observeForever + onDispose 摘除，包括「立刻重放上一次值」这一特性 ——
     // 所以 Activity 重建时旧数据会先回来，不会闪一下空列表。
     var homeResult by remember { mutableStateOf<Result?>(null) }
+    // 换源弹窗（View Dialog）打开状态 + 关闭后要还焦点的那张卡（-1 = 没有待处理）。
+    // **必须声明在 result 观察者之前**：观察者要用它判断「这条 result 是不是弹窗自己的」。
+    var showSourceDialog by remember { mutableStateOf(false) }
     // 已经自动加载过的「站点:分类」。分类结果本身也可能为空，用它挡掉来回死循环。
     var autoCategoryKey by remember { mutableStateOf<String?>(null) }
     // 当前接口源真实返回的分类（`Result.types`）：**Tab 列表的唯一数据源**。
@@ -433,6 +437,13 @@ private fun HeroHomeScreen(
         // 所以这里必须按可空接收：null 直接忽略（等价于「还没拿到数据」）。
         val observer = Observer<Result?> { result ->
             if (result == null) return@Observer
+            // 换源弹窗打开期间，`result` 通道归弹窗（folder 下探的分类结果 / 卡片补详情）：
+            // 本页必须让路，否则目录结果会把首页海报行整排换成文件夹内容。
+            // 关窗后由 [refreshCurrentHome] 重新拉一次，顺带作废弹窗可能还在途的回包。
+            if (showSourceDialog) {
+                Log.d(TAG_HOME, "换源弹窗打开中，首页忽略 result 通道")
+                return@Observer
+            }
             val site = VodConfig.get().getHome()
             // 【动态分类 Tab 的唯一数据源】`Result.types` 决定整排 Tab。
             // - 换源后的第一条结果：**无条件同步**（新源没有分类就把旧源的 Tab 收掉）；
@@ -482,6 +493,34 @@ private fun HeroHomeScreen(
     // 初值 -1 = 还没进过 Tab 栏（此时所有 Tab 都不涂红，只有焦点态）。
     // 确定键仍然保留，作为“确认”语义的兼容入口。
     var selectedTabIndex by remember { mutableIntStateOf(-1) }
+
+    /**
+     * 按**当前停留的 Tab**重新拉一次数据（换源弹窗关闭后专用）。
+     *
+     * 弹窗打开期间 `result` 通道归弹窗（folder 下探 / 卡片补详情），本页的结果被忽略；
+     * 关窗后必须按用户当前所在 Tab 重新请求：
+     * 1. 恢复本页数据（若开窗时正好有首页请求在途，它的回包已经被丢弃）；
+     * 2. 新请求会按 TaskType 作废弹窗还在途的那一轮（`SiteViewModel.execute` 会 cancel 旧 future
+     *    并让旧回包在 taskId 校验处直接返回），避免关窗后旧目录结果再打回首页。
+     *
+     * 停在分类 Tab 时必须重拉**该分类**，不能退回「推荐」——否则 Tab 选中态与列表内容会错位。
+     *
+     * 放在 `selectedTabIndex` 之后：Kotlin 局部变量从声明处才开始生效，写在前面会拿不到它。
+     */
+    fun refreshCurrentHome() {
+        val index = selectedTabIndex
+        val type = homeTabs.getOrNull(index)?.type
+        val site = VodConfig.get().getHome()
+        if (index > 0 && type != null && type.typeId.isNotBlank() && site.key.isNotEmpty()) {
+            categoryTabActive = true
+            Log.d(TAG_HOME, "换源弹窗关闭，重拉当前分类: ${type.typeName}(${type.typeId})")
+            siteViewModel.categoryContent(site.key, type.typeId, "1", true, hashMapOf())
+            return
+        }
+        Log.d(TAG_HOME, "换源弹窗关闭，重拉首页")
+        reloadHome()
+    }
+
     // 已经为哪个 Tab 拉过数据：焦点在同一项上抖动 / 确定键重复触发时不再发请求。
     // 初值 0 = 「推荐」的首屏数据由 `LaunchedEffect(Unit) → reloadHome()` 负责。
     var loadedTabIndex by remember { mutableIntStateOf(0) }
@@ -490,8 +529,7 @@ private fun HeroHomeScreen(
     // 《焦点总结》第 ②③ 条的分界线：只有还在模块内，选中的 Tab 才挂红框；
     // 一旦 ↑ 回顶栏，选中态整体休眠，不留任何红框。
     var moduleFocused by remember { mutableStateOf(false) }
-    // 换源弹窗（View Dialog）打开状态 + 关闭后要还焦点的那张卡（-1 = 没有待处理）。
-    var showSourceDialog by remember { mutableStateOf(false) }
+    // 换源弹窗（View Dialog）打开状态见上方 `showSourceDialog`（必须在 result 观察者之前声明）。
     // TMDB 手动匹配弹窗（Compose Dialog）打开状态；关闭后的焦点同样由 pendingPosterFocus 交还。
     var showTmdbDialog by remember { mutableStateOf(false) }
     var pendingPosterFocus by remember { mutableIntStateOf(-1) }
@@ -633,7 +671,11 @@ private fun HeroHomeScreen(
                     Log.d(TAG_HOME, "换源选中: ${site.displayName} / ${vod.name}")
                     onOpenDetail(vod, site)
                 },
-                onClosed = { showSourceDialog = false },
+                onClosed = {
+                    showSourceDialog = false
+                    // 弹窗打开期间 `result` 通道归弹窗，本页结果被忽略；关窗后按当前 Tab 重拉一次。
+                    refreshCurrentHome()
+                },
             )
         } catch (e: Throwable) {
             // 【排查日志】弹窗构造 / show() 抛异常时不再静默闪退：打全栈 + 复位占位状态。
@@ -1512,25 +1554,26 @@ private fun PosterCard(
         ),
         label = "posterElevation",
     )
-    // 长按确认键自己计时：遥控器不发 View/Compose 的 long-click，只能靠按下时刻自己算。
-    // `pressAt == 0L` 表示当前没有按着（长按时系统会重复发 KeyDown，用它去重）。
-    var pressAt by remember { mutableLongStateOf(0L) }
-    // 这一次按下是否已经由「长按」消费：KeyUp 时据此决定「不再触发点击」。
-    var longPressFired by remember { mutableStateOf(false) }
-    // 方向下键同样自己计时：短按仍是「下移」，按住 ≥ [TMDB_LONG_PRESS_MS] 再松手才呼出 TMDB 匹配弹窗。
-    var downPressAt by remember { mutableLongStateOf(0L) }
+    // 长按自己计时：遥控器长按会重复发 KeyDown，Compose 的 clickable long-click 在 TV 上不可靠，
+    // 所以这里用「首次 KeyDown 起一个 Job → delay → 直接回调」的方式，**完全不等 KeyUp**。
+    //
+    // 不用 `LaunchedEffect(pressAt)`：那条路只能靠改状态间接触发/取消，
+    // 触发后还要先把状态复位（否则弹窗抢走 KeyUp 就永远停在「按着」），时序很难保证。
+    // Job 是唯一可靠的取消句柄：KeyUp / 失焦 / 离开组合都能精确取消。
+    val scope = rememberCoroutineScope()
+    var longPressJob by remember { mutableStateOf<Job?>(null) }
+    // 这一次按下是否已经被长按消费：KeyUp 时据此决定「不再触发点击」，并且必须消费掉 KeyUp。
+    // 只在下次 `repeatCount == 0` 的 KeyDown 复位 —— 弹窗会抢走 KeyUp，不能指望它来复位。
+    var isLongPressTriggered by remember { mutableStateOf(false) }
+    var downLongPressJob by remember { mutableStateOf<Job?>(null) }
+    var isDownLongPressTriggered by remember { mutableStateOf(false) }
 
-    // 【长按 = 换源】按下瞬间 pressAt 变为非 0 → 本 effect 启动；1s 后按键仍按着就呼出换源。
-    // KeyUp / 失焦把 pressAt 归零会直接取消本 effect，不需要手工管理 Job。
-    // 不用 Compose 的 onLongClick：遥控器长按会重复发 KeyDown，clickable 的 long-click 在 TV 上不可靠。
-    LaunchedEffect(pressAt) {
-        if (pressAt == 0L) return@LaunchedEffect
-        delay(POSTER_LONG_PRESS_MS)
-        // 先复位再呼出：弹窗会抢走后续的 KeyUp，这里不能停在「按着」的状态。
-        pressAt = 0L
-        longPressFired = true
-        Log.e("ChangeSource", "卡片长按 ${POSTER_LONG_PRESS_MS}ms 触发换源")
-        onLongPress()
+    // 卡片被移出组合（切分类 / 换源后列表重建）时取消计时，绝不让协程打到已销毁的卡片上。
+    DisposableEffect(Unit) {
+        onDispose {
+            longPressJob?.cancel()
+            downLongPressJob?.cancel()
+        }
     }
 
     Column(
@@ -1542,10 +1585,12 @@ private fun PosterCard(
                 if (it.isFocused) {
                     onFocused()
                 } else {
-                    // 焦点离开时把两个计时都清零，避免下次进来用上一次的按下时刻算出假长按。
-                    pressAt = 0L
-                    downPressAt = 0L
-                    longPressFired = false
+                    // 失焦只取消计时，**不复位触发标记**：弹窗拿到焦点时 KeyUp 会送到弹窗窗口，
+                    // 卡片收不到；若在这里复位，焦点回到卡片后的第一个 KeyUp 会被误判成点击。
+                    longPressJob?.cancel()
+                    longPressJob = null
+                    downLongPressJob?.cancel()
+                    downLongPressJob = null
                 }
             }
             .onPreviewKeyEvent { event ->
@@ -1554,16 +1599,27 @@ private fun PosterCard(
                 when (event.key) {
                     Key.DirectionCenter, Key.Enter -> {
                         if (event.type == KeyEventType.KeyDown) {
-                            // 系统长按会重复发 KeyDown：只有第一次按下才起计时，重复事件直接吞掉。
-                            if (pressAt == 0L) {
-                                longPressFired = false
-                                pressAt = System.currentTimeMillis()
+                            // 系统长按会重复发 KeyDown：只有首次按下（repeatCount == 0）才起计时，
+                            // 其余重复事件一律吞掉，绝不透传给底层 clickable 触发一次点击。
+                            if (event.repeatCount == 0) {
+                                isLongPressTriggered = false
+                                longPressJob?.cancel()
+                                longPressJob = scope.launch {
+                                    delay(POSTER_LONG_PRESS_MS)
+                                    // 到时**直接**触发，不等 KeyUp：先置标记再回调，
+                                    // 上层同步把弹窗标志位置 true，Compose 毫秒级重组把弹窗盖上来。
+                                    isLongPressTriggered = true
+                                    longPressJob = null
+                                    Log.e("ChangeSource", "卡片长按 ${POSTER_LONG_PRESS_MS}ms 触发换源")
+                                    onLongPress()
+                                }
                             }
                         } else {
-                            pressAt = 0L
-                            // 长按已经呼出过弹窗 → 这次 KeyUp 必须被消费，绝不能再触发一次点击。
-                            if (!longPressFired) onClick()
-                            longPressFired = false
+                            // KeyUp：先取消计时；已经触发过长按 → 这个 KeyUp 必须被消费，
+                            // 绝不能再让卡片响应一次点击（否则弹窗下面会同时打开详情页）。
+                            longPressJob?.cancel()
+                            longPressJob = null
+                            if (!isLongPressTriggered) onClick()
                         }
                         return@onPreviewKeyEvent true
                     }
@@ -1574,12 +1630,23 @@ private fun PosterCard(
                 // 否则 KeyUp 会被直接放行，永远算不出按住了多久。
                 if (event.key == Key.DirectionDown) {
                     if (event.type == KeyEventType.KeyDown) {
-                        if (downPressAt == 0L) downPressAt = System.currentTimeMillis()
+                        if (event.repeatCount == 0) {
+                            isDownLongPressTriggered = false
+                            downLongPressJob?.cancel()
+                            downLongPressJob = scope.launch {
+                                delay(TMDB_LONG_PRESS_MS)
+                                // 同确定键：到时直接呼出 TMDB 手动匹配弹窗，不等松手。
+                                isDownLongPressTriggered = true
+                                downLongPressJob = null
+                                Log.e("ChangeSource", "卡片长按下键 ${TMDB_LONG_PRESS_MS}ms 触发 TMDB 匹配")
+                                onLongPressTmdb()
+                            }
+                        }
                     } else {
-                        val held = if (downPressAt == 0L) 0L else System.currentTimeMillis() - downPressAt
-                        downPressAt = 0L
-                        // 长按 → TMDB 手动匹配弹窗；短按 → 原来的下移（首页为空操作）。
-                        if (held >= TMDB_LONG_PRESS_MS) onLongPressTmdb() else onMoveDown()
+                        // 短按 → 原来的下移；长按已经呼出过 TMDB → 这次 KeyUp 什么都不做。
+                        downLongPressJob?.cancel()
+                        downLongPressJob = null
+                        if (!isDownLongPressTriggered) onMoveDown()
                     }
                     return@onPreviewKeyEvent true
                 }

@@ -150,6 +150,26 @@ import kotlinx.coroutines.withContext
  */
 class HeroDetailActivity : ComponentActivity() {
 
+    /**
+     * 详情页后台预搜索（`SiteViewModel.search` 通道，与详情用的 `result` 通道互不干扰）。
+     *
+     * 进页就把「换源」要用的全局搜索跑起来：
+     * 1. 换源按钮上直接显示第一个搜到的源名（[preSearchSite]）；
+     * 2. 点开换源弹窗时把 [preSearchResults] 直接塞进去，跳过弹窗内的首轮检索；
+     * 3. 本页详情拿不到剧集时，「播放」可以用 [preSearchVod] 兜底（拉它的详情再弹选集）。
+     *
+     * 用 Compose `mutableStateOf` 而不是普通字段：按钮文案要跟着结果到达自动重组。
+     */
+    private val preSearchVod = mutableStateOf<Vod?>(null)
+    private val preSearchSite = mutableStateOf<Site?>(null)
+    private val preSearchResults = mutableStateOf<List<Vod>>(emptyList())
+
+    /** `search` 通道的观察者：一个源回一条结果，第一条就是按钮上要显示的源。 */
+    private val preSearchObserver = Observer<Result?> { result -> onPreSearchResult(result) }
+
+    /** Activity 作用域的检索 ViewModel：预搜索 / 换源弹窗共用，`onDestroy` 里摘观察者并停搜索。 */
+    private var siteViewModel: SiteViewModel? = null
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.setBackgroundDrawable(ColorDrawable(AndroidColor.BLACK))
@@ -196,6 +216,7 @@ class HeroDetailActivity : ComponentActivity() {
         // 换源弹窗需要 Activity 作用域的 SiteViewModel（构造函数里就建了两个单线程 executor，
         // 绝不能按弹窗 new）。详情页自己持有一份，和首页互不影响。
         val siteViewModel = ViewModelProvider(this)[SiteViewModel::class.java]
+        this.siteViewModel = siteViewModel
         // 【真实详情】进页就请求：结果写 `SiteViewModel.result`，由 Compose 侧的观察者接收。
         // 详情接口返回的 `Vod.flags[].episodes` 是选集弹窗与起播的唯一数据源。
         when {
@@ -237,6 +258,18 @@ class HeroDetailActivity : ComponentActivity() {
                 siteViewModel.detailContent(siteKey, vodId, true)
             }
         }
+        // 【后台预搜索】换源按钮要显示「第一个搜到的源」，所以进页就并发搜一轮。
+        // 走 `search` 通道（详情走 `result`），互不干扰；quick=true 与原版换源检索一致。
+        val searchKeyword = detail.title
+        if (rawVodId.isNotBlank() && searchKeyword.isNotBlank()) {
+            val searchable = VodConfig.get().getSites().filter { it.isSearchable }
+            siteViewModel.search.observeForever(preSearchObserver)
+            Log.e(
+                TAG_DETAIL,
+                "进页后台预搜索: keyword=[$searchKeyword], 可搜索源=${searchable.size}",
+            )
+            siteViewModel.searchContent(searchable, searchKeyword, true)
+        }
         setContent {
             MaterialTheme(colorScheme = darkColorScheme()) {
                 HeroDetailScreen(
@@ -247,9 +280,43 @@ class HeroDetailActivity : ComponentActivity() {
                     siteName = siteName,
                     siteViewModel = siteViewModel,
                     inlineVod = if (inlinePlayable) passedVod else null,
+                    firstSearchVod = preSearchVod.value,
+                    firstSearchSite = preSearchSite.value,
+                    preSearchResults = preSearchResults.value,
                 )
             }
         }
+    }
+
+    /**
+     * 预搜索结果：一个源回一条，**第一条结果就决定按钮上显示的源名**。
+     *
+     * 同一条剧可能在多个源都命中：按「源 key + 剧 id」去重，弹窗里不会出现重复卡。
+     * 结果里每条 [Vod] 都已由 `SiteApi.searchContent` 盖过 `setSite(site)`。
+     */
+    private fun onPreSearchResult(result: Result?) {
+        if (result == null) return
+        val items = result.list
+        val site = items.firstOrNull()?.site ?: return
+        Log.e(
+            TAG_DETAIL,
+            "预搜索结果: site=${site.key}(${site.displayName}) listSize=${items.size}",
+        )
+        preSearchResults.value = (preSearchResults.value + items)
+            .distinctBy { vod -> "${vod.siteKey}:${vod.id}" }
+        if (preSearchVod.value == null) {
+            preSearchVod.value = items.first()
+            preSearchSite.value = site
+        }
+    }
+
+    override fun onDestroy() {
+        siteViewModel?.let { viewModel ->
+            viewModel.search.removeObserver(preSearchObserver)
+            // 离开详情页就停掉在途的预搜索，别让后台线程继续跑。
+            viewModel.stopSearch()
+        }
+        super.onDestroy()
     }
 
     /**
@@ -429,6 +496,12 @@ private fun HeroDetailScreen(
     siteViewModel: SiteViewModel,
     /** 传入 Vod 自带的线路（非空表示已跳过网络请求，直接渲染）。 */
     inlineVod: Vod?,
+    /** 后台预搜索的第一条结果：换源按钮上显示它的源名，「播放」兜底时用它拉详情。 */
+    firstSearchVod: Vod?,
+    /** 后台预搜索第一条结果所属的源。 */
+    firstSearchSite: Site?,
+    /** 后台预搜索的全部结果：点「换源」直接塞进弹窗，跳过弹窗首轮检索。 */
+    preSearchResults: List<Vod>,
 ) {
     val context = LocalContext.current
     // ------------------------------------------------------------------
@@ -441,9 +514,59 @@ private fun HeroDetailScreen(
         // 传入 Vod 已经带线路：直接当成详情结果，首帧就是 Ready，不等任何网络。
         mutableStateOf(inlineVod?.let { Result.vod(it) })
     }
+    // ---- 弹窗 / 跨源播放状态：**必须声明在 result 观察者之前**（观察者要用它们分流）----
+    var showSourceDialog by remember { mutableStateOf(false) }
+    var showPlayDialog by remember { mutableStateOf(false) }
+    /** 选集弹窗实际渲染的线路：默认取本页详情；跨源兜底时换成那个源的线路。 */
+    var playFlags by remember { mutableStateOf<List<Flag>>(emptyList()) }
+    var playVod by remember { mutableStateOf<Vod?>(null) }
+    /** 选集弹窗起播用的源 key：默认本页源，跨源兜底时是预搜索命中的那个源。 */
+    var playSiteKey by remember { mutableStateOf(siteKey) }
+    /** 非 null = 正在等「播放兜底」那个源的详情回包；回包一到直接弹选集。 */
+    var pendingPlayId by remember { mutableStateOf<String?>(null) }
+    var pendingPlaySite by remember { mutableStateOf<Site?>(null) }
+    var pendingPlayVod by remember { mutableStateOf<Vod?>(null) }
+    // 本页是否真的拥有 `result` 通道：只有「自己发过详情请求」的页面才有资格消费它。
+    // 内联源 / 没有主键 / 需要特殊解析的页面从不发详情请求，任何 result 都不是给本页的。
+    val ownsResultChannel = vodId.isNotBlank() && !needsSpecialParse(vodId) && inlineVod == null
     DisposableEffect(siteViewModel, vodId) {
         val observer = Observer<Result?> { result ->
             if (result == null) return@Observer
+            // 1) 跨源播放兜底：这条 result 是「播放 → 预搜索源详情」，拿到线路直接弹选集。
+            //    不覆盖本页详情 —— 那是另一个源的数据，混进来会把页面元数据改掉。
+            val pendingId = pendingPlayId
+            if (pendingId != null) {
+                pendingPlayId = null
+                val incoming = result.vod
+                val incomingFlags = incoming.flags
+                Log.e(
+                    TAG_DETAIL,
+                    "跨源播放详情返回: id=${incoming.id} flags=${incomingFlags.size} " +
+                        "集数=${incomingFlags.sumOf { it.episodes.orEmpty().size }} code=${result.code}",
+                )
+                if (incomingFlags.isEmpty()) {
+                    Notify.show("该剧暂无可用线路")
+                } else {
+                    playFlags = incomingFlags
+                    playVod = incoming.takeIf { it.name.isNotBlank() } ?: pendingPlayVod
+                    playSiteKey = pendingPlaySite?.key ?: siteKey
+                    showPlayDialog = true
+                }
+                pendingPlaySite = null
+                pendingPlayVod = null
+                return@Observer
+            }
+            // 2) 换源弹窗打开期间，`result` 通道归弹窗（folder 下探 / 卡片补详情）。
+            //    本页必须让路：目录结果没有 flags，会把详情页误判成「该资源暂无可用剧集」。
+            if (showSourceDialog) {
+                Log.d(TAG_DETAIL, "换源弹窗打开中，详情页忽略 result 通道")
+                return@Observer
+            }
+            // 3) 本页不发详情请求的页面：任何 result 都是别人的（弹窗 / 其它页面），一律不接。
+            if (!ownsResultChannel) {
+                Log.d(TAG_DETAIL, "本页不拥有 result 通道，忽略: site=$siteKey id=$vodId")
+                return@Observer
+            }
             // 【排查日志 1】Result 形状：listSize=0 说明请求失败 / 接口没返回数据，
             // listSize>0 才轮到「flags 为什么是空」的问题。
             Log.d(
@@ -543,11 +666,15 @@ private fun HeroDetailScreen(
     val page = remember(detail, detailResult, siteName) { detail.mergeDetail(vod, siteName) }
     // 两组可聚焦区域：按钮组 + 演职员行。跨区移动全部显式 requestFocus，不依赖 2D 焦点搜索。
     val actionRequesters = remember { List(DETAIL_ACTIONS.size) { FocusRequester() } }
+    // 换源按钮文案：后台预搜索出第一个源之后，直接把源名写在按钮上（没结果时保持「换源」）。
+    val changeSourceLabel = remember(firstSearchSite) {
+        val name = firstSearchSite?.displayName.orEmpty()
+        if (name.isBlank()) "换源" else "换源 ($name)"
+    }
     val castRequesters = remember(page.cast.size) { List(page.cast.size) { FocusRequester() } }
     var focusedAction by remember { mutableIntStateOf(DETAIL_ACTION_PLAY) }
     var focusedCast by remember { mutableIntStateOf(0) }
-    var showPlayDialog by remember { mutableStateOf(false) }
-    var showSourceDialog by remember { mutableStateOf(false) }
+    // `showPlayDialog` / `showSourceDialog` 已在 result 观察者之前声明（观察者要用它们分流）。
     // 正在查看的演员下标；非 null 时演员详情弹窗可见。
     var actorDialogIndex by remember { mutableStateOf<Int?>(null) }
     // 弹窗关闭后要回去的演员下标；-1 表示「没有待恢复的演员焦点」。
@@ -709,6 +836,8 @@ private fun HeroDetailScreen(
             Spacer(modifier = Modifier.height(DETAIL_ACTIONS_TOP_GAP))
             HeroDetailActionRow(
                 requesters = actionRequesters,
+                // 「换源 (源名)」：源名来自进页预搜索的第一条结果。
+                changeSourceLabel = changeSourceLabel,
                 onFocused = { index -> focusedAction = index },
                 // 「播放」拉起选集弹窗；「换源」拉起换源弹窗（收藏仍是占位）。
                 onConfirm = { index ->
@@ -721,8 +850,33 @@ private fun HeroDetailScreen(
                                 detailResult = null
                                 siteViewModel.detailContent(siteKey, vodId, true)
                             }
-                            DetailState.Empty -> Notify.show(emptyHint)
-                            DetailState.Ready -> showPlayDialog = true
+                            DetailState.Empty -> {
+                                // 当前源确实没有剧集：后台预搜索已经找到别的源时，拉它的详情直接弹选集，
+                                // 不再让用户自己点「换源」再翻一遍。
+                                val fallback = firstSearchVod
+                                val fallbackSite = firstSearchSite
+                                if (fallback != null && fallbackSite != null && fallback.id.isNotBlank()) {
+                                    Notify.show("当前源无剧集，改用 ${fallbackSite.displayName}")
+                                    pendingPlayId = fallback.id
+                                    pendingPlaySite = fallbackSite
+                                    pendingPlayVod = fallback
+                                    showPlayDialog = false
+                                    Log.e(
+                                        TAG_DETAIL,
+                                        "播放兜底: 当前源无剧集，改拉 ${fallbackSite.key} 的详情 id=${fallback.id}",
+                                    )
+                                    siteViewModel.detailContent(fallbackSite.key, fallback.id)
+                                } else {
+                                    Notify.show(emptyHint)
+                                }
+                            }
+                            DetailState.Ready -> {
+                                // 选集数据以本页详情为准；跨源兜底时由 result 观察者改写。
+                                playFlags = flags
+                                playVod = vod
+                                playSiteKey = siteKey
+                                showPlayDialog = true
+                            }
                         }
                         DETAIL_ACTION_CHANGE_SOURCE -> {
                             // 【排查日志】换源按钮到底有没有点进来：没有这一行 = 点击事件没到。
@@ -767,6 +921,8 @@ private fun HeroDetailScreen(
                                         keyword = page.title,
                                         // 全局并发搜索：先按 quick = false 跑，把不支持 quick 的源也搜一遍。
                                         quick = false,
+                                        // 进页预搜索的结果直接铺开：弹窗首帧就有卡片，不再等一轮网络。
+                                        initialResults = preSearchResults,
                                         onSourceSelected = { vod, site ->
                                             Notify.show(
                                                 context.getString(
@@ -778,7 +934,22 @@ private fun HeroDetailScreen(
                                             // 选中条目已经带好 site，不再按剧名二次搜索。
                                             openHeroDetailOrFolder(activity, vod, site)
                                         },
-                                        onClosed = { showSourceDialog = false },
+                                        onClosed = {
+                                            showSourceDialog = false
+                                            // 弹窗打开期间 result 通道归弹窗，本页的在途详情回包会被丢弃；
+                                            // 关窗后按自己的主键重拉一次：既恢复页面，也作废弹窗可能还在途的请求
+                                            // （`SiteViewModel.execute` 会 cancel 旧 future 并让旧回包失效）。
+                                            if (ownsResultChannel) {
+                                                Log.e(
+                                                    TAG_DETAIL,
+                                                    "换源弹窗关闭，重拉详情: site=$siteKey id=$vodId",
+                                                )
+                                                siteViewModel.detailContent(siteKey, vodId, false)
+                                            } else if (inlineVod != null) {
+                                                // 内联源不联网：把首帧那份线路原样恢复，绝不让弹窗的目录结果留在页面上。
+                                                detailResult = Result.vod(inlineVod)
+                                            }
+                                        },
                                     )
                                 } catch (e: Throwable) {
                                     // 【排查日志】弹窗构造 / show() 抛异常时不再静默闪退。
@@ -818,17 +989,32 @@ private fun HeroDetailScreen(
         }
     }
 
-    if (showPlayDialog) {
+    if (showPlayDialog && playFlags.isNotEmpty()) {
+        val episodeVod = playVod
+        // 起播的源：本页详情 → 本页源；跨源兜底 → 预搜索命中的那个源。
+        val episodeSiteKey = playSiteKey
+        // 起播 id：优先用详情回包里的 id；回包没带时，**只有本页自己的源**才能回落到页面主键
+        // （跨源时那个 id 属于别的源，绝不能拿来顶）。
+        val episodeVodId = episodeVod?.id.orEmpty().ifBlank {
+            if (episodeSiteKey == siteKey) vodId else ""
+        }
         HeroPlayDialog(
             // 真实线路：`Vod.flags` 原样传入，某条线路没集数时弹窗内部显示「该线路暂无集数」。
-            flags = flags,
+            flags = playFlags,
             // 历史进度还没接本地库：-1 = 没看过，焦点落第 1 集。
             lastWatchedEpisodeIndex = -1,
             // 选中真实 (线路, 集) 后直接走原版起播入口，不自己拼 Intent。
             onEpisodeSelected = { flag, episode ->
                 // 先关弹窗再起播：VideoActivity 是另一个页面，弹窗留在背后会闪一下。
                 showPlayDialog = false
-                startEpisode(activity, siteKey, vod, vodId, flag, episode)
+                startEpisode(
+                    activity,
+                    episodeSiteKey,
+                    episodeVod,
+                    episodeVodId,
+                    flag,
+                    episode,
+                )
             },
             onDismiss = { showPlayDialog = false },
         )
@@ -1226,6 +1412,8 @@ private object ActorProfileCache {
 @Composable
 private fun HeroDetailActionRow(
     requesters: List<FocusRequester>,
+    /** 换源按钮的动态文案（`换源 (源名)`）：预搜索还没结果时就是「换源」。 */
+    changeSourceLabel: String,
     onFocused: (Int) -> Unit,
     onConfirm: (Int) -> Unit,
     onMoveLeft: (Int) -> Unit,
@@ -1236,6 +1424,8 @@ private fun HeroDetailActionRow(
         DETAIL_ACTIONS.forEachIndexed { index, action ->
             HeroDetailActionButton(
                 action = action,
+                // 只有「换源」允许覆盖文案，其余按钮保持 [DETAIL_ACTIONS] 里的静态文案。
+                label = if (index == DETAIL_ACTION_CHANGE_SOURCE) changeSourceLabel else action.label,
                 requester = requesters[index],
                 onFocused = { onFocused(index) },
                 onConfirm = { onConfirm(index) },
@@ -1258,6 +1448,8 @@ private fun HeroDetailActionRow(
 @Composable
 private fun HeroDetailActionButton(
     action: HeroDetailAction,
+    /** 实际显示的文案：默认取 [action]，换源按钮由调用方覆盖成「换源 (源名)」。 */
+    label: String,
     requester: FocusRequester,
     onFocused: () -> Unit,
     onConfirm: () -> Unit,
@@ -1317,7 +1509,7 @@ private fun HeroDetailActionButton(
             modifier = Modifier.size(action.iconSize),
         )
         Text(
-            text = action.label,
+            text = label,
             color = Color.White,
             fontSize = DETAIL_ACTION_SP.sp,
             // XML L134：textStyle="bold"，三颗按钮全部加粗。

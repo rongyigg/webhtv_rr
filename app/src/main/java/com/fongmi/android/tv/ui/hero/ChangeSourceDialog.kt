@@ -1,7 +1,9 @@
 package com.fongmi.android.tv.ui.hero
 
+import android.app.Activity
 import android.app.Dialog
 import android.content.Context
+import android.content.ContextWrapper
 import android.graphics.Color
 import android.graphics.drawable.ColorDrawable
 import android.os.Bundle
@@ -14,11 +16,15 @@ import android.view.ViewTreeObserver
 import android.view.WindowManager
 import android.widget.FrameLayout
 import android.widget.TextView
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.platform.ComposeView
+import androidx.compose.ui.platform.ViewCompositionStrategy
 import androidx.lifecycle.Observer
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.fongmi.android.tv.R
 import com.fongmi.android.tv.api.config.VodConfig
+import com.fongmi.android.tv.bean.Flag
 import com.fongmi.android.tv.bean.Result
 import com.fongmi.android.tv.bean.Site
 import com.fongmi.android.tv.bean.Vod
@@ -26,6 +32,9 @@ import com.fongmi.android.tv.model.SearchProgress
 import com.fongmi.android.tv.model.SiteViewModel
 import com.fongmi.android.tv.setting.SiteBlockSetting
 import com.fongmi.android.tv.setting.SiteHealthStore
+import com.fongmi.android.tv.ui.activity.HeroPlayDialog
+import com.fongmi.android.tv.ui.activity.startEpisode
+import com.fongmi.android.tv.utils.Notify
 import kotlin.math.min
 import kotlin.math.roundToInt
 
@@ -76,6 +85,8 @@ internal class ChangeSourceDialog private constructor(
     private val sites: List<Site>,
     private val keyword: String,
     private val quick: Boolean,
+    /** 宿主页预搜索的现成结果：非空时弹窗首帧直接铺开，不再重复搜一轮。 */
+    private val initialResults: List<Vod>,
     private val onSourceSelected: (Vod, Site) -> Unit,
     private val onClosed: () -> Unit,
 ) : Dialog(context, R.style.SourceDialogTheme) {
@@ -165,12 +176,60 @@ internal class ChangeSourceDialog private constructor(
 
     private val progressObserver = Observer<SearchProgress> { progress -> onSearchProgress(progress) }
 
+    /** `result` 通道（详情 / 分类共用）：只在弹窗自己发过请求时消费，见 [onResult]。 */
+    private val resultObserver = Observer<Result?> { result -> onResult(result) }
+
+    // ------------------------------------------------------------------
+    // folder 下探（弹窗内展开目录，不跳详情页）
+    // ------------------------------------------------------------------
+    /** 下探栈：每层记录「从哪个源、哪个 folder 条目」展开；返回键逐级出栈。 */
+    private val drillStack = ArrayList<DrillEntry>()
+
+    /** 当前层目录结果；只在 [drillStack] 非空时有意义。 */
+    private var categoryResults: List<Vod> = emptyList()
+
+    /** 等 `result` 回包的目录 id；null = 没有在途的目录请求。 */
+    private var pendingCategoryId: String? = null
+
+    /** 等 `result` 回包的详情 id（卡片补线路）；null = 没有在途的详情请求。 */
+    private var pendingDetailId: String? = null
+
+    /** 补详情时记住是谁：回包后要按这个源起播。 */
+    private var pendingPlaySite: Site? = null
+    private var pendingPlayVod: Vod? = null
+
+    // ------------------------------------------------------------------
+    // 选集层（Compose `HeroPlayDialog`）
+    // ------------------------------------------------------------------
+    /**
+     * 选集层要渲染的数据。用 `mutableStateOf` 而不是普通字段：
+     * ComposeView 里的组合要跟着它重组。
+     */
+    private val playState = mutableStateOf<PlayRequest?>(null)
+
+    /**
+     * 选集层的 ComposeView 宿主。
+     *
+     * **挂到 Activity 的 `android.R.id.content` 上**，而不是挂到 Dialog 窗口：
+     * 本弹窗是 `Dialog(context, theme)` 直接构造的，窗口的 decorView 没有 ViewTree
+     * lifecycle / viewModelStore / savedState owner，Compose 组合会直接抛
+     * `IllegalStateException: ViewTreeLifecycleOwner not found`；
+     * Activity 的内容视图自带这三个 owner，复用它最稳。
+     * `HeroPlayDialog` 自己又是一个 Compose Dialog 窗口，所以会盖在换源弹窗之上。
+     */
+    private var playHost: ComposeView? = null
+
+    /** 是否已经跑过首轮数据（预搜索直出 / 全局并发搜索）。 */
+    private var started = false
+
     private lateinit var homeBtn: FrameLayout
     private lateinit var siteRecycler: RecyclerView
     private lateinit var resultRecycler: RecyclerView
     private lateinit var empty: TextView
     private lateinit var progress: View
     private lateinit var resultCount: TextView
+    private lateinit var backBtn: TextView
+    private lateinit var siteLayout: View
     private lateinit var siteAdapter: SiteAdapter
     private lateinit var resultAdapter: ResultAdapter
 
@@ -198,11 +257,24 @@ internal class ChangeSourceDialog private constructor(
         ignoreReplay = true
         viewModel.search.observeForever(searchObserver)
         viewModel.searchProgress.observeForever(progressObserver)
+        // 详情 / 分类共用 `result` 通道：只认弹窗自己发出的请求（见 onResult 的闸门）。
+        viewModel.result.observeForever(resultObserver)
         window?.decorView?.post { ignoreReplay = false }
         // 兜底：decorView 还没挂上时 post 可能不执行，用站点栏再挂一次（同一主线程队列，顺序无所谓）。
         siteRecycler.post { ignoreReplay = false }
         // 打开即**全局并发**检索：一次性把所有候选源丢进去，谁先回结果谁先出 Tab。
-        startGlobalSearch()
+        // 宿主页已经预搜索过（[initialResults] 非空）时首帧直接铺开，跳过这一轮重复网络请求；
+        // 之后（例如从起播页返回）再 onStart 才走正常的整轮重搜。
+        if (!started) {
+            started = true
+            if (initialResults.isNotEmpty()) {
+                renderPreloaded(initialResults)
+            } else {
+                startGlobalSearch()
+            }
+        } else {
+            startGlobalSearch()
+        }
         // 默认焦点落在第一个站点标签；必须等 ViewHolder 布局完成再请求，
         // 否则焦点会停在 RecyclerView 上，标签的 focused 红底就不会出现。
         siteRecycler.post {
@@ -215,9 +287,13 @@ internal class ChangeSourceDialog private constructor(
         window?.decorView?.viewTreeObserver?.removeOnGlobalFocusChangeListener(focusListener)
         viewModel.search.removeObserver(searchObserver)
         viewModel.searchProgress.removeObserver(progressObserver)
+        viewModel.result.removeObserver(resultObserver)
         // 关窗即作废待切换的焦点任务，避免弹窗消失后还发一次检索。
         pendingSiteFocus = -1
         siteRecycler.removeCallbacks(siteFocusRunnable)
+        // 还在途的目录 / 详情回包一律不再消费：弹窗关了就没有 UI 承接它们。
+        pendingCategoryId = null
+        pendingDetailId = null
         ignoreReplay = false
         // 关闭弹窗就取消在途检索：蜘蛛实现可能忽略中断，stopSearch 至少让旧一轮结果不再回到 UI。
         viewModel.stopSearch()
@@ -267,6 +343,10 @@ internal class ChangeSourceDialog private constructor(
     private fun bindHeader() {
         findViewById<TextView>(R.id.badge).setText(R.string.play_change)
         resultCount = findViewById(R.id.resultCount)
+        // 「⬅️ 返回」只在 folder 下探时出现：点一下退到上一级目录 / 回到搜索结果。
+        backBtn = findViewById(R.id.backBtn)
+        backBtn.setOnClickListener { exitDrillDown() }
+        siteLayout = findViewById(R.id.siteLayout)
     }
 
     private fun bindHome() {
@@ -313,6 +393,8 @@ internal class ChangeSourceDialog private constructor(
         progress.visibility = if (searching && !hasResult) View.VISIBLE else View.GONE
         resultRecycler.visibility = if (hasResult) View.VISIBLE else View.GONE
         empty.visibility = if (!searching && !hasResult) View.VISIBLE else View.GONE
+        // 下探时说的是「目录」，不能沿用「该源暂无此剧」。
+        empty.text = if (drillActive()) EMPTY_FOLDER_TEXT else EMPTY_RESULT_TEXT
         val info = progressInfo
         resultCount.visibility = View.VISIBLE
         resultCount.text = if (searching && info != null && info.total() > 0) {
@@ -364,13 +446,18 @@ internal class ChangeSourceDialog private constructor(
      * 弹窗打开、侧边栏勾选变化都走这里（重搜必须整轮重来，Tab 是动态的，不能只增不减）。
      */
     private fun startGlobalSearch() {
-        // 清空上一轮：Tab 从 0 个重新长出来。
+        // 清空上一轮：Tab 从 0 个重新长出来；下探层级也一并退出（目录结果不属于新的一轮检索）。
         tabSites.clear()
         resultsBySite.clear()
+        drillStack.clear()
+        categoryResults = emptyList()
+        pendingCategoryId = null
+        pendingDetailId = null
         selectedSite = 0
         visibleResults = emptyList()
         progressInfo = null
         siteAdapter.notifyDataSetChanged()
+        syncDrillUi()
         val targets = sites.filter { it.key in enabledSiteKeys }
         // 【致命日志】入参为空 = 不会有任何结果，必须留下证据；
         // quickSearch=false 的源会被 `SearchTask` 直接跳过，也在这里一并打出来。
@@ -397,6 +484,48 @@ internal class ChangeSourceDialog private constructor(
         render()
         Log.e(TAG, "调用 searchContent(List): 源=${targets.size}, keyword=[$keyword], quick=$quick")
         viewModel.searchContent(targets, keyword, quick)
+    }
+
+    /**
+     * 用宿主页预搜索的结果直接铺开（跳过弹窗内的首轮检索）。
+     *
+     * 结果已经按源归档：Tab 顺序沿用候选源 [sites] 的顺序（与站点栏、健康度排序一致），
+     * 不在候选源里的源追加到末尾 —— 用户仍然能看到它、点它。
+     * 空结果（预搜索还在途 / 一个都没搜到）不会走到这里，调用方会退回 [startGlobalSearch]。
+     */
+    private fun renderPreloaded(items: List<Vod>) {
+        tabSites.clear()
+        resultsBySite.clear()
+        drillStack.clear()
+        categoryResults = emptyList()
+        pendingCategoryId = null
+        pendingDetailId = null
+        selectedSite = 0
+        visibleResults = emptyList()
+        progressInfo = null
+        searching = false
+        val order = sites.map { it.key }
+        items
+            .mapNotNull { vod -> vod.site?.let { site -> site to vod } }
+            .filter { (_, vod) -> vod.id.isNotBlank() }
+            .groupBy { (site, _) -> site.key }
+            .toList()
+            // 按候选源顺序排；不在候选源里的（order.indexOf = -1）统一排到最后。
+            .sortedBy { (key, _) -> order.indexOf(key).let { if (it < 0) Int.MAX_VALUE else it } }
+            .forEach { (key, pairs) ->
+                tabSites.add(pairs.first().first)
+                resultsBySite[key] = pairs.map { it.second }.distinctBy { it.id }
+            }
+        visibleResults = tabSites.firstOrNull()?.let { resultsBySite[it.key] }.orEmpty()
+        siteAdapter.notifyDataSetChanged()
+        syncDrillUi()
+        render()
+        Log.e(
+            TAG,
+            "预搜索直出: keyword=[$keyword], 源=${tabSites.size}, " +
+                "首屏条目=${visibleResults.size}, keys=${tabSites.joinToString { it.key }}",
+        )
+        if (tabSites.isNotEmpty()) siteRecycler.post { focusSite(0) }
     }
 
     /**
@@ -447,7 +576,8 @@ internal class ChangeSourceDialog private constructor(
                 }
             }
         }
-        if (currentSite()?.key == siteKey) {
+        if (currentSite()?.key == siteKey && !drillActive()) {
+            // 下探期间列表展示的是目录结果，绝不能被迟到的搜索结果覆盖。
             visibleResults = resultsBySite[siteKey].orEmpty()
         }
         render()
@@ -471,6 +601,248 @@ internal class ChangeSourceDialog private constructor(
             )
         }
         render()
+    }
+
+    // ------------------------------------------------------------------
+    // `result` 通道：folder 下探 / 卡片补详情（只认弹窗自己发出的请求）
+    // ------------------------------------------------------------------
+
+    /**
+     * `result` 通道回调（详情 / 分类共用一条 LiveData）。
+     *
+     * **必须做闸门**：宿主 Activity 自己也可能在拉详情 / 首页数据，
+     * 那些结果与弹窗无关，绝不能拿来当目录或选集数据。
+     * 只认 [pendingDetailId] / [pendingCategoryId] 非空时回来的那一条。
+     */
+    private fun onResult(result: Result?) {
+        if (result == null) return
+        // ---- 优先级 1：卡片补详情 → 直达选集 ----
+        val requestedId = pendingDetailId
+        if (requestedId != null) {
+            pendingDetailId = null
+            val incoming = result.vod
+            val flags = incoming.flags
+            Log.e(
+                TAG,
+                "卡片补详情返回: id=${incoming.id} flags=${flags.size} " +
+                    "集数=${flags.sumOf { it.episodes.orEmpty().size }} code=${result.code} msg=${result.msg}",
+            )
+            if (flags.isEmpty()) {
+                Notify.show("该剧暂无可用线路")
+                return
+            }
+            // 详情结果比搜索结果完整：剧名 / 海报 / 线路都以它为准；
+            // 起播 id 用**当初请求的那个**（详情回包偶尔不带 id，不能因此丢掉播放能力）。
+            val fallback = pendingPlayVod
+            showPlay(
+                flags = flags,
+                vod = incoming.takeIf { it.name.isNotBlank() } ?: fallback,
+                siteKey = pendingPlaySite?.key.orEmpty(),
+                vodId = requestedId,
+            )
+            pendingPlayVod = null
+            pendingPlaySite = null
+            return
+        }
+        // ---- 优先级 2：folder 下探的目录结果 ----
+        val folderId = pendingCategoryId ?: return
+        pendingCategoryId = null
+        val current = drillStack.lastOrNull() ?: return
+        // 分类接口不会给每条结果盖 site（原版整页共用一个 key），这里补上：
+        // 卡片左上角的站点标签、点开后的选集弹窗都要靠它。
+        val items = result.list.map { vod ->
+            if (vod.site == null) vod.apply { site = current.site } else vod
+        }
+        categoryResults = items
+        visibleResults = items
+        searching = false
+        Log.e(
+            TAG,
+            "下探结果: folder=$folderId depth=${drillStack.size} " +
+                "listSize=${items.size} code=${result.code} msg=${result.msg}",
+        )
+        render()
+        if (items.isNotEmpty()) focusFirstResult() else backBtn.post { backBtn.requestFocus() }
+    }
+
+    /** 当前是否处于 folder 下探（有层级 = 展示目录而不是搜索结果）。 */
+    private fun drillActive(): Boolean = drillStack.isNotEmpty()
+
+    /**
+     * 展开一个 folder 条目：压栈 + 用**分类接口**拉目录（`t=vod.id`），留在弹窗内。
+     *
+     * 与原版 `CollectActivity.onItemClick → VodActivity.start(..., Result.folder(item))` 语义一致，
+     * 区别只是落点从「原版分类页」换成弹窗内的海报行。
+     */
+    private fun enterDrillDown(vod: Vod, site: Site) {
+        drillStack.add(DrillEntry(site, vod))
+        categoryResults = emptyList()
+        visibleResults = emptyList()
+        searching = true
+        pendingCategoryId = vod.id
+        Log.e(
+            TAG,
+            "下探 folder: site=${site.key} id=${vod.id} name=${vod.name} " +
+                "depth=${drillStack.size} api=${site.api}",
+        )
+        syncDrillUi()
+        render()
+        viewModel.categoryContent(site.key, vod.id, "1", true, hashMapOf())
+    }
+
+    /**
+     * 返回上一级：出栈。
+     *
+     * - 还有上级目录 → 重新展开上级（分类结果本来就会被下级覆盖，必须重新请求）；
+     * - 已经到顶 → 回到搜索结果（[resultsBySite] 从未被改动，直接换缓存渲染）。
+     */
+    private fun exitDrillDown() {
+        if (drillStack.isEmpty()) return
+        drillStack.removeAt(drillStack.lastIndex)
+        categoryResults = emptyList()
+        pendingCategoryId = null
+        Log.e(TAG, "返回上一级: 剩余层级=${drillStack.size}")
+        val parent = drillStack.lastOrNull()
+        if (parent == null) {
+            searching = false
+            syncDrillUi()
+            showCurrentResults()
+            siteRecycler.post { focusSite(selectedSite) }
+        } else {
+            visibleResults = emptyList()
+            searching = true
+            pendingCategoryId = parent.vod.id
+            render()
+            viewModel.categoryContent(parent.site.key, parent.vod.id, "1", true, hashMapOf())
+        }
+    }
+
+    /** 同步「下探态」的外壳：返回按钮 / 站点栏的显隐。 */
+    private fun syncDrillUi() {
+        val active = drillActive()
+        backBtn.visibility = if (active) View.VISIBLE else View.GONE
+        siteLayout.visibility = if (active) View.GONE else View.VISIBLE
+        if (active) backBtn.post { if (drillActive() && !backBtn.hasFocus()) backBtn.requestFocus() }
+    }
+
+    /** 目录结果到达后把焦点落到第一张海报；ViewHolder 还没布局好时再补一次。 */
+    private fun focusFirstResult() {
+        resultRecycler.post {
+            val holder = resultRecycler.findViewHolderForAdapterPosition(0)
+            if (holder != null) {
+                holder.itemView.requestFocus()
+            } else {
+                resultRecycler.post {
+                    resultRecycler.findViewHolderForAdapterPosition(0)?.itemView?.requestFocus()
+                }
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // 结果卡点击：folder 留在弹窗内下探，普通剧集直达选集
+    // ------------------------------------------------------------------
+
+    /**
+     * 结果卡确定键：**都不跳详情页**。
+     *
+     * - folder 条目（`vod_tag=folder` / `atvp_detail:` 前缀）→ 弹窗内下探目录；
+     * - 普通剧集 → 拉一次 `detailContent` 拿线路，然后弹 [HeroPlayDialog]。
+     */
+    private fun openResult(vod: Vod, site: Site) {
+        if (vod.isDrillDownFolder()) {
+            enterDrillDown(vod, site)
+            return
+        }
+        if (vod.id.isBlank()) {
+            Notify.show("缺少剧集 ID，无法选集")
+            return
+        }
+        // 分类 / 聚合结果常常自带线路：直接弹选集，不再多发一次详情请求。
+        val inline = vod.flags
+        if (inline.isNotEmpty()) {
+            Log.e(
+                TAG,
+                "卡片直达选集: id=${vod.id} site=${site.key} flags=${inline.size} " +
+                    "集数=${inline.sumOf { it.episodes.orEmpty().size }}",
+            )
+            showPlay(inline, vod, site.key, vod.id)
+            return
+        }
+        pendingDetailId = vod.id
+        pendingPlayVod = vod
+        pendingPlaySite = site
+        Log.e(TAG, "卡片无线路，拉详情后直达选集: id=${vod.id} site=${site.key}")
+        viewModel.detailContent(site.key, vod.id)
+    }
+
+    // ------------------------------------------------------------------
+    // 选集层（Compose `HeroPlayDialog`，挂在 Activity 内容视图上）
+    // ------------------------------------------------------------------
+
+    /** 渲染选集层：第一次调用时创建 ComposeView 并挂到 Activity 的 `android.R.id.content`。 */
+    private fun showPlay(flags: List<Flag>, vod: Vod?, siteKey: String, vodId: String) {
+        if (flags.isEmpty()) return
+        if (ensurePlayHost() == null) return
+        playState.value = PlayRequest(flags = flags, vod = vod, siteKey = siteKey, vodId = vodId)
+    }
+
+    private fun ensurePlayHost(): ComposeView? {
+        playHost?.let { return it }
+        val activity = context.findHostActivity()
+        if (activity == null) {
+            Log.e(TAG, "没有 Activity，无法显示选集层")
+            Notify.show("无法打开选集：缺少 Activity")
+            return null
+        }
+        val view = ComposeView(activity)
+        // Activity 销毁时自动销毁组合，避免把 composition 留在已经没用的 View 上。
+        view.setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
+        // 0×0：这里只负责承载组合，真正的 UI 是 HeroPlayDialog 自己的 Dialog 窗口。
+        view.layoutParams = ViewGroup.LayoutParams(0, 0)
+        view.setContent {
+            val request = playState.value
+            if (request != null) {
+                HeroPlayDialog(
+                    flags = request.flags,
+                    // 换源 / 搜索场景还没接历史库：-1 = 新剧，焦点落第 1 集。
+                    lastWatchedEpisodeIndex = -1,
+                    onEpisodeSelected = { flag, episode ->
+                        playState.value = null
+                        startEpisode(
+                            activity,
+                            request.siteKey,
+                            request.vod,
+                            request.vodId,
+                            flag,
+                            episode,
+                        )
+                    },
+                    onDismiss = { playState.value = null },
+                )
+            }
+        }
+        (activity.findViewById<ViewGroup>(android.R.id.content))?.addView(view)
+        playHost = view
+        return view
+    }
+
+    override fun dismiss() {
+        super.dismiss()
+        // 选集层挂在宿主 Activity 上，必须随弹窗一起摘掉，绝不留一个 0×0 的组合在页面上。
+        playState.value = null
+        playHost?.let { view -> (view.parent as? ViewGroup)?.removeView(view) }
+        playHost = null
+    }
+
+    /** 返回键：有下探层级先退一级，到顶才关弹窗。 */
+    @Suppress("DEPRECATION")
+    override fun onBackPressed() {
+        if (drillActive()) {
+            exitDrillDown()
+            return
+        }
+        super.onBackPressed()
     }
 
     /** 当前焦点是否还在下方结果区。只在状态真的变化时刷新标签背景，避免无谓重绘。 */
@@ -611,16 +983,17 @@ internal class ChangeSourceDialog private constructor(
                 val item = visibleResults.getOrNull(position) ?: return@setOnClickListener
                 // vod 已由 SiteApi 盖过 site；万一第三方蜘蛛自己丢了 site，退回当前 Tab 的源。
                 val site = item.site ?: currentSite() ?: return@setOnClickListener
-                onSourceSelected(item, site)
-                dismiss()
+                // 点卡片**不再跳详情页**：folder 就地展开目录，普通剧集直接弹选集。
+                openResult(item, site)
             }
             // 卡片按 ↑ 必须回到**当前选中的站点标签**（《焦点总结》规则 ④的同一条思路）。
             // 弹窗布局里 recycler 的 nextFocusUp 指向整个 siteRecycler，焦点只会落到
             // RecyclerView 容器上，标签本身既不高亮也不滚动，用户看不出自己回到了哪个站点；
             // 所以在这里拦一次，直接点名请求那个标签的焦点。
+            // 下探期间站点栏是隐藏的：↑ 改成回到「⬅️ 返回」，否则焦点会卡死在卡片上。
             holder.card.setOnKeyListener { _, keyCode, event ->
                 if (event.action == KeyEvent.ACTION_DOWN && keyCode == KeyEvent.KEYCODE_DPAD_UP) {
-                    focusSite(selectedSite)
+                    if (drillActive()) backBtn.requestFocus() else focusSite(selectedSite)
                     true
                 } else {
                     false
@@ -637,6 +1010,9 @@ internal class ChangeSourceDialog private constructor(
 
         /** 结果区空态：当前源没搜到这部剧。 */
         private const val EMPTY_RESULT_TEXT = "该源暂无此剧"
+
+        /** 结果区空态：folder 下探后目录为空（不能说「暂无此剧」）。 */
+        private const val EMPTY_FOLDER_TEXT = "该目录暂无内容"
 
         /** f23：`c0(0.82f)`，窗口宽 = 屏幕宽 × 0.82。 */
         private const val WIDTH_FRACTION = 0.82f
@@ -720,7 +1096,9 @@ internal class ChangeSourceDialog private constructor(
          * @param quick 是否只搜 quick 源。换源默认 `false`：`quick=true` 时 `SearchTask` 会跳过
          *   `quickSearch=0` 的源（很多源都是这种），表现为整屏「该源暂无此剧」。
          *   原版 `VideoActivity.startSearch` 用 `true`，但换源场景为了多搜出结果先走 `false`。
-         * @param onSourceSelected 结果卡片确定键回调，回传**真实 `(Vod, Site)`**。
+         * @param initialResults 宿主页预搜索的现成结果（详情页进页就在后台搜了一轮）。
+         *   非空时弹窗首帧直接铺开，**跳过弹窗内的首轮检索**；空则照常全局并发搜索。
+         * @param onSourceSelected 保留给调用方的切换提示回调（结果卡点击已改为弹窗内直达选集）。
          * @param onClosed 关闭回调，调用方在这里把焦点交还给首页卡片。
          */
         fun show(
@@ -729,6 +1107,7 @@ internal class ChangeSourceDialog private constructor(
             sites: List<Site>,
             keyword: String,
             quick: Boolean = false,
+            initialResults: List<Vod> = emptyList(),
             onSourceSelected: (Vod, Site) -> Unit = { _, _ -> },
             onClosed: () -> Unit = {},
         ): ChangeSourceDialog {
@@ -742,13 +1121,56 @@ internal class ChangeSourceDialog private constructor(
             }
             Log.e(
                 "ChangeSource",
-                "呼出换源弹窗: sites=${searchSites.size}, keyword=[$keyword], quick=$quick",
+                "呼出换源弹窗: sites=${searchSites.size}, keyword=[$keyword], quick=$quick, " +
+                    "预搜索结果=${initialResults.size}",
             )
             val dialog = ChangeSourceDialog(
-                context, viewModel, searchSites, keyword, quick, onSourceSelected, onClosed,
+                context, viewModel, searchSites, keyword, quick, initialResults,
+                onSourceSelected, onClosed,
             )
             dialog.show()
             return dialog
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// 弹窗内的顶层辅助声明
+// ---------------------------------------------------------------------------
+
+/** 选集层要渲染的数据：线路 + 这部剧 + 起播源 key + 起播用的剧集 id。 */
+private data class PlayRequest(
+    val flags: List<Flag>,
+    val vod: Vod?,
+    val siteKey: String,
+    val vodId: String,
+)
+
+/** 下探栈的一层：从哪个源的哪个 folder 条目展开。 */
+private data class DrillEntry(val site: Site, val vod: Vod)
+
+/**
+ * 从任意 Context 找到承载窗口的 Activity。
+ *
+ * 弹窗用的是 `Dialog(context, theme)`，`context` 可能是 Activity，也可能是
+ * ContextThemeWrapper；选集层的 ComposeView 必须挂到 Activity 的 content 上（那里才有
+ * ViewTreeLifecycleOwner / ViewModelStore / SavedStateRegistry），所以要逐层拆包装。
+ */
+private fun Context.findHostActivity(): Activity? {
+    var current = this
+    while (current is ContextWrapper) {
+        if (current is Activity) return current
+        current = current.baseContext
+    }
+    return current as? Activity
+}
+
+/** 网盘聚合插件的 folder 壳前缀（与 `Vod.isFolder()` 的 `vod_tag=folder` 等价）。 */
+private const val ATVP_FOLDER_PREFIX = "atvp_detail:"
+
+/**
+ * folder 判定：原版在点击处就分流到分类页，而搜索结果可能丢掉 `vod_tag=folder`，
+ * 所以这里连 `atvp_detail:` 前缀一起认（与 `HeroSearchActivity` / `HeroEntryRoute` 一致）。
+ */
+private fun Vod.isDrillDownFolder(): Boolean =
+    isFolder || id.startsWith(ATVP_FOLDER_PREFIX, ignoreCase = true)
