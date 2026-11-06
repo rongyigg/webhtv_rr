@@ -9,7 +9,9 @@ import android.os.Bundle
 import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.basicMarquee
@@ -371,6 +373,11 @@ class HeroDetailActivity : ComponentActivity() {
         val title = intent.getStringExtra(EXTRA_TITLE).orEmpty().ifBlank { return DEMO_DETAIL }
         val pic = intent.getStringExtra(EXTRA_PIC).orEmpty()
         if (pic.isBlank()) return DEMO_DETAIL.copy(title = title)
+        // 首页已经预取到 TMDB w1920 横图时，把它作为**首帧背景**直出：
+        // 详情接口只给竖版 `vod.pic`，等它回来再换背景会让首帧从横图硬切成竖图。
+        val extraBackdrop = intent.getStringExtra(EXTRA_BACKDROP).orEmpty()
+        // 只有「确实和竖图不同」才算横图：同值时仍按源站图处理，行为与改动前完全一致。
+        val wideBackdrop = extraBackdrop.isNotBlank() && extraBackdrop != pic
         // 元数据：年份 · 地区 · 分类 · 备注 · 接口源，空字段自动省略，不留多余的 `·`。
         val meta = listOf(
             intent.getStringExtra(EXTRA_YEAR).orEmpty(),
@@ -384,8 +391,10 @@ class HeroDetailActivity : ComponentActivity() {
             meta = meta.ifBlank { DEMO_DETAIL.meta },
             synopsis = intent.getStringExtra(EXTRA_CONTENT).orEmpty().ifBlank { DEMO_DETAIL.synopsis },
             posterUrl = pic,
-            // 详情接口只给竖版图：背景同样用它，由 Coil 的 Crop 裁成 16:9。
-            backdropUrl = pic,
+            // 详情接口只给竖版图：有首页预取的横图就用横图，否则仍用竖图裁 16:9（改动前行为）。
+            backdropUrl = if (wideBackdrop) extraBackdrop else pic,
+            // 横图标记：`mergeDetail` 据此拒绝用竖图覆盖，`mergeTmdb` 据此保留更高清的档位。
+            hasWideBackdrop = wideBackdrop,
             // 真实条目清空假演员：TMDB 未配置 / 未命中时演员行为空（UI 整行隐藏），
             // 不会出现「真数据 + 10 位假演员」混排；旧 adb 入口走上面的 DEMO_DETAIL 分支，假演员保留。
             cast = emptyList(),
@@ -415,6 +424,13 @@ class HeroDetailActivity : ComponentActivity() {
         private const val EXTRA_CONTENT = "extra_content"
         private const val EXTRA_SITE_KEY = "extra_site_key"
         private const val EXTRA_SITE_NAME = "extra_site_name"
+        /**
+         * 首页预取的横版背景（TMDB w1920 / 提档后的宽图）。
+         *
+         * 与 `extra_pic`（源站竖图）分开传：详情页首帧直接用横图，后续 `mergeDetail`
+         * 也不会再用竖图覆盖它 —— 否则点进详情会先看到横图、再硬切成竖图。
+         */
+        private const val EXTRA_BACKDROP = "extra_backdrop"
 
         /**
          * 统一入口：首页海报卡确定键、换源弹窗选中后调用。
@@ -426,14 +442,18 @@ class HeroDetailActivity : ComponentActivity() {
          *
          * `extra_vod_id` 是详情接口的主键：没有内联线路时用它调 `SiteViewModel.detailContent`，
          * 拿回真实的 `flags / episodes`；线路与选集不再有假数据。
+         *
+         * [backdropUrl]：首页卡片当前显示的横版背景（TMDB 命中时是 w1920）。
+         * 空串 = 没有横图，详情页照旧用 `vod.pic` 裁 16:9。
          */
-        fun start(context: Context, vod: Vod, site: Site) {
+        fun start(context: Context, vod: Vod, site: Site, backdropUrl: String = "") {
             context.startActivity(
                 Intent(context, HeroDetailActivity::class.java)
                     .putExtra(EXTRA_VOD, vod)
                     .putExtra(EXTRA_VOD_ID, vod.id)
                     .putExtra(EXTRA_TITLE, vod.name)
                     .putExtra(EXTRA_PIC, vod.pic)
+                    .putExtra(EXTRA_BACKDROP, backdropUrl)
                     .putExtra(EXTRA_YEAR, vod.year)
                     .putExtra(EXTRA_AREA, vod.area)
                     .putExtra(EXTRA_TYPE, vod.typeName)
@@ -1532,15 +1552,31 @@ private fun HeroDetailTitle(detail: HeroDetail) {
     }
 }
 
-/** 全屏背景大图：固定假数据，本阶段不随线路/选集变化。 */
+/** 背景切换时长（毫秒）：与首页一致，300ms 交叉淡入淡出，首帧 → TMDB 横图不会硬切。 */
+private const val DETAIL_BACKDROP_FADE_MS = 300
+
+/**
+ * 全屏背景大图。
+ *
+ * 用 [Crossfade] 而不是裸 [AsyncImage]：首帧 `extra_backdrop`（首页预取的 w1920 横图）到
+ * TMDB 真背景之间可能有一次替换，交叉淡入淡出才不会出现「闪一下黑底再出新图」。
+ * 同一 URL 时 Crossfade 不启动动画，因此锁死背景后不会有多余的过渡。
+ */
 @Composable
 private fun HeroDetailBackdrop(url: String) {
-    AsyncImage(
-        model = url,
-        contentDescription = null,
-        contentScale = ContentScale.Crop,
+    Crossfade(
+        targetState = url,
+        animationSpec = tween(durationMillis = DETAIL_BACKDROP_FADE_MS),
+        label = "heroDetailBackdrop",
         modifier = Modifier.fillMaxSize(),
-    )
+    ) { backdropUrl ->
+        AsyncImage(
+            model = backdropUrl,
+            contentDescription = null,
+            contentScale = ContentScale.Crop,
+            modifier = Modifier.fillMaxSize(),
+        )
+    }
 }
 
 /**
@@ -2850,6 +2886,13 @@ private data class HeroDetail(
      * 默认 false = 照常显示小海报（无 Key / 未命中 / TMDB 无 backdrop 时与改动前完全一致）。
      */
     val hasTmdbBackdrop: Boolean = false,
+    /**
+     * 当前 [backdropUrl] 是否已经是「横图」（首页预取的 `extra_backdrop` 或 TMDB backdrop）。
+     *
+     * 为 true 时 [mergeDetail] **绝不**再用源站竖图 `vod.pic` 覆盖它：
+     * 详情接口只给竖图，覆盖会让首帧从 16:9 横图硬切成竖图，还会让 Coil 重新解码一次。
+     */
+    val hasWideBackdrop: Boolean = false,
 ) {
     /** 导演 / 主演单行文案；两者都为空时返回空串（不占位、不显示）。 */
     fun creditLine(): String = buildString {
@@ -2881,7 +2924,9 @@ private fun HeroDetail.mergeDetail(vod: Vod?, siteName: String): HeroDetail {
         meta = realMeta.ifBlank { meta },
         synopsis = vod.content.ifBlank { synopsis },
         posterUrl = vod.pic.ifBlank { posterUrl },
-        backdropUrl = vod.pic.ifBlank { backdropUrl },
+        // 【锁死横图】首帧已经是横图（首页 extra_backdrop / TMDB）时，源站详情回来的 `vod.pic`
+        // 是竖图，覆盖它只会让背景从 16:9 硬切成竖图 + Coil 重新解码，所以直接跳过背景赋值。
+        backdropUrl = if (hasWideBackdrop) backdropUrl else vod.pic.ifBlank { backdropUrl },
         director = vod.director,
         actor = vod.actor,
     )
@@ -2894,9 +2939,10 @@ private fun HeroDetail.mergeDetail(vod: Vod?, siteName: String): HeroDetail {
  * 字段策略：
  * - 剧名：只有「手动匹配命中」才覆盖，自动匹配保留源站名（源站名是用户点进来的那部剧的证据）；
  * - 简介：TMDB 译文非空且**比现有更长**才覆盖（照抄 `TmdbUIAdapter.enrichVod` 的长度策略）；
- * - 背景 / 海报：TMDB 有值才覆盖，空值保留详情接口给的图（详情接口只有竖版图）；
+ * - 背景：TMDB 有值且**不是同一张图**才覆盖（同一张只差档位时保留首帧那份，见 `keepBackdrop`）；
+ *   海报同理，空值保留详情接口给的图；
  * - 评分：并入 [meta] 尾段，不新增控件；演员：整份替换，与 [tmdbPersons] 同序同长；
- * - `logoUrl` 不动：第一轮不接 TMDB 艺术字 Logo，保持 32sp 文字标题回落。
+ * - `logoUrl`：TMDB 有 Logo 才替换 32sp 文字标题，没有就保持原值（回落文字）。
  *
  * 手动命中已由调用方算好并通过 [manualHit] 传入，本函数不再重复查缓存。
  */
@@ -2919,15 +2965,21 @@ private fun HeroDetail.mergeTmdb(
         meta.isBlank() -> rating
         else -> "$meta · $rating"
     }
+    val tmdbBackdrop = item.backdropUrl.orEmpty()
+    // 【锁死背景】同一张图（只差 w780 / w1920 档位）不重新赋值：字符串不变 → Coil 认为 model
+    // 没变、不会重新加载，也就没有闪烁；同时不会把首页预热好的 w1920 降回详情默认的 w780。
+    val keepBackdrop = tmdbBackdrop.isBlank() || sameTmdbImage(tmdbBackdrop, backdropUrl)
     return copy(
         title = if (manualHit) item.title.orEmpty().ifBlank { title } else title,
         meta = mergedMeta,
         synopsis = if (tmdbSynopsis.length > synopsis.length) tmdbSynopsis else synopsis,
         posterUrl = item.posterUrl.orEmpty().ifBlank { posterUrl },
-        backdropUrl = item.backdropUrl.orEmpty().ifBlank { backdropUrl },
+        backdropUrl = if (keepBackdrop) backdropUrl else tmdbBackdrop,
         // 只有 TMDB 真的给了 backdrop 才算「有背景大图」：空值时保留详情接口的竖图当背景，
         // 并保持 false（继续显示右上角小海报），视觉与改动前一致。
-        hasTmdbBackdrop = item.backdropUrl.orEmpty().isNotBlank(),
+        hasTmdbBackdrop = tmdbBackdrop.isNotBlank(),
+        // 一旦拿到横图（首页 / TMDB），后续 `mergeDetail` 就不能再用竖图把它盖回去。
+        hasWideBackdrop = hasWideBackdrop || tmdbBackdrop.isNotBlank(),
         // 艺术字 Logo：TMDB `images.logos` 里优先中文，命中就替换 32sp 文字标题；
         // 提取不到（无 logos / 结构异常 / path 为空）返回 null，`?: logoUrl` 保持原来的 null 回落文字。
         logoUrl = extractTmdbLogo(detail, config.getImageBase()) ?: logoUrl,
@@ -2945,6 +2997,30 @@ private fun HeroDetail.mergeTmdb(
         tmdbMediaType = item.mediaType.orEmpty(),
         tmdbPersons = persons,
     )
+}
+
+/**
+ * 两张 TMDB 图是否指向同一张原图：`/t/p/w1920/abc.jpg` 与 `/t/p/w780/abc.jpg` 只有档位不同。
+ *
+ * 用于 [mergeTmdb] 的背景锁：同一张图不重新赋值，既避免 Coil 重新加载闪一下，
+ * 也避免把首页预热的 w1920 降回 w780。非 TMDB 地址只认完全相同。
+ */
+private fun sameTmdbImage(left: String, right: String): Boolean {
+    if (left.isBlank() || right.isBlank()) return false
+    if (left == right) return true
+    val leftPath = tmdbImagePath(left)
+    val rightPath = tmdbImagePath(right)
+    return leftPath.isNotBlank() && leftPath == rightPath
+}
+
+/** 取 `/t/p/<size>/` 之后的路径（含前导 `/`）；非 TMDB 图床返回原串（只允许全等匹配）。 */
+private fun tmdbImagePath(url: String): String {
+    val marker = "/t/p/"
+    val markerIndex = url.indexOf(marker)
+    if (markerIndex < 0) return url
+    val sizeEnd = url.indexOf('/', markerIndex + marker.length)
+    if (sizeEnd < 0) return url
+    return url.substring(sizeEnd)
 }
 
 /**

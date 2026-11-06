@@ -8,15 +8,18 @@ import okhttp3.dnsoverhttps.DnsOverHttps
 import java.net.InetAddress
 import java.util.concurrent.Callable
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
 
 /**
- * 多路 DoH 并发解析，**只用于 TMDB 图床**（`*.tmdb.org`）的防污染直连。
+ * 多路解析竞速，**只用于 TMDB 域名**（`tmdb.org` / `themoviedb.org`）的防污染直连。
  *
- * 与 catvod 既有的 [com.github.catvod.net.OkDns] 相比，这里同时对多个公共 DoH 发起查询，
- * 谁先返回有效结果就采用谁；全部失败或超时后回落到 [OkHttp.dns]。
+ * 严格对标原版 `defpackage/x52`（`TmdbDns`）：对命中域**同时**开跑
+ * 1 路系统 DNS + [PROVIDERS] 里的每一路 DoH，用 [CountDownLatch] 等 [RACE_TIMEOUT_MS]，
+ * **取最先返回的非空结果**；全部超时则回落系统 DNS（原版同样行为），再不行才交给 [OkHttp.dns]。
  * 成功结果按 [TTL_MS] 缓存，避免每次图片请求都重新解析。
  *
  * 非 TMDB 域名直接转交 [OkHttp.dns]，保证接口配置的 `hosts` 映射与用户自选 DoH 仍然生效 ——
@@ -35,13 +38,15 @@ object HeroHttpDns : Dns {
     private val resolvers: List<DnsOverHttps> by lazy(LazyThreadSafetyMode.SYNCHRONIZED) { buildResolvers() }
 
     private val executor: ExecutorService by lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
-        Executors.newFixedThreadPool(resolvers.size.coerceAtLeast(1)) { runnable ->
+        // 缓存线程池（而非固定 3 个线程）：一个 lookup 最长要占 2s，固定池会让并发的图片请求
+        // 排在它后面一起等满 2s；这里每次查询各开线程，空闲 60s 自动回收，全部是 daemon。
+        Executors.newCachedThreadPool { runnable ->
             Thread(runnable, "hero-doh").apply { isDaemon = true }
         }
     }
 
     override fun lookup(hostname: String): List<InetAddress> {
-        // 【兼容性红线】只有 TMDB 图床走多路 DoH，其余域名一律交回 catvod 的 [OkHttp.dns]。
+        // 【兼容性红线】只有 TMDB 域名走多路竞速，其余域名一律交回 catvod 的 [OkHttp.dns]。
         // 接口配置里的 `hosts` 映射（奇葩源常用：把图片/接口域名钉到指定 IP）和用户自选的 DoH
         // 都只在 OkDns 里生效；如果对所有域名都强上 DoH，就会绕过它们，出现「原版有图、我们没有」。
         if (!needsDoh(hostname)) return OkHttp.dns().lookup(hostname)
@@ -52,28 +57,57 @@ object HeroHttpDns : Dns {
             cache[hostname] = Entry(raced, System.currentTimeMillis() + TTL_MS)
             return raced
         }
-        return OkHttp.dns().lookup(hostname)
+        // 原版行为：全部超时 → 回落系统 DNS；系统 DNS 也解析不出来才交给 catvod
+        // （那里还有 hosts 映射与用户自选 DoH 兜底）。
+        return runCatching { Dns.SYSTEM.lookup(hostname) }
+            .getOrNull()
+            ?.takeIf { it.isNotEmpty() }
+            ?: OkHttp.dns().lookup(hostname)
     }
 
-    /** TMDB 官方图床：`image.tmdb.org` / `images.tmdb.org`，以及用户自定义的其它 `*.tmdb.org`。 */
+    /**
+     * TMDB 官方域名：图床 `image.tmdb.org` / `images.tmdb.org`、接口 `api.themoviedb.org`，
+     * 以及用户自定义的其它 `*.tmdb.org`。
+     */
     private fun needsDoh(hostname: String): Boolean {
         val host = hostname.lowercase()
-        return host == "tmdb.org" || host.endsWith(".tmdb.org")
+        return host == "tmdb.org" || host.endsWith(".tmdb.org") ||
+            host == "themoviedb.org" || host.endsWith(".themoviedb.org")
     }
 
+    /**
+     * 原版 `TmdbDns` 的核心：**系统 DNS 与两路 DoH 同时发**，[CountDownLatch] 等 2s，
+     * 第一个拿到的非空结果直接胜出并唤醒调用方；全部超时返回空列表（由 [lookup] 回落系统 DNS）。
+     *
+     * 用 [CountDownLatch] 而不是 `invokeAny`：`invokeAny` 只等第一个**成功返回**的任务，
+     * 空结果也算成功、会立刻结束竞速；这里要的是「第一个**非空**结果」，空结果必须被忽略。
+     */
     private fun race(hostname: String): List<InetAddress> {
-        val targets = resolvers
-        if (targets.isEmpty()) return emptyList()
-        val tasks: List<Callable<List<InetAddress>>> = targets.map { resolver ->
-            Callable { resolver.lookup(hostname) }
+        val tasks = ArrayList<Callable<List<InetAddress>>>(resolvers.size + 1)
+        tasks += Callable { Dns.SYSTEM.lookup(hostname) }
+        resolvers.forEach { resolver -> tasks += Callable { resolver.lookup(hostname) } }
+
+        val winner = AtomicReference<List<InetAddress>?>(null)
+        val latch = CountDownLatch(1)
+        val futures = tasks.map { task ->
+            // 显式 Runnable：`submit { }` 在 Runnable / Callable 两个重载之间会有二义性。
+            executor.submit(Runnable {
+                // 已经有结果时直接放弃：后面排队的解析不再浪费一次 DNS 往返。
+                if (winner.get() != null) return@Runnable
+                val result = runCatching { task.call() }.getOrNull().orEmpty()
+                if (result.isNotEmpty() && winner.compareAndSet(null, result)) latch.countDown()
+            })
         }
         return try {
-            executor.invokeAny(tasks, RACE_TIMEOUT_MS, TimeUnit.MILLISECONDS).orEmpty()
+            latch.await(RACE_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+            winner.get().orEmpty()
         } catch (e: InterruptedException) {
             Thread.currentThread().interrupt()
             emptyList()
-        } catch (e: Exception) {
-            emptyList()
+        } finally {
+            // 2s 是硬上限：落败 / 卡住的 DoH 请求直接打断，别占着线程拖住后面的图片请求。
+            // `Future.cancel(true)` 不保证立刻中断底层 OkHttp 调用，但能让还在排队的任务不再开跑。
+            futures.forEach { it.cancel(true) }
         }
     }
 
@@ -99,9 +133,14 @@ object HeroHttpDns : Dns {
 
     private data class Entry(val addresses: List<InetAddress>, val expireAt: Long)
 
+    /**
+     * 两路 DoH，与原版 `TmdbDns` 的两路一致：阿里 + 腾讯。
+     *
+     * 不把 `dns.google` 之类加进来：国内网络下它经常直接超时，多一路只是多占一个线程 / 一条
+     * TLS 连接，并不会提高「最先拿到结果」的概率。
+     */
     private val PROVIDERS = listOf(
         "dns.alidns.com" to listOf("223.5.5.5", "223.6.6.6"),
         "doh.pub" to listOf("1.12.12.12", "120.53.53.53"),
-        "dns.google" to listOf("8.8.8.8", "8.8.4.4"),
     )
 }

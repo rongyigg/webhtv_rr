@@ -293,9 +293,9 @@ class HeroHomeActivity : ComponentActivity() {
                     siteViewModel = siteViewModel,
                     // 首次加载与切源后重载都走这里，日志只在一个地方打。
                     onRefreshHome = { refreshHome("界面请求") },
-                    // 卡片确定键 → 真实详情页，带上真实的 (Vod, Site)。
+                    // 卡片确定键 → 真实详情页，带上真实的 (Vod, Site) 与这张卡当前的横版背景。
                     // folder 条目（网盘聚合壳，如 atvp_detail:）交给原版分类页，其余进 Hero 详情页。
-                    onOpenDetail = { vod, site -> openHeroDetailOrFolder(this, vod, site) },
+                    onOpenDetail = { vod, site, backdrop -> openHeroDetailOrFolder(this, vod, site, backdrop) },
                     // 顶栏「设置」：SettingActivity 只存在于 leanback flavor，见 openSettings 的说明。
                     onOpenSettings = { openSettings() },
                 )
@@ -455,8 +455,9 @@ private fun HeroHomeScreen(
     siteViewModel: SiteViewModel,
     // 重新拉首页数据。首次进入、小房子切源、设置页返回都走这一个入口。
     onRefreshHome: () -> Unit,
-    // 卡片确定键：回传真实的 (Vod, Site)，由 Activity 交给 HeroDetailActivity。
-    onOpenDetail: (Vod, Site) -> Unit,
+    // 卡片确定键：回传真实的 (Vod, Site) 与这张卡当前显示的横版背景（TMDB 命中时是 w1920），
+    // 由 Activity 交给 HeroDetailActivity，详情页首帧直接拿它当背景。
+    onOpenDetail: (Vod, Site, String) -> Unit,
     // 顶栏「设置」：真正打开页面的逻辑在 HeroHomeActivity 里（需要按 flavor 反射），由调用方传 lambda。
     onOpenSettings: () -> Unit,
 ) {
@@ -932,7 +933,8 @@ private fun HeroHomeScreen(
                     // 用户在弹窗里选中了另一部剧：vod 已由 SiteApi.searchContent 盖过 site，
                     // 两者同源，直接用它俩打开该源的真实详情页，不再按剧名二次搜索。
                     Log.d(TAG_HOME, "换源选中: ${site.displayName} / ${vod.name}")
-                    onOpenDetail(vod, site)
+                    // 换源结果是新的竖版海报，没有首页预热过的横图，交空串让详情页按 `vod.pic` 裁切。
+                    onOpenDetail(vod, site, "")
                 },
                 onClosed = {
                     showSourceDialog = false
@@ -1142,7 +1144,8 @@ private fun HeroHomeScreen(
                     moduleFocused = true
                 },
                 // 卡片确定键：打开这条数据**所属源**的真实详情页（Vod 与 Site 一起带过去）。
-                onClick = { poster -> onOpenDetail(poster.vod, poster.site) },
+                // 同时把这张卡当前显示的横图带过去：TMDB 命中时是 w1920，详情页首帧不用等网络。
+                onClick = { poster -> onOpenDetail(poster.vod, poster.site, poster.backdropUrl) },
                 // 卡片长按确定键：呼出换源弹窗（见 changeSource）。
                 onLongPress = { poster ->
                     Log.e("ChangeSource", "卡片长按触发，准备执行 changeSource")
@@ -1223,7 +1226,12 @@ private fun HeroBackdrop(url: String) {
     }
 }
 
-/** 横向遮罩（XML `maskLeft`，drawable `bg_hero_mask_h`）：左侧压暗，保证剧名/简介在浅色背景上可读。 */
+/**
+ * 横向遮罩（XML `maskLeft`，drawable `bg_hero_mask_h`）。
+ *
+ * 原版右侧非常透亮：只有左侧压黑托住剧名 / 简介，35% 处已经完全透明，
+ * 保证背景大图右半屏（和海报区）不被灰掉。
+ */
 @Composable
 private fun HeroMaskLeft() {
     Box(
@@ -1231,15 +1239,19 @@ private fun HeroMaskLeft() {
             .fillMaxSize()
             .background(
                 Brush.horizontalGradient(
-                    0.0f to Color.Black.copy(alpha = 0.60f),
-                    0.52f to Color.Black.copy(alpha = 0.10f),
+                    0.0f to Color.Black.copy(alpha = 0.85f),
+                    0.35f to Color.Black.copy(alpha = 0.0f),
                     1.0f to Color.Transparent,
                 ),
             ),
     )
 }
 
-/** 纵向遮罩（XML `maskBottom`，drawable `bg_hero_mask_v`）：顶部压暗顶栏、底部接近纯黑托住海报区。 */
+/**
+ * 纵向遮罩（XML `maskBottom`，drawable `bg_hero_mask_v`）。
+ *
+ * 上 55% 全亮（原版背景不被压暗），只有底部 25% 渐到黑，托住海报区与信息区。
+ */
 @Composable
 private fun HeroMaskBottom() {
     Box(
@@ -1247,9 +1259,9 @@ private fun HeroMaskBottom() {
             .fillMaxSize()
             .background(
                 Brush.verticalGradient(
-                    0.0f to Color.Black.copy(alpha = 0.50f),
-                    0.26f to Color.Black.copy(alpha = 0.10f),
-                    0.58f to Color.Black.copy(alpha = 0.50f),
+                    0.0f to Color.Transparent,
+                    0.55f to Color.Transparent,
+                    0.75f to Color.Black.copy(alpha = 0.6f),
                     1.0f to Color.Black.copy(alpha = 0.95f),
                 ),
             ),
@@ -1424,7 +1436,8 @@ private fun HeroTopBarItem(
  *
  * 节点参数逐条对应：
  * - 容器：`layout_marginBottom=22dp`（L68）+ `paddingStart/End=24dp`（L69-70）。
- * - 剧名：32sp 粗体、固定高 36dp、`gravity=bottom`、阴影 #cc000000 dx2 dy2 radius12（L72-83）。
+ * - 剧名：32sp 粗体、固定高 36dp、`gravity=bottom`、阴影 #cc000000 dx2 dy2 radius12（L72-83）；
+ *   有 TMDB 艺术字 Logo 时改用 L82-89 的 72dp 高 / 720dp 最宽 Logo 行。
  * - 元数据：14sp、#ccffffff、高 20dp、marginTop 2dp、阴影 #aa000000 1.5/1.5/8（L93-104）。
  * - 简介：12sp、#bbffffff、高 40dp、maxLines 2、lineSpacingExtra 3dp、
  *   外层横向 LinearLayout `weightSum=2` 而子项 `weight=1` → 宽度取一半（L105-125）。
@@ -1432,8 +1445,9 @@ private fun HeroTopBarItem(
  * 内容随海报焦点变化，用 [AnimatedContent] 做“淡入 + 轻微上滑 / 淡出 + 轻微上移”，
  * 320ms 比背景略快，文字先落位，避免整屏同时变化显得迟滞。
  *
- * `tmdbData` 只影响剧名行：有艺术字 Logo（`logoUrl`）时整行换成 Logo（高 36dp、最宽 300dp、贴底左对齐），
- * 没有 Logo 时仍显示文字，且**只有手动匹配**才允许覆盖剧名（自动匹配可能判错，见历史决策）。
+ * `tmdbData` 只影响剧名行：有艺术字 Logo（`logoUrl`）时整行换成 Logo（高 72dp、最宽 720dp、
+ * `ContentScale.Fit`、贴底左对齐）并隐藏文字；没有 Logo 时仍显示 32sp 文字，
+ * 且**只有手动匹配**才允许覆盖剧名（自动匹配可能判错，见历史决策）。
  */
 @Composable
 private fun HeroInfoArea(poster: HeroPoster, tmdbData: HeroTmdbData?) {
@@ -1455,22 +1469,25 @@ private fun HeroInfoArea(poster: HeroPoster, tmdbData: HeroTmdbData?) {
             .padding(bottom = HERO_INFO_BOTTOM_GAP),
     ) { current ->
         val logoUrl = tmdbData?.logoUrl.orEmpty()
+        val hasLogo = logoUrl.isNotBlank()
         Column(modifier = Modifier.fillMaxWidth()) {
-            // 剧名：固定 36dp，文字贴底；有 TMDB 艺术字 Logo 时整行换成 Logo（同高、贴底左对齐）。
+            // 剧名行（原版 `activity_home_v2.xml` L82-89 / `HomeActivityV2.D2(pos)`）：
+            // 有 TMDB 艺术字 Logo → 整行 72dp，只显示 Logo、隐藏 32sp 文字；
+            // 没有 Logo → 保持 36dp 的 32sp 文字标题。两种状态不混排，各自固定高度。
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(HERO_TITLE_HEIGHT),
+                    .height(if (hasLogo) HERO_LOGO_HEIGHT else HERO_TITLE_HEIGHT),
                 contentAlignment = Alignment.BottomStart,
             ) {
-                if (logoUrl.isNotBlank()) {
+                if (hasLogo) {
                     AsyncImage(
                         model = logoUrl,
                         contentDescription = current.title,
                         contentScale = ContentScale.Fit,
                         alignment = Alignment.BottomStart,
                         modifier = Modifier
-                            .height(HERO_TITLE_HEIGHT)
+                            .height(HERO_LOGO_HEIGHT)
                             .widthIn(max = HERO_LOGO_MAX_WIDTH),
                     )
                 } else {
@@ -2045,8 +2062,8 @@ private const val HERO_PRELOAD_RANGE = 3
 private const val HERO_POSTER_PRELOAD_WIDTH = 360
 private const val HERO_BACKDROP_PRELOAD_WIDTH = 960
 
-/** 艺术字 Logo 的预热解码宽度：对齐 300dp 的展示上限（2x 屏 ≈ 600px），只影响内存占用不影响清晰度。 */
-private const val HERO_LOGO_PRELOAD_WIDTH = 600
+/** 艺术字 Logo 的预热解码宽度：展示上限是 720dp 宽 / 72dp 高，2x 屏按 800px 解码足够，不影响磁盘缓存里原始字节。 */
+private const val HERO_LOGO_PRELOAD_WIDTH = 800
 
 /**
  * 焦点详情请求的防抖窗口（毫秒）。
@@ -2359,7 +2376,10 @@ private val TOP_BAR_ITEM_SPACING = 40.dp    // navRecycler 项间距（放大字
 // ---------------------------------------------------------------------------
 private val HERO_INFO_BOTTOM_GAP = 22.dp    // L68 layout_marginBottom
 private val HERO_TITLE_HEIGHT = 36.dp       // L79 layout_height
-private val HERO_LOGO_MAX_WIDTH = 300.dp    // 艺术字 Logo 最宽 300dp（超出按 ContentScale.Fit 等比缩小）
+// 艺术字 Logo：原版 `activity_home_v2.xml` L82-89 —— 高 72dp、最宽 720dp、贴底左对齐、Fit 等比。
+// 没有 Logo 时剧名行回落到文字高度 36dp，不能把文字行也撑到 72dp（会把元数据/简介整体下推）。
+private val HERO_LOGO_HEIGHT = 72.dp
+private val HERO_LOGO_MAX_WIDTH = 720.dp
 private const val HERO_TITLE_SP = 32f       // L72 textSize
 private val HERO_META_TOP_GAP = 2.dp        // L100 layout_marginTop
 private val HERO_META_HEIGHT = 20.dp        // L99 layout_height

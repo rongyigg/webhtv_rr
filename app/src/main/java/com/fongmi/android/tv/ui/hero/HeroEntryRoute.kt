@@ -16,11 +16,13 @@ import com.fongmi.android.tv.ui.activity.HeroDetailActivity
  * 而不是拿它去请求 `ids=` 详情（站源会判成业务错误，返回空 id / 0 线路）。
  * 搜索结果 / 历史记录可能丢掉 `vod_tag=folder`，所以这里连前缀一起认。
  */
-internal fun openHeroDetailOrFolder(activity: Activity, vod: Vod, site: Site) {
+internal fun openHeroDetailOrFolder(activity: Activity, vod: Vod, site: Site, backdropUrl: String = "") {
     if (vod.isFolder || vod.id.startsWith(ATVP_FOLDER_PREFIX, ignoreCase = true)) {
         openHeroFolder(activity, site.key, vod)
     } else {
-        HeroDetailActivity.start(activity, vod, site)
+        // `backdropUrl` 只对详情页有意义：首页把当前这张卡已经显示出来的横图（TMDB w1920 等）带过去，
+        // 详情页首帧直接用它，不再等源站竖图裁切。
+        HeroDetailActivity.start(activity, vod, site, backdropUrl)
     }
 }
 
