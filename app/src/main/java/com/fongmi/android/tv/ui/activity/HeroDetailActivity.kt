@@ -25,6 +25,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -89,6 +90,7 @@ import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.Observer
 import androidx.lifecycle.ViewModelProvider
 import coil3.compose.AsyncImage
+import coil3.compose.SubcomposeAsyncImage
 import com.google.gson.JsonArray
 import com.google.gson.JsonObject
 import com.fongmi.android.tv.R
@@ -1543,49 +1545,88 @@ private fun HeroDetailScreen(
     }
 }
 
+/** TMDB 图床 `w1920` 档的路径标记：命中就说明这是首页预取 / 提档后的高清横图。 */
+private const val TMDB_HIRES_MARKER = "/w1920/"
+
 /**
  * 剧名区：兼容 TMDB 艺术字 Logo。
  *
- * - 有 Logo：高 72dp、最大宽 720dp、等比缩放、靠左（XML `heroLogoImg` L82-89，`scaleType=fitStart`）。
+ * - 有 Logo：整行高 96dp（与首页统一）、最宽 720dp、等比缩放、贴底左对齐；
+ *   图片没到 / 加载失败时，槽里继续渲染原本的 32sp 文字标题 —— 无感降级，不会先空一行。
  * - 无 Logo：32sp 粗体文字 + [basicMarquee]，长剧名持续滚动而不是被省略号吞掉。
  * 两种情况都不挂 `focusable` / `clickable`，遥控器选不中。
  */
 @Composable
 private fun HeroDetailTitle(detail: HeroDetail) {
-    val logo = detail.logoUrl
-    if (!logo.isNullOrBlank()) {
-        AsyncImage(
-            // 与首页共用同一份请求参数（含 300ms 淡入），首页预热过的艺术字这里直接命中磁盘缓存。
-            model = rememberHeroImageModel(logo),
-            contentDescription = detail.title,
-            contentScale = ContentScale.Fit,
-            // 等比缩放后仍靠左，避免窄 Logo 在 720dp 的盒子里居中。
-            alignment = Alignment.CenterStart,
-            modifier = Modifier
-                .height(LOGO_HEIGHT)
-                .widthIn(max = LOGO_MAX_WIDTH),
-        )
-        return
-    }
+    // `orEmpty()` 而不是留着可空：下面 `if (hasLogo)` 分支里 Kotlin 无法把 `String?` 智能转型，
+    // 直接传 `rememberHeroImageModel(logo)` 会编译不过。
+    val logo = detail.logoUrl.orEmpty()
+    val hasLogo = logo.isNotBlank()
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .height(DETAIL_TITLE_HEIGHT),
+            .height(if (hasLogo) LOGO_HEIGHT else DETAIL_TITLE_HEIGHT),
         contentAlignment = Alignment.BottomStart,
     ) {
-        Text(
-            text = detail.title,
-            modifier = Modifier
-                .fillMaxWidth()
-                .basicMarquee(),
-            color = Color.White,
-            fontSize = DETAIL_TITLE_SP.sp,
-            fontWeight = FontWeight.Bold,
-            maxLines = 1,
-            softWrap = false,
-            style = TextStyle(shadow = DETAIL_TITLE_SHADOW),
-        )
+        if (hasLogo) {
+            SubcomposeAsyncImage(
+                // 与首页共用同一份请求参数（含 300ms 淡入），首页预热过的艺术字这里直接命中磁盘缓存。
+                model = rememberHeroImageModel(logo),
+                contentDescription = detail.title,
+                contentScale = ContentScale.Fit,
+                // 等比缩放后仍靠左，避免窄 Logo 在 720dp 的盒子里居中。
+                alignment = Alignment.BottomStart,
+                // fillMaxHeight 吃满 96dp 行高；fillMaxWidth 是给 loading / error 槽里的文字
+                // 留排版宽度 —— Subcompose 在图片到达前没有固有尺寸，只写 widthIn 会缩成 0 宽。
+                modifier = Modifier
+                    .fillMaxHeight()
+                    .widthIn(max = LOGO_MAX_WIDTH)
+                    .fillMaxWidth(),
+                loading = { HeroDetailTitleFallback(detail.title) },
+                error = { HeroDetailTitleFallback(detail.title) },
+            )
+        } else {
+            HeroDetailTitleText(detail.title)
+        }
     }
+}
+
+/**
+ * Logo 槽里的文字兜底：贴底左对齐，和真正显示 Logo 时占同一条基线。
+ *
+ * 与首页 `HeroInfo` 的 loading / error 槽逐字同构：Subcompose 在图片未到达时
+ * 不会自动按 `contentAlignment` 排槽内内容，必须自己包一层 `fillMaxSize` 的 Box。
+ */
+@Composable
+private fun HeroDetailTitleFallback(text: String) {
+    Box(
+        modifier = Modifier.fillMaxSize(),
+        contentAlignment = Alignment.BottomStart,
+    ) {
+        HeroDetailTitleText(text)
+    }
+}
+
+/**
+ * 详情页剧名的纯文字形态：32sp 粗体白字 + 阴影 + 跑马灯。
+ *
+ * 「无 Logo」「Logo 加载中」「Logo 加载失败」三处共用同一份样式，
+ * 图片到位瞬间不会出现字号 / 位置跳变。
+ */
+@Composable
+private fun HeroDetailTitleText(text: String) {
+    Text(
+        text = text,
+        modifier = Modifier
+            .fillMaxWidth()
+            .basicMarquee(),
+        color = Color.White,
+        fontSize = DETAIL_TITLE_SP.sp,
+        fontWeight = FontWeight.Bold,
+        maxLines = 1,
+        softWrap = false,
+        style = TextStyle(shadow = DETAIL_TITLE_SHADOW),
+    )
 }
 
 /** 背景切换时长（毫秒）：800ms 与首页一致，首帧 → TMDB 横图是缓慢交叉淡化，不会硬切。 */
@@ -2961,6 +3002,7 @@ private data class HeroDetail(
  */
 private fun HeroDetail.mergeDetail(vod: Vod?, siteName: String): HeroDetail {
     if (vod == null || vod.id.isBlank()) return this
+    val currentBackdrop = backdropUrl
     val realMeta = listOf(
         vod.year,
         vod.area,
@@ -2975,9 +3017,20 @@ private fun HeroDetail.mergeDetail(vod: Vod?, siteName: String): HeroDetail {
         // 否则「TMDB 简介 → 源站短简介 → TMDB 简介」会明显闪两次。
         synopsis = if (hasTmdbOverview) synopsis else vod.content.ifBlank { synopsis },
         posterUrl = vod.pic.ifBlank { posterUrl },
-        // 【锁死横图】首帧已经是横图（首页 extra_backdrop / TMDB）时，源站详情回来的 `vod.pic`
-        // 是竖图，覆盖它只会让背景从 16:9 硬切成竖图 + Coil 重新解码，所以直接跳过背景赋值。
-        backdropUrl = if (hasWideBackdrop) backdropUrl else vod.pic.ifBlank { backdropUrl },
+        // 【锁死横图】已经拿到横图（首页 extra_backdrop / TMDB w1920）时，源站详情回来的 `vod.pic`
+        // 是竖图，覆盖它只会让背景从 16:9 硬切成竖图 + Coil 重新解码，用户看到的就是「背景没了」。
+        //
+        // 三个分支，顺序不能乱：
+        // 1. 已有横图（标记位或 URL 本身是 w1920）→ 原样保留，竖图一个字都不许改；
+        // 2. 源站给了竖图 → 用它兜底（首帧还没有横图时的正常路径）；
+        // 3. 源站连竖图都没给 → 保留现有背景，**绝不清空**（以前 `vod.pic.ifBlank{}` 在
+        //    pic 为空时会把背景写成空串，详情页整块背景变黑）。
+        backdropUrl = when {
+            currentBackdrop.isNotBlank() &&
+                (hasWideBackdrop || currentBackdrop.contains(TMDB_HIRES_MARKER)) -> currentBackdrop
+            vod.pic.isNotBlank() -> vod.pic
+            else -> currentBackdrop
+        },
         director = vod.director,
         actor = vod.actor,
     )
@@ -3210,8 +3263,8 @@ private const val DETAIL_ACTION_CHANGE_SOURCE = 1
 // ---------------------------------------------------------------------------
 /** 内容区底部留白：防止最后一行演职员贴到屏幕边缘。 */
 private val CONTENT_BOTTOM_PADDING = 32.dp
-/** TMDB 艺术字 Logo：高 72dp、最宽 720dp（XML heroLogoImg L82-89）。 */
-private val LOGO_HEIGHT = 72.dp
+/** TMDB 艺术字 Logo：高 96dp（与首页 `HERO_LOGO_HEIGHT` 一致）、最宽 720dp。 */
+private val LOGO_HEIGHT = 96.dp
 private val LOGO_MAX_WIDTH = 720.dp
 private const val DETAIL_TITLE_SP = 32f
 private val DETAIL_TITLE_HEIGHT = 36.dp

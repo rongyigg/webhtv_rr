@@ -19,6 +19,17 @@ public class TmdbConfig {
     public static final String ORIGIN_TRANSIENT_SUBSCRIPTION = "TRANSIENT_SUBSCRIPTION";
 
     private static final Gson GSON = new Gson();
+    /**
+     * 内置 TMDB API Key（兜底）。
+     *
+     * <p>用户从没配过、或者把设置里的 Key 清空时，仍然要能直接用 TMDB：
+     * {@link #sanitize()} 在「用户没填、订阅也没给」时落到这个值，
+     * 于是所有 {@code isReady()} 闸门（站点开关 / 详情页原生模式 / 首页预匹配）都会放行。
+     *
+     * <p>优先级：用户自己填的 Key &gt; 订阅下发的 Key &gt; 这个内置兜底。
+     * 用户填了任何 Key 都只是覆盖默认值，不会与内置值混用。
+     */
+    private static final String DEFAULT_API_KEY = "d7040155454e7fdf547c4d889ebbcca7";
     private static final String DEFAULT_API_BASE = "https://api.tmdb.org/3";
     private static final String DEFAULT_IMAGE_HOST = "https://images.tmdb.org";
     private static final String DEFAULT_IMAGE_BASE = "https://images.tmdb.org/t/p/w342";
@@ -67,6 +78,14 @@ public class TmdbConfig {
     private transient String credentialOrigin = ORIGIN_USER;
     private transient String credentialSubscriptionKey = "";
     private transient long credentialScopeEpoch;
+    /**
+     * 当前 [apiKey] 是不是「内置兜底值」（用户没填、订阅也没下发 Key）。
+     *
+     * <p>只用于让 {@link #effectiveCurrent()} / {@link #effective} 知道「这个 Key 不是用户自己配的」，
+     * 从而不把订阅下发的临时 Key 顶掉；{@link #isReady()} 的语义不变（内置 Key 同样算可用）。
+     * transient：绝不写进设置 JSON。
+     */
+    private transient boolean builtinApiKey;
 
     public static TmdbConfig objectFrom(String json) {
         try {
@@ -79,7 +98,9 @@ public class TmdbConfig {
 
     public static TmdbConfig effectiveCurrent() {
         TmdbConfig configured = objectFrom(Setting.getTmdbConfig());
-        if (configured.isReady()) SubscriptionTmdbCredentialStore.discardCredential();
+        // 只有「用户自己配的 Key」才压过订阅下发的临时 Key；内置兜底值不算用户配置，
+        // 否则一旦内置了默认 Key，订阅里的 Key 会被永久旁路（功能看起来还在，实际用的都是内置值）。
+        if (configured.isReady() && !configured.builtinApiKey) SubscriptionTmdbCredentialStore.discardCredential();
         SubscriptionTmdbCredentialStore.Scope scope = SubscriptionTmdbCredentialStore.currentScope();
         return effective(configured, SubscriptionTmdbCredentialStore.snapshot(scope));
     }
@@ -87,7 +108,7 @@ public class TmdbConfig {
     public static TmdbConfig effective(TmdbConfig configured, SubscriptionTmdbCredentialStore.Snapshot snapshot) {
         TmdbConfig effective = configured == null ? new TmdbConfig() : configured.copy();
         effective.sanitize();
-        if (effective.isReady()) {
+        if (effective.isReady() && !effective.builtinApiKey) {
             effective.credentialOrigin = ORIGIN_USER;
             return effective;
         }
@@ -96,6 +117,7 @@ public class TmdbConfig {
             effective.apiKey = snapshot.getApiKey();
             effective.apiKeyCompat = effective.apiKey;
             effective.accessToken = "";
+            effective.builtinApiKey = false;
             effective.credentialOrigin = ORIGIN_TRANSIENT_SUBSCRIPTION;
             effective.credentialSubscriptionKey = snapshot.getSubscriptionKey();
             effective.credentialScopeEpoch = snapshot.getScopeEpoch();
@@ -108,10 +130,18 @@ public class TmdbConfig {
     public TmdbConfig sanitize() {
         if (TextUtils.isEmpty(credentialOrigin)) credentialOrigin = ORIGIN_USER;
         apiBase = normalizeApiBase(trimOr(apiBase, DEFAULT_API_BASE));
-        apiKey = trimOr(apiKey, trimOr(apiKeyCompat, ""));
+        // 三方 Key 都为空时回落到内置 Key：清空设置 / 新装应用都能直接出 TMDB 数据。
+        // 顺序不能颠倒：`apiKey` 优先，其次是历史字段 `apiKeyCompat`，最后才是内置值。
+        String configuredKey = trimOr(apiKey, trimOr(apiKeyCompat, ""));
+        apiKey = TextUtils.isEmpty(configuredKey) ? DEFAULT_API_KEY : configuredKey;
         apiKeyCompat = apiKey;
         accessToken = trimOr(accessToken, "");
         if (!TextUtils.isEmpty(accessToken) && accessToken.equals(apiKey) && !isAccessToken(accessToken)) accessToken = "";
+        // 内置兜底 = 「用户既没填 Key、也没有自己的访问令牌」。
+        // 只用于让 effective() / effectiveCurrent() 判断订阅下发的 Key 是否该优先，
+        // 不影响 isReady()：内置 Key 同样算可用。
+        builtinApiKey = TextUtils.isEmpty(accessToken) &&
+            (TextUtils.isEmpty(configuredKey) || DEFAULT_API_KEY.equals(configuredKey));
         omdbApiKey = trimOr(omdbApiKey, "");
         language = trimOr(language, DEFAULT_LANGUAGE);
         imageBase = normalizeImageInput(trimOr(imageBase, DEFAULT_IMAGE_BASE));
@@ -255,7 +285,14 @@ public class TmdbConfig {
             persistable.accessToken = "";
             persistable.credentialOrigin = ORIGIN_USER;
         }
-        return GSON.toJson(persistable.sanitize());
+        persistable.sanitize();
+        // 内置兜底 Key **不落盘**：设置里保持为空，将来升级内置 Key 时才能立刻生效，
+        // 也不会把同一个共享 Key 写进每个用户的配置文件。
+        if (persistable.builtinApiKey) {
+            persistable.apiKey = "";
+            persistable.apiKeyCompat = "";
+        }
+        return GSON.toJson(persistable);
     }
 
     private TmdbConfig copy() {
@@ -276,6 +313,7 @@ public class TmdbConfig {
         copy.credentialOrigin = credentialOrigin;
         copy.credentialSubscriptionKey = credentialSubscriptionKey;
         copy.credentialScopeEpoch = credentialScopeEpoch;
+        copy.builtinApiKey = builtinApiKey;
         return copy;
     }
 

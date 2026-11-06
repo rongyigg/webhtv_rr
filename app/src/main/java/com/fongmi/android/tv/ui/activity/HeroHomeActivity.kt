@@ -84,10 +84,12 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -850,24 +852,41 @@ private fun HeroHomeScreen(
         if (!requestFocus(tabRequesters, target)) requestFocus(tabRequesters, 0)
     }
 
-    // → 海报行：从别的排切入时用默认参数 index = 0，落在第一张（屏幕正中）。
+    // 海报行的两把尺子：dp→px 换算（`animateScrollToItem` 的偏移量是像素），
+    // 以及「焦点卡居中时它的左边缘 x」——首尾 padding 与滚动偏移必须用同一个值，
+    // 否则第 5 张之后的卡片会停在偏心位置。
+    val density = LocalDensity.current
+    val posterCenterStart = rememberPosterCenterStart()
+
+    // → 海报行：从别的排切入时用默认参数 index = 0，落在第一张（行首基准线 24dp）。
     fun focusPoster(index: Int = 0) {
         // 真实数据可能为空（首次加载中 / 接口源返回空）：空列表时 `coerceIn(0, -1)` 会直接抛
         // IllegalArgumentException，所以必须先挡掉，焦点留在原地。
         if (posters.isEmpty()) return
         val target = index.coerceIn(0, posters.lastIndex)
-        // 【居中滚动】首尾 padding 已经是 (屏宽 - 卡片宽) / 2，`animateScrollToItem(target)`
-        // 会把第 target 张卡精确停在屏幕正中，不再需要任何「第 5 张开始推最左」的手工换算。
-        // index 0..3 仍锚定 0：这一段整行还没滚动，第一张本就居中，右侧自然露出后面的卡。
-        val anchor = if (target >= POSTER_SCROLL_ANCHOR) target else 0
+        // 【滚动规则】与原版 Leanback 横排一致（start padding 固定 24dp，end padding = 半屏）：
+        // - index 0..3：整行不动 —— 第 0 张本来就压在 24dp 基准线上；
+        // - index 4：滚到基准线 —— 第 4 张压 24dp，前面的卡全部滚出去（offset = 0）；
+        // - index 5 起：仍以第 4 张为锚点，但补一段**负偏移**（把锚点往右顶），
+        //   让焦点卡正好停在屏幕正中：`animateScrollToItem(4, offset)` 里
+        //   item4 的左边缘 = 24dp - offset，所以 offset = 132dp*(target-4) - (居中起点-24dp)。
+        val anchor = if (target < POSTER_SCROLL_ANCHOR) 0 else POSTER_SCROLL_ANCHOR
+        val scrollOffset = if (target <= POSTER_SCROLL_ANCHOR) {
+            0
+        } else {
+            with(density) {
+                (POSTER_CARD_WIDTH + POSTER_GAP).roundToPx() * (target - POSTER_SCROLL_ANCHOR) -
+                    (posterCenterStart - HERO_PADDING).roundToPx()
+            }
+        }
         if (requestFocus(posterRequesters, target)) {
-            if (posterState.firstVisibleItemIndex == anchor && posterState.firstVisibleItemScrollOffset == 0) return
-            scope.launch { posterState.animateScrollToItem(anchor) }
+            if (posterState.firstVisibleItemIndex == anchor && posterState.firstVisibleItemScrollOffset == scrollOffset) return
+            scope.launch { posterState.animateScrollToItem(anchor, scrollOffset) }
             return
         }
         // 目标卡片还没组合（例如刚切分类就要跳到靠后的卡片）：先滚过去，等一帧再请求焦点。
         scope.launch {
-            posterState.scrollToItem(anchor)
+            posterState.scrollToItem(anchor, scrollOffset)
             withFrameNanos { }
             requestFocus(posterRequesters, target)
         }
@@ -1826,14 +1845,27 @@ private fun HeroTabChip(
 }
 
 /**
+ * 海报行「居中起点」：焦点卡停在屏幕正中时，它左边缘的 x。
+ *
+ * 首尾 padding（[PosterArea]）与滚动偏移（`focusPoster`）共用这一个值：
+ * 两处各算一遍迟早会漂移，卡片就会停在偏心位置。
+ * 小屏兜底不小于行首基准线 24dp —— 否则 `end` 会变成负数。
+ */
+@Composable
+private fun rememberPosterCenterStart(): Dp =
+    ((LocalConfiguration.current.screenWidthDp.dp - POSTER_CARD_WIDTH) / 2)
+        .coerceAtLeast(HERO_PADDING)
+
+/**
  * 海报区（XML `posterArea`，L142-191）：整块固定高 215dp（L147），内部 recycler 同为 215dp（L156）。
  *
  * 卡片尺寸严格照抄 `ref_docs/adapter_vod_rect.xml`：120dp × 180dp、8dp 圆角、间距 12dp。
- * 列表**居中吸附**：
- * - 首尾留白 = `(屏幕宽 - 卡片宽) / 2`，第一张卡静止时正好压在屏幕正中；
- *   滚到第 N 张时 `animateScrollToItem(N)` 也把它停在正中（LazyRow 的 item 起点 = 起始 padding）。
- * - 最后一张卡同理可以滚到正中，不会再卡在左边、露出半屏黑边。
- * - 留白按**未缩放**的 [POSTER_CARD_WIDTH] 算：焦点态 1.1 倍放大是绘制层缩放，不占布局宽度。
+ * 列表**行首吸附 + 后段居中**（与原版 Leanback 横排一致）：
+ * - `contentPadding = (start 24dp, end 半屏)`：第一张静止时压在 24dp 基准线上，
+ *   而尾端留出 `(屏宽 - 卡片宽) / 2`，保证最后一张也能被滚到屏幕正中；
+ * - 焦点 0..3：锚点 0，整行不动；
+ * - 焦点 4：`animateScrollToItem(4)` → 第 4 张压在 24dp 基准线；
+ * - 焦点 5+：锚点仍是 4，再补一段负偏移把焦点卡顶到正中（见 `focusPoster`）。
  */
 @Composable
 private fun PosterArea(
@@ -1849,18 +1881,16 @@ private fun PosterArea(
     onMoveLeft: (Int) -> Unit,
     onMoveRight: (Int) -> Unit,
 ) {
-    // 屏幕宽度决定首尾留白：让第一张 / 最后一张都能滚到屏幕正中。
-    // 不能写死 24dp —— 列表必须左右各留 (屏宽 - 卡片宽) / 2，
-    // `animateScrollToItem(target)` 才会把目标卡停在正中（而不是贴左）。
-    val screenWidth = LocalConfiguration.current.screenWidthDp.dp
-    val horizontalPadding = ((screenWidth - POSTER_CARD_WIDTH) / 2).coerceAtLeast(HERO_PADDING)
+    // 首端只留 24dp 基准线（第一张必须贴着左边，不能跑到屏幕中间）；
+    // 尾端留半屏，最后一张才能滚到正中。两者都按**未缩放**的卡片宽度算：
+    // 焦点态 1.1 倍放大是绘制层缩放，不占布局宽度。
     LazyRow(
         state = state,
         // 铺满整行、无外层 padding：LazyRow 的裁剪边界 = 屏幕边缘（Compose 等价于 clipToPadding=false）。
         modifier = Modifier
             .fillMaxWidth()
             .height(POSTER_AREA_HEIGHT),
-        contentPadding = PaddingValues(start = horizontalPadding, end = horizontalPadding),
+        contentPadding = PaddingValues(start = HERO_PADDING, end = rememberPosterCenterStart()),
         horizontalArrangement = Arrangement.spacedBy(POSTER_GAP),
     ) {
         itemsIndexed(items = posters, key = { _, poster -> poster.id }) { index, poster ->
@@ -2536,8 +2566,8 @@ private val POSTER_CARD_WIDTH = 120.dp
 private val POSTER_CARD_HEIGHT = 180.dp
 private val POSTER_GAP = 12.dp
 
-// 焦点进入第 5 张（index = 4）起，用 `animateScrollToItem(target)` 把目标卡滚到屏幕正中
-// （首尾 padding 已按 (屏宽 - 卡片宽) / 2 配好）；index 0..3 一律停在行首，避免刚进海报行就整排乱动。
+// 焦点到第 5 张（index = 4）起，列表才真正开始滚动：index 4 停在 24dp 行首基准线，
+// index 5 及以后以 4 为锚点补负偏移，把焦点卡顶到屏幕正中 —— 与原版 Leanback 横排一致。
 private const val POSTER_SCROLL_ANCHOR = 4
 
 // 参考 ref_docs/VodRectPresenter.java 第 39-41 行：原实现 hasFocus() ? 1.08f : 1.0f；本项目按定稿取 1.1。
