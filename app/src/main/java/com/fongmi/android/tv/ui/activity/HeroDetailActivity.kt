@@ -87,6 +87,7 @@ import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.Observer
 import androidx.lifecycle.ViewModelProvider
 import coil3.compose.AsyncImage
+import com.google.gson.JsonArray
 import com.google.gson.JsonObject
 import com.fongmi.android.tv.R
 import com.fongmi.android.tv.api.SiteApi
@@ -1123,12 +1124,16 @@ private fun HeroDetailScreen(
         HeroDetailMaskVertical()
 
         // ---- 右上角浮动小海报：150dp × 210dp（XML posterCard L30-48）----
-        HeroDetailPoster(
-            url = page.posterUrl,
-            modifier = Modifier
-                .align(Alignment.TopEnd)
-                .padding(top = POSTER_TOP_GAP, end = POSTER_END_GAP),
-        )
+        // 原版规则：有 TMDB 背景大图时隐藏小海报（整块不进组合，不是改透明度）；
+        // 没有背景大图（无 Key / 未命中 / TMDB 无 backdrop）才用海报兜底，与改动前一致。
+        if (!page.hasTmdbBackdrop) {
+            HeroDetailPoster(
+                url = page.posterUrl,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(top = POSTER_TOP_GAP, end = POSTER_END_GAP),
+            )
+        }
 
         // ---- 左下内容区：整体贴底，左右 24dp、底部 32dp 防贴屏幕边缘 ----
         Column(
@@ -2819,6 +2824,13 @@ private data class HeroDetail(
     val tmdbMediaType: String = "",
     /** 演员点击载荷：与 [cast] 同序同长，直接交给 `TmdbPersonActivity.start`。 */
     val tmdbPersons: List<TmdbPerson> = emptyList(),
+    /**
+     * 是否拿到了 TMDB 背景大图（横图）。
+     *
+     * 原版视觉规则：有背景大图时隐藏右上角浮动小海报，只有「没有背景大图」才用 posterCard 兜底。
+     * 默认 false = 照常显示小海报（无 Key / 未命中 / TMDB 无 backdrop 时与改动前完全一致）。
+     */
+    val hasTmdbBackdrop: Boolean = false,
 ) {
     /** 导演 / 主演单行文案；两者都为空时返回空串（不占位、不显示）。 */
     fun creditLine(): String = buildString {
@@ -2894,6 +2906,12 @@ private fun HeroDetail.mergeTmdb(
         synopsis = if (tmdbSynopsis.length > synopsis.length) tmdbSynopsis else synopsis,
         posterUrl = item.posterUrl.orEmpty().ifBlank { posterUrl },
         backdropUrl = item.backdropUrl.orEmpty().ifBlank { backdropUrl },
+        // 只有 TMDB 真的给了 backdrop 才算「有背景大图」：空值时保留详情接口的竖图当背景，
+        // 并保持 false（继续显示右上角小海报），视觉与改动前一致。
+        hasTmdbBackdrop = item.backdropUrl.orEmpty().isNotBlank(),
+        // 艺术字 Logo：TMDB `images.logos` 里优先中文，命中就替换 32sp 文字标题；
+        // 提取不到（无 logos / 结构异常 / path 为空）返回 null，`?: logoUrl` 保持原来的 null 回落文字。
+        logoUrl = extractTmdbLogo(detail, config.getImageBase()) ?: logoUrl,
         cast = persons.mapIndexed { index, person ->
             HeroCast(
                 // 下标入 key：同一演员被判给多个角色时 personId 可能重复，LazyRow 的 key 必须唯一。
@@ -2907,6 +2925,46 @@ private fun HeroDetail.mergeTmdb(
         tmdbMediaType = item.mediaType.orEmpty(),
         tmdbPersons = persons,
     )
+}
+
+/**
+ * 从 TMDB 详情 JSON 的 `images.logos` 里取艺术字 Logo（透明 PNG）。
+ *
+ * 优先级与 `TmdbService.detail` 的 `include_image_language` 对齐：
+ * 1. `iso_639_1` 以 `zh` 开头的中文 Logo（zh-CN / zh-TW / zh-HK …）；
+ * 2. 没有中文就退到第一张有 `file_path` 的（通常是英文 / 原语种）。
+ *
+ * **不抛异常**：`images` / `logos` 缺失、类型不对、值为 JSON null、`file_path` 为空、
+ * `imageBase` 为空时一律返回 null，调用方 `?: logoUrl` 继续走文字标题回落。
+ * 返回值是拼好 `imageBase` 的**完整绝对地址**，可直接交给 Coil。
+ */
+private fun extractTmdbLogo(detail: JsonObject?, imageBase: String): String? {
+    if (detail == null || imageBase.isBlank()) return null
+    // `as?` 一次性挡住「键不存在」「值是 JSON null」「值不是对象 / 数组」三种情况，不会抛异常。
+    val images = detail.get("images") as? JsonObject ?: return null
+    val logos = images.get("logos") as? JsonArray ?: return null
+
+    /** 取字符串字段：非 primitive（含 JSON null）或异常时返回空串。 */
+    fun text(obj: JsonObject, key: String): String {
+        val element = obj.get(key) ?: return ""
+        if (!element.isJsonPrimitive) return ""
+        return runCatching { element.asString }.getOrDefault("")
+    }
+
+    // 先过滤成对象列表，两轮扫描共用，避免每张图重复做类型判断。
+    val items = logos.mapNotNull { it as? JsonObject }
+    // 1) 中文优先。
+    for (item in items) {
+        if (!text(item, "iso_639_1").startsWith("zh")) continue
+        val path = text(item, "file_path")
+        if (path.isNotBlank()) return imageBase + path
+    }
+    // 2) 没有中文 Logo：取第一张有 file_path 的。
+    for (item in items) {
+        val path = text(item, "file_path")
+        if (path.isNotBlank()) return imageBase + path
+    }
+    return null
 }
 
 /**
