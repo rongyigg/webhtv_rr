@@ -1024,6 +1024,25 @@ private fun HeroDetailScreen(
         }
         if (activity.isFinishing) return@LaunchedEffect
 
+        // 首页预拉取命中：详情 / 演员已经在内存里，直接出结果，一条网络请求都不发。
+        // 这是消除「点进详情页先白等一轮搜索 + 详情」的关键；未命中时下面照旧走「缓存 → 搜索 → 详情」。
+        // 站点开关与 Key 的闸门在上面已经过完，所以这里不会让被排除的源蹭到 TMDB 数据。
+        val prefetched = HeroTmdbPrefetchCache.take(heroTmdbKey(siteKey, vodId))
+        if (prefetched != null) {
+            tmdbState = TmdbDetailState.Ready(
+                item = prefetched.item,
+                // 缓存只收完整数据（`put` 校验过 detail != null），这里兜空对象只为满足非空类型。
+                detail = prefetched.detail ?: JsonObject(),
+                persons = prefetched.cast,
+                manual = prefetched.manual,
+            )
+            Log.d(
+                TAG_DETAIL,
+                "tmdb 命中首页预取 manual=${prefetched.manual} id=${prefetched.item.tmdbId} persons=${prefetched.cast.size}",
+            )
+            return@LaunchedEffect
+        }
+
         tmdbState = TmdbDetailState.Loading
         val ready = withContext(Dispatchers.IO) {
             try {
@@ -2937,8 +2956,11 @@ private fun HeroDetail.mergeTmdb(
  * **不抛异常**：`images` / `logos` 缺失、类型不对、值为 JSON null、`file_path` 为空、
  * `imageBase` 为空时一律返回 null，调用方 `?: logoUrl` 继续走文字标题回落。
  * 返回值是拼好 `imageBase` 的**完整绝对地址**，可直接交给 Coil。
+ *
+ * `internal`（而不是 private）：首页预匹配也要用同一套规则给信息区提 Logo，
+ * 两处各写一份必然漂移，这里作为唯一实现。函数本身无状态、不抛异常，可跨协程并发调用。
  */
-private fun extractTmdbLogo(detail: JsonObject?, imageBase: String): String? {
+internal fun extractTmdbLogo(detail: JsonObject?, imageBase: String): String? {
     if (detail == null || imageBase.isBlank()) return null
     // `as?` 一次性挡住「键不存在」「值是 JSON null」「值不是对象 / 数组」三种情况，不会抛异常。
     val images = detail.get("images") as? JsonObject ?: return null
