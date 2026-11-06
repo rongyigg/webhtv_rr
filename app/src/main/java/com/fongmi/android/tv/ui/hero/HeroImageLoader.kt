@@ -6,6 +6,7 @@ import android.util.Log
 import coil3.EventListener
 import coil3.ImageLoader
 import coil3.SingletonImageLoader
+import coil3.disk.DiskCache
 import coil3.network.HttpException
 import coil3.network.okhttp.OkHttpNetworkFetcherFactory
 import coil3.request.ErrorResult
@@ -19,6 +20,7 @@ import com.github.catvod.net.OkHttp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
+import okio.Path.Companion.toOkioPath
 import java.util.concurrent.TimeUnit
 
 /**
@@ -76,9 +78,28 @@ object HeroImageLoader {
         }
     }
 
+    /**
+     * Coil 磁盘缓存目录名（落在 `cacheDir` 下，系统「清除缓存」可一并回收）。
+     *
+     * 与内存缓存不同，磁盘缓存跨进程重启有效：首页 w1920 背景单张就有几百 KB，
+     * 冷启动重下一次既慢又费流量。
+     */
+    private const val HERO_CACHE_DIR = "hero_image_cache"
+
+    /** 磁盘缓存上限 3GB：首页/详情/搜索的所有 Hero 图片共用这一份。 */
+    private const val HERO_CACHE_MAX_BYTES = 3L * 1024 * 1024 * 1024
+
     fun newImageLoader(context: Context): ImageLoader =
         ImageLoader.Builder(context)
             .components { add(OkHttpNetworkFetcherFactory(callFactory = { client })) }
+            // 3GB 磁盘缓存：单个 ImageLoader 全局生效（首页海报、全屏背景、详情页、磨砂背景都走这里）。
+            // 不显式设就按可用空间 2% 截断（`maxSizePercent`），几张 w1920 背景就把缓存挤满了。
+            .diskCache {
+                DiskCache.Builder()
+                    .directory(context.cacheDir.resolve(HERO_CACHE_DIR).toOkioPath())
+                    .maxSizeBytes(HERO_CACHE_MAX_BYTES)
+                    .build()
+            }
             // 所有走 Coil 的图片（首页 AsyncImage、搜索/历史、磨砂背景）共用这一个监听器：
             // 失败时把**完整地址 + 异常类型 + HTTP 状态码**打出来，否则「部分没图」无从下手。
             .eventListener(ImageErrorLogger)

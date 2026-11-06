@@ -90,18 +90,28 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.Observer
 import androidx.lifecycle.ViewModelProvider
+import coil3.ImageLoader
+import coil3.SingletonImageLoader
 import coil3.compose.AsyncImage
+import coil3.request.ImageRequest
 import com.fongmi.android.tv.R
 import com.fongmi.android.tv.api.SiteApi
 import com.fongmi.android.tv.api.config.VodConfig
 import com.fongmi.android.tv.bean.Class as VodType
 import com.fongmi.android.tv.bean.Result
 import com.fongmi.android.tv.bean.Site
+import com.fongmi.android.tv.bean.TmdbConfig
+import com.fongmi.android.tv.bean.TmdbItem
+import com.fongmi.android.tv.bean.TmdbMatchCache
 import com.fongmi.android.tv.bean.Vod
 import com.fongmi.android.tv.impl.Callback
 import com.fongmi.android.tv.model.SiteViewModel
+import com.fongmi.android.tv.service.TmdbService
 import com.fongmi.android.tv.setting.Setting
 import com.fongmi.android.tv.setting.SiteBlockSetting
+import com.fongmi.android.tv.setting.TmdbSitePolicy
+import com.fongmi.android.tv.ui.helper.TmdbMatcher
+import com.fongmi.android.tv.ui.helper.TmdbRatingFormatter
 import com.fongmi.android.tv.ui.hero.ChangeSourceDialog
 import com.fongmi.android.tv.ui.hero.HeroAccentColor
 import com.fongmi.android.tv.ui.hero.HeroFocusBrush
@@ -115,9 +125,15 @@ import com.fongmi.android.tv.ui.hero.TmdbMatchItem
 import com.fongmi.android.tv.ui.hero.openHeroDetailOrFolder
 import com.fongmi.android.tv.utils.Notify
 import com.fongmi.android.tv.utils.PushParser
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * HeroUI（Compose）全屏沉浸式首页。
@@ -533,13 +549,28 @@ private fun HeroHomeScreen(
     var showTmdbDialog by remember { mutableStateOf(false) }
     var pendingPosterFocus by remember { mutableIntStateOf(-1) }
 
-    // TMDB 手动匹配结果：按「剧名 → 匹配项」记一份 override，
-    // 命中时把首页这张卡的海报与背景图一起换成 TMDB 海报（只换图，不动 Vod 本身）。
+    // TMDB 匹配结果：按「站点 key + 条目 id → 匹配项」记一份 override，
+    // 命中时把首页这张卡的海报与背景图一起换成 TMDB 图（只换图，不动 Vod 本身）。
+    // key 不能用剧名：同名不同季 / 重制版会互相覆盖，`Vod.id` 才是站点内唯一键。
     var tmdbOverrides by remember { mutableStateOf<Map<String, TmdbMatchItem>>(emptyMap()) }
-    val posters = remember(homePosters, tmdbOverrides) {
+    // TMDB 横版背景单独记一份：`TmdbMatchItem` 只有竖版 `poster`（弹窗模型，本轮不改），
+    // 首页全屏背景要用横图，key 与 [tmdbOverrides] 完全一致。
+    var tmdbBackdrops by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
+    val posters = remember(homePosters, tmdbOverrides, tmdbBackdrops) {
         homePosters.map { poster ->
-            val override = tmdbOverrides[poster.title]
-            if (override != null) poster.copy(url = override.poster, backdropUrl = override.poster) else poster
+            val key = poster.posterKey
+            val override = tmdbOverrides[key]
+            if (override == null) {
+                poster
+            } else {
+                // 提档：TMDB 搜索结果默认给 w342 竖图、w780 横图，1080p 全屏下明显糊。
+                // 换成 w500 竖图 + w1920 横图（TMDB 图床实测支持 w1920）；自定义图床原样保留。
+                val backdropSource = tmdbBackdrops[key].orEmpty().ifBlank { override.poster }
+                poster.copy(
+                    url = upgradeTmdbImage(override.poster, "w500").ifBlank { poster.url },
+                    backdropUrl = upgradeTmdbImage(backdropSource, "w1920").ifBlank { poster.backdropUrl },
+                )
+            }
         }
     }
     // 【防越界】真实列表长度不固定：必须跟着 posters.size 重建。
@@ -554,6 +585,89 @@ private fun HeroHomeScreen(
         if (focusedPosterIndex > posters.lastIndex) {
             focusedPosterIndex = posters.lastIndex.coerceAtLeast(0)
         }
+    }
+
+    // ------------------------------------------------------------------
+    // TMDB 自动预匹配：给首页每张卡补高清海报 / 背景
+    // ------------------------------------------------------------------
+    // 1. 只写内存 override，**不写** `TmdbMatchCache`：自动匹配可能判错，缓存留给手动匹配与详情页，
+    //    一次误判不该把整部剧的图片永久钉死；
+    // 2. key 用「站点|条目 id」列表而不是 `homePosters` 本身：`Vod` 没有值相等语义，
+    //    用列表内容做 key，切 Tab 回来内容没变就不会把整轮搜索再跑一遍。
+    val posterKeys = remember(homePosters) { homePosters.map { it.posterKey } }
+    LaunchedEffect(posterKeys) {
+        if (homePosters.isEmpty()) return@LaunchedEffect
+        val config = TmdbConfig.effectiveCurrent()
+        if (!config.isReady()) return@LaunchedEffect
+        // 已经有 override（手动 / 上一轮自动）的条目直接跳过。
+        val targets = homePosters.filter { it.posterKey !in tmdbOverrides && it.vod.name.isNotBlank() }
+        if (targets.isEmpty()) return@LaunchedEffect
+
+        val service = TmdbService()
+        // 缓存读一次就够（`Setting.getTmdbMatchCache` 是 synchronized 的读-解析，不必每张都做）。
+        val cache = withContext(Dispatchers.IO) { Setting.getTmdbMatchCache() }
+
+        /** 把一块结果合并进 override：期间被手动改过的 key 以手动为准。返回新增条数。 */
+        fun mergeMatches(matches: List<Pair<HeroPoster, TmdbItem>?>): Int {
+            val addOverrides = LinkedHashMap<String, TmdbMatchItem>()
+            val addBackdrops = LinkedHashMap<String, String>()
+            for (match in matches) {
+                if (match == null) continue
+                val (poster, item) = match
+                val key = poster.posterKey
+                if (key in tmdbOverrides) continue
+                addOverrides[key] = item.toMatchItem()
+                if (item.backdropUrl.isNotBlank()) addBackdrops[key] = item.backdropUrl
+            }
+            if (addOverrides.isEmpty()) return 0
+            tmdbOverrides = tmdbOverrides + addOverrides
+            tmdbBackdrops = tmdbBackdrops + addBackdrops
+            return addOverrides.size
+        }
+
+        var applied = 0
+        try {
+            coroutineScope {
+                // 分块并发：TMDB 没有批量接口，串行 20+ 次要十几秒；
+                // 每块 3 个既能压住并发，又让排在前面的（首屏可见）最先出结果、先换图。
+                for (chunk in targets.chunked(TMDB_PREMATCH_CONCURRENCY)) {
+                    val matches = chunk.map { poster ->
+                        async(Dispatchers.IO) { resolveHomeTmdb(poster, cache, service, config) }
+                    }.awaitAll()
+                    // 逐块落库：切 Tab / 换源取消时，已经完成的块不会白跑。
+                    applied += mergeMatches(matches)
+                }
+            }
+        } catch (e: CancellationException) {
+            // 列表已换 / 页面已退出：已完成的块已经生效，原样抛出交给协程取消机制。
+            throw e
+        } catch (e: TmdbService.AuthException) {
+            // Key 失效：整轮停止，不拿同一个坏 Key 把剩下的条目全试一遍。
+            Log.w(TAG_HOME, "tmdb 预匹配鉴权失败: ${e.message}")
+            return@LaunchedEffect
+        } catch (e: Exception) {
+            Log.w(TAG_HOME, "tmdb 预匹配失败: ${e.message}")
+        }
+        if (applied > 0) Log.d(TAG_HOME, "tmdb 预匹配完成: $applied/${targets.size}")
+    }
+
+    // ------------------------------------------------------------------
+    // 焦点前后各 3 张预加载
+    // ------------------------------------------------------------------
+    // 用 `posters`（已提档）而不是 `homePosters`：预热源站糊图等于白做。
+    // Coil 3.3 已移除请求优先级，请求按入队顺序消费 —— 当前背景第一个入队就是最高优先级。
+    DisposableEffect(posters, focusedPosterIndex) {
+        val loader = SingletonImageLoader.get(context)
+        posters.getOrNull(focusedPosterIndex)?.let { current ->
+            enqueuePreload(loader, context, current.backdropUrl, HERO_BACKDROP_PRELOAD_WIDTH)
+        }
+        for (offset in -HERO_PRELOAD_RANGE..HERO_PRELOAD_RANGE) {
+            val poster = posters.getOrNull(focusedPosterIndex + offset) ?: continue
+            enqueuePreload(loader, context, poster.url, HERO_POSTER_PRELOAD_WIDTH)
+            // 当前这张的背景上面已经入过队，这里只补前后邻居。
+            if (offset != 0) enqueuePreload(loader, context, poster.backdropUrl, HERO_BACKDROP_PRELOAD_WIDTH)
+        }
+        onDispose { }
     }
 
     // 任意一排 → 顶栏：默认落在最左侧的第一项（小房子），不记忆上次位置。
@@ -906,7 +1020,11 @@ private fun HeroHomeScreen(
             TmdbMatchDialog(
                 initialKeyword = tmdbPoster.title,
                 onConfirm = { item ->
-                    tmdbOverrides = tmdbOverrides + (tmdbPoster.title to item)
+                    val key = tmdbPoster.posterKey
+                    // 自动匹配与手动选的若不是同一条 TMDB 记录，旧横图必须一起作废，
+                    // 否则会出现「海报是这部、全屏背景是另一部」。同一条则保留（横图比竖图清楚）。
+                    if (tmdbOverrides[key]?.id != item.id) tmdbBackdrops = tmdbBackdrops - key
+                    tmdbOverrides = tmdbOverrides + (key to item)
                     showTmdbDialog = false
                 },
                 onDismiss = { showTmdbDialog = false },
@@ -1729,6 +1847,16 @@ private fun requestFocus(requesters: List<FocusRequester>, index: Int): Boolean 
 /** 首页日志统一 TAG：`adb logcat -s HeroHome` 就能看到源切换、请求与回调条数。 */
 private const val TAG_HOME = "HeroHome"
 
+/** TMDB 预匹配的并发块大小：TMDB 没有批量接口，串行 20+ 次要十几秒。 */
+private const val TMDB_PREMATCH_CONCURRENCY = 3
+
+/** 预加载半径：焦点前后各 3 张。 */
+private const val HERO_PRELOAD_RANGE = 3
+
+/** 预加载解码宽度：只影响预热那张图占多少内存，不影响磁盘缓存里原始字节的清晰度。 */
+private const val HERO_POSTER_PRELOAD_WIDTH = 360
+private const val HERO_BACKDROP_PRELOAD_WIDTH = 960
+
 /**
  * 首页一张海报卡。
  *
@@ -1776,6 +1904,108 @@ private fun Result?.toHomePosters(): List<HeroPoster> {
             site = site,
         )
     }
+}
+
+/**
+ * 首页 override 的稳定身份：`站点 key + 条目 id`。
+ *
+ * 不能用剧名：同名不同季 / 重制版会互相覆盖；`Vod.id` 才是站点内唯一键。
+ * 少数源不给 id，此时退回剧名，至少不会把所有条目并成同一个 key。
+ */
+private val HeroPoster.posterKey: String
+    get() = site.key + "|" + vod.id.ifBlank { vod.name }
+
+// TMDB 图床的宽度档位（从低到高）。`original` 不在表里：原图可能 4K，电视盒子扛不住，
+// 也绝不应该在「提档」时被降级成定宽图。
+private val TMDB_IMAGE_WIDTHS =
+    listOf("w45", "w92", "w154", "w185", "w300", "w342", "w500", "w780", "w1280", "w1920")
+
+/**
+ * 把 TMDB 图片地址提到 [targetWidth] 档，**只升不降**。
+ *
+ * - `/t/p/w342/abc.jpg` → `/t/p/w500/abc.jpg`；
+ * - 已经是更大的档位、`original`、或自定义图床（不在 `/t/p/` 下）时原样返回，
+ *   用户自己配的 `imageBase` / `backdropBase` 不会被改写。
+ */
+private fun upgradeTmdbImage(url: String, targetWidth: String): String {
+    if (url.isBlank()) return url
+    val marker = "/t/p/"
+    val markerIndex = url.indexOf(marker)
+    if (markerIndex < 0) return url
+    val sizeStart = markerIndex + marker.length
+    val sizeEnd = url.indexOf('/', sizeStart)
+    if (sizeEnd < 0) return url
+    val current = TMDB_IMAGE_WIDTHS.indexOf(url.substring(sizeStart, sizeEnd))
+    val target = TMDB_IMAGE_WIDTHS.indexOf(targetWidth)
+    if (current < 0 || target < 0 || current >= target) return url
+    return url.substring(0, sizeStart) + targetWidth + url.substring(sizeEnd)
+}
+
+/**
+ * 单条首页海报的 TMDB 解析：**手动缓存 → 自动缓存 → 在线搜索**，顺序与详情页一致。
+ *
+ * 无 Key / 该源被排除 / 搜不到时返回 null，调用方保持源站图片不变（不改变任何原有行为）。
+ */
+private suspend fun resolveHomeTmdb(
+    poster: HeroPoster,
+    cache: TmdbMatchCache,
+    service: TmdbService,
+    config: TmdbConfig,
+): Pair<HeroPoster, TmdbItem>? {
+    val siteKey = poster.site.key
+    val vod = poster.vod
+    if (!TmdbSitePolicy.isEnabled(config, siteKey, vod.id)) return null
+    return try {
+        val item = cache.findManual(siteKey, vod.id, vod.name)
+            ?: cache.find(siteKey, vod.id, vod.name)
+            ?: TmdbMatcher(service, config).searchAndMatch(vod.name, vod)
+        if (item == null) null else poster to item
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: TmdbService.AuthException) {
+        throw e
+    } catch (e: Exception) {
+        Log.w(TAG_HOME, "tmdb 预匹配失败: ${vod.name} | ${e.message}")
+        null
+    }
+}
+
+/**
+ * `TmdbItem` → 首页 override 用的 [TmdbMatchItem]（弹窗模型，本轮不改它）。
+ *
+ * 首页只消费 `poster`（背景另存 `tmdbBackdrops`），其余字段照填，保持与手动匹配同构；
+ * 该模型没有年份字段，年份从 `subtitle`（`剧集 · 2024-05-01 · 评分 8.1`）里取前 4 位数字。
+ */
+private fun TmdbItem.toMatchItem(): TmdbMatchItem = TmdbMatchItem(
+    id = tmdbId,
+    title = title,
+    year = yearText(),
+    poster = posterUrl,
+    mediaType = mediaType,
+    genres = "",
+    rating = TmdbRatingFormatter.format(this),
+)
+
+private fun TmdbItem.yearText(): String = subtitle
+    .split(" · ")
+    .firstOrNull { part -> part.length >= 4 && part.take(4).all { it.isDigit() } }
+    ?.take(4)
+    .orEmpty()
+
+/**
+ * 预加载一张图：只入队、不等待。
+ *
+ * [width] 是**解码尺寸上限**，不是下载尺寸：Coil 的磁盘缓存存的是网络原始字节，
+ * 与解码尺寸无关，所以小尺寸预热不会让真正显示时变糊，只是少占内存。
+ */
+private fun enqueuePreload(loader: ImageLoader, context: Context, url: String, width: Int) {
+    if (url.isBlank()) return
+    loader.enqueue(
+        ImageRequest.Builder(context)
+            .data(url)
+            .size(width)
+            .build()
+    )
 }
 
 /** 元数据行：`年份 · 分类 · 备注`，空字段自动省略，不会留下多余的 `·`。 */
