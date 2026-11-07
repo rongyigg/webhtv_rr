@@ -103,6 +103,7 @@ import coil3.load
 import coil3.request.ImageRequest
 import coil3.request.crossfade
 import com.fongmi.android.tv.App
+import com.fongmi.android.tv.BuildConfig
 import com.fongmi.android.tv.R
 import com.fongmi.android.tv.api.SiteApi
 import com.fongmi.android.tv.api.config.VodConfig
@@ -2071,6 +2072,44 @@ private fun requestFocus(requesters: List<FocusRequester>, index: Int): Boolean 
 /** 首页日志统一 TAG：`adb logcat -s HeroHome` 就能看到源切换、请求与回调条数。 */
 private const val TAG_HOME = "HeroHome"
 
+// ---------------------------------------------------------------------------
+// 【临时诊断，仅 debug】首页海报行焦点路径日志：`adb logcat -s HeroFocusDiag`
+//
+// 只读数、只打日志，不参与任何判定；release 下 `BuildConfig.DEBUG` 被折叠成 false，
+// 配合 `inline` 连字符串拼接一起剥掉。诊断结束后整块删除（连同 a~e 五处调用点）即可。
+// ---------------------------------------------------------------------------
+private const val TAG_FOCUS_DIAG = "HeroFocusDiag"
+
+private inline fun focusDiag(message: () -> String) {
+    if (BuildConfig.DEBUG) Log.d(TAG_FOCUS_DIAG, message())
+}
+
+/** `View.FOCUS_*` → 可读方向名。 */
+private fun focusDirName(direction: Int): String = when (direction) {
+    View.FOCUS_LEFT -> "LEFT"
+    View.FOCUS_RIGHT -> "RIGHT"
+    View.FOCUS_UP -> "UP"
+    View.FOCUS_DOWN -> "DOWN"
+    View.FOCUS_FORWARD -> "FORWARD"
+    View.FOCUS_BACKWARD -> "BACKWARD"
+    else -> "DIR($direction)"
+}
+
+/** `KeyEvent.KEYCODE_DPAD_*` → 可读方向名。 */
+private fun keyDirName(keyCode: Int): String = when (keyCode) {
+    KeyEvent.KEYCODE_DPAD_LEFT -> "LEFT"
+    KeyEvent.KEYCODE_DPAD_RIGHT -> "RIGHT"
+    KeyEvent.KEYCODE_DPAD_UP -> "UP"
+    KeyEvent.KEYCODE_DPAD_DOWN -> "DOWN"
+    else -> "KEY($keyCode)"
+}
+
+/** 日志用身份串：类名 + 焦点态 + 是否挂窗口，避免 `toString()` 里的哈希噪音。 */
+private fun View?.diagName(): String {
+    val view = this ?: return "null"
+    return "${view.javaClass.simpleName}(focused=${view.isFocused}, attached=${view.isAttachedToWindow})"
+}
+
 /** 预加载半径：焦点前后各 3 张。 */
 private const val HERO_PRELOAD_RANGE = 3
 
@@ -2729,10 +2768,30 @@ private class HeroPosterAdapter(
         }
 
         fun handleKey(keyCode: Int, event: KeyEvent): Boolean {
+            // 【诊断 a】方向键入口：方向、第几张、是否已在边界、长按锁是否在吞键。
+            val horizontal =
+                keyCode == KeyEvent.KEYCODE_DPAD_LEFT || keyCode == KeyEvent.KEYCODE_DPAD_RIGHT
+            if (horizontal || keyCode == KeyEvent.KEYCODE_DPAD_UP || keyCode == KeyEvent.KEYCODE_DPAD_DOWN) {
+                focusDiag {
+                    val position = bindingAdapterPosition
+                    val count = (card.parent as? RecyclerView)?.adapter?.itemCount ?: 0
+                    val boundary = when (keyCode) {
+                        KeyEvent.KEYCODE_DPAD_LEFT -> position == 0
+                        KeyEvent.KEYCODE_DPAD_RIGHT -> position == count - 1
+                        else -> false
+                    }
+                    "a/handleKey 收到 ${keyDirName(keyCode)} action=${event.action} repeat=${event.repeatCount} " +
+                        "pos=$position/$count 在边界=$boundary 长按锁=$centerTriggered"
+                }
+            }
             // 【长按锁】长按一旦被消费，后续所有事件（系统重复 KeyDown、迟到的 KeyUp、方向键）
             // 全部吃掉，只有松开按键（KeyUp）才解锁 —— 否则弹窗下面会再打开一次详情页。
             if (centerTriggered) {
                 if (event.action == KeyEvent.ACTION_UP) centerTriggered = false
+                if (horizontal) {
+                    // 【诊断 a】这条分支会把左右键吞掉：焦点不动，也不会进 focusSearch。
+                    focusDiag { "a/handleKey 长按锁吞掉 ${keyDirName(keyCode)} -> return true" }
+                }
                 return true
             }
             when (keyCode) {
@@ -2789,10 +2848,18 @@ private class HeroPosterAdapter(
                         val position = bindingAdapterPosition
                         if (position != RecyclerView.NO_POSITION) onMoveUp(position)
                     }
+                    // 【诊断 a】UP 被卡片消费并交给 onMoveUp：用来确认「焦点先跳到上面」是不是真由 UP 触发。
+                    focusDiag { "a/handleKey UP action=${event.action} pos=${bindingAdapterPosition} -> return true" }
                     return true
                 }
             }
             // 左右放行：交给 RecyclerView 的焦点搜索，最终由 [HeroPosterRecyclerView.scrollToIndex] 居中。
+            if (horizontal) {
+                // 【诊断 a】放行 = 未消费：紧接着应看到 c/（focusSearch）与 b/（onFocusSearchFailed）。
+                focusDiag {
+                    "a/handleKey 放行 ${keyDirName(keyCode)} pos=${bindingAdapterPosition} -> return false"
+                }
+            }
             return false
         }
 
@@ -2893,6 +2960,37 @@ private class HeroPosterRecyclerView @JvmOverloads constructor(
         super.onMeasure(widthMeasureSpec, heightMeasureSpec)
     }
 
+    /** 【诊断】某 View 在本行的 adapter position；不属于本行返回 [RecyclerView.NO_POSITION]。 */
+    private fun diagPositionOf(view: View?): Int {
+        if (view == null) return RecyclerView.NO_POSITION
+        val direct = getChildAdapterPosition(view)
+        if (direct != RecyclerView.NO_POSITION) return direct
+        return findContainingViewHolder(view)?.bindingAdapterPosition ?: RecyclerView.NO_POSITION
+    }
+
+    /** 【诊断】当前视口内的 position 区间，用来判断「目标卡是否真的还在屏幕里」。 */
+    private fun diagVisibleRange(): String {
+        val manager = layoutManager as? LinearLayoutManager ?: return "NO_LM"
+        return "${manager.findFirstVisibleItemPosition()}..${manager.findLastVisibleItemPosition()}"
+    }
+
+    /**
+     * 【诊断 c】`focusSearch` 纯透传：只记日志，原样返回 `super.focusSearch`。
+     *
+     * 本类此前没有这个 override；诊断期加这一层，只为看清「RecyclerView 自己找到了谁 /
+     * 没找到时把什么交给父链」。语义与原实现完全一致，诊断结束后整段删除。
+     */
+    override fun focusSearch(focused: View?, direction: Int): View? {
+        val result = super.focusSearch(focused, direction)
+        focusDiag {
+            val asChild = result != null && result.parent === this
+            "c/focusSearch dir=${focusDirName(direction)} from=${focused.diagName()}#${diagPositionOf(focused)} " +
+                "-> ${result.diagName()} 类=${result?.javaClass?.name ?: "null"} " +
+                "是本行子项=$asChild 子项pos=${diagPositionOf(result)}"
+        }
+        return result
+    }
+
     /**
      * 数据没变就什么都不做：`update` 每次重组都会调用，不能每次都 notifyDataSetChanged。
      *
@@ -2925,6 +3023,13 @@ private class HeroPosterRecyclerView @JvmOverloads constructor(
                 ?.posterKey
                 ?.takeIf { it.isNotBlank() }
         }
+        // 【诊断 d】重绑前：焦点在谁身上、第几张、滚动偏移、新旧条数、当前 pending。
+        focusDiag {
+            "d/bindData BEFORE focusedChild=${focusedChild.diagName()} " +
+                "focusedPos=${diagPositionOf(focusedChild)} focusedKey=$focusedKey " +
+                "scroll=${computeHorizontalScrollOffset()} oldCount=${posterAdapter.itemCount} " +
+                "newCount=${posters.size} pending=$pendingFocusPosition"
+        }
         if (posterAdapter.submit(posters)) {
             lastFocusIndex = -1
             // 数据换了，旧下标不再可信：只有「重绑前焦点确实在本行 + 同一下标仍是同一张卡」
@@ -2934,6 +3039,19 @@ private class HeroPosterRecyclerView @JvmOverloads constructor(
                 posters[focusedPosition].posterKey == focusedKey
             pendingFocusPosition =
                 if (sameCard) focusedPosition else RecyclerView.NO_POSITION
+            // 【诊断 d】notifyDataSetChanged 之后：焦点是否还在、滚动是否被保留、pending 写了什么。
+            focusDiag {
+                "d/bindData AFTER sameCard=$sameCard pending=$pendingFocusPosition " +
+                    "focusedChild=${focusedChild.diagName()} focusedPos=${diagPositionOf(focusedChild)} " +
+                    "scroll=${computeHorizontalScrollOffset()} itemCount=${posterAdapter.itemCount} " +
+                    "视口=${diagVisibleRange()}"
+            }
+        } else {
+            // 【诊断 d】数据没变 → 没有 notifyDataSetChanged，pending 保持不变。
+            focusDiag {
+                "d/bindData SKIP 数据未变 pending=$pendingFocusPosition " +
+                    "scroll=${computeHorizontalScrollOffset()} 视口=${diagVisibleRange()}"
+            }
         }
     }
 
@@ -2971,6 +3089,11 @@ private class HeroPosterRecyclerView @JvmOverloads constructor(
      */
     fun scrollToIndex(index: Int) {
         if (index < 0 || index >= posterAdapter.itemCount) return
+        // 【诊断 f】补：所有 Compose 侧触发的滚动都进这里（含 syncFocus / 焦点变化）。
+        focusDiag {
+            "f/scrollToIndex index=$index anchor=$POSTER_SCROLL_ANCHOR " +
+                "scroll=${computeHorizontalScrollOffset()} 视口=${diagVisibleRange()}"
+        }
         if (index < POSTER_SCROLL_ANCHOR) {
             if (computeHorizontalScrollOffset() != 0) smoothScrollToPosition(0)
             return
@@ -2980,6 +3103,11 @@ private class HeroPosterRecyclerView @JvmOverloads constructor(
 
     /** 切分类后瞬间回到最左：不做动画，避免「Tab 刚选中、下面还在滑」的错位感。 */
     fun scrollToStart() {
+        // 【诊断 f】补：切分类会走这里 → 整行瞬移回第 0 张，但**不动焦点**。
+        focusDiag {
+            "f/scrollToStart BEFORE scroll=${computeHorizontalScrollOffset()} 视口=${diagVisibleRange()} " +
+                "焦点=${focusedChild.diagName()} lastFocusIndex=$lastFocusIndex"
+        }
         stopScroll()
         pendingFocusPosition = RecyclerView.NO_POSITION
         (layoutManager as? LinearLayoutManager)?.scrollToPositionWithOffset(0, 0)
@@ -2998,6 +3126,11 @@ private class HeroPosterRecyclerView @JvmOverloads constructor(
      */
     fun focusPoster(index: Int): Boolean {
         if (index < 0 || index >= posterAdapter.itemCount) return false
+        // 【诊断 f】补：Compose 侧的显式抢焦（Tab ↓ / 弹窗关闭 / 启动）都从这里进来。
+        focusDiag {
+            "f/focusPoster index=$index itemCount=${posterAdapter.itemCount} " +
+                "当前焦点=${focusedChild.diagName()} scroll=${computeHorizontalScrollOffset()}"
+        }
         val attached = findViewHolderForAdapterPosition(index)?.itemView
         if (attached != null && attached.isAttachedToWindow && attached.requestFocus()) {
             pendingFocusPosition = RecyclerView.NO_POSITION
@@ -3028,10 +3161,39 @@ private class HeroPosterRecyclerView @JvmOverloads constructor(
         if (position == RecyclerView.NO_POSITION) return
         // 先作废再判断：保证任何一条 return 都不会把「待恢复」留到下一次布局。
         pendingFocusPosition = RecyclerView.NO_POSITION
-        if (position < 0 || position >= posterAdapter.itemCount) return
-        val target = findViewHolderForAdapterPosition(position)?.itemView ?: return
-        if (!target.isAttachedToWindow) return
-        target.requestFocus()
+        if (position < 0 || position >= posterAdapter.itemCount) {
+            // 【诊断 e】位置越界：直接丢弃。
+            focusDiag {
+                "e/onLayout 丢弃 pos=$position 越界 itemCount=${posterAdapter.itemCount} " +
+                    "当前焦点=${focusedChild.diagName()}"
+            }
+            return
+        }
+        val holder = findViewHolderForAdapterPosition(position)
+        val target = holder?.itemView
+        if (target == null) {
+            // 【诊断 e】没命中 holder：目标卡已经不在当前视口（scroll 位置 / 数据变化）。
+            focusDiag {
+                "e/onLayout 未命中 holder pos=$position 视口=${diagVisibleRange()} " +
+                    "itemCount=${posterAdapter.itemCount} scroll=${computeHorizontalScrollOffset()} " +
+                    "当前焦点=${focusedChild.diagName()}"
+            }
+            return
+        }
+        if (!target.isAttachedToWindow) {
+            // 【诊断 e】命中 holder 但没挂窗口：requestFocus 一定失败。
+            focusDiag {
+                "e/onLayout 命中但未附着 pos=$position target=${target.diagName()} 视口=${diagVisibleRange()}"
+            }
+            return
+        }
+        val focused = target.requestFocus()
+        // 【诊断 e】恢复结果：requestFocus=false 说明焦点被别处抢走（弹窗 / Compose 焦点请求 / 窗口未聚焦）。
+        focusDiag {
+            "e/onLayout 恢复 pos=$position target=${target.diagName()} requestFocus=$focused " +
+                "之后 focusedChild=${focusedChild.diagName()} pos=${diagPositionOf(focusedChild)} " +
+                "视口=${diagVisibleRange()} scroll=${computeHorizontalScrollOffset()}"
+        }
     }
 
     /** 卡片左边缘距 paddingStart 的距离：让卡片中心落在 RecyclerView 的几何中心。 */
@@ -3094,14 +3256,38 @@ private class HeroPosterLayoutManager(context: Context) :
     ): View? {
         val fallback = super.onFocusSearchFailed(focused, focusDirection, recycler, state)
         val current = getPosition(focused)
-        if (current == RecyclerView.NO_POSITION) return fallback
+        if (current == RecyclerView.NO_POSITION) {
+            // 【诊断 b】拿不到当前卡的 position：直接交父类结果。
+            focusDiag {
+                "b/onFocusSearchFailed dir=${focusDirName(focusDirection)} pos=NO_POSITION " +
+                    "fallback=${fallback.diagName()} fallbackIsFocused=${fallback === focused} " +
+                    "-> return ${fallback.diagName()}"
+            }
+            return fallback
+        }
         val step = when (focusDirection) {
             View.FOCUS_RIGHT -> 1
             View.FOCUS_LEFT -> -1
-            else -> return fallback
+            else -> {
+                // 【诊断 b】非左右：不进入「一次只走一张」的逻辑。
+                focusDiag {
+                    "b/onFocusSearchFailed dir=${focusDirName(focusDirection)} pos=$current " +
+                        "fallback=${fallback.diagName()} -> return fallback（非左右）"
+                }
+                return fallback
+            }
         }
         val adjacent = findViewByPosition(current + step)
-        return if (adjacent != null && adjacent.isFocusable) adjacent else fallback
+        val result = if (adjacent != null && adjacent.isFocusable) adjacent else fallback
+        // 【诊断 b】边界判定就看这一行：adjacent=null 且 fallback=null → 本行两侧确实没有目标，
+        // 返回值会变成 RecyclerView.focusSearch 的 super 分支（见 c/ 日志）。
+        focusDiag {
+            "b/onFocusSearchFailed dir=${focusDirName(focusDirection)} pos=$current step=$step " +
+                "adjacent=${adjacent.diagName()} fallback=${fallback.diagName()} " +
+                "fallbackIsFocused=${fallback === focused} " +
+                "-> return ${result.diagName()} 视口=${findFirstVisibleItemPosition()}..${findLastVisibleItemPosition()}"
+        }
+        return result
     }
 }
 
