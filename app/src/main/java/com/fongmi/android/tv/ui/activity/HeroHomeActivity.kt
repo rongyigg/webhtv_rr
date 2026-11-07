@@ -2711,6 +2711,17 @@ private class HeroPosterAdapter(
         return true
     }
 
+    /**
+     * [submit] 会不会走**整排刷新**：与 [submit] 内的 `sameShape` 判定完全同义
+     * （长度相同 + 每个位置的 `posterKey` 相同 = 只走精准刷新）。
+     *
+     * 只给 [HeroPosterRecyclerView.bindData] 决定「要不要写 pendingFocusPosition」用：
+     * 精准刷新不回收 holder、焦点不会丢，此时写 pending 反而会在之后某次真实布局里
+     * 把用户已经移走的焦点抢回旧位置。
+     */
+    fun requiresFullRebind(next: List<HeroPoster>): Boolean =
+        items.size != next.size || items.indices.any { items[it].posterKey != next[it].posterKey }
+
     override fun getItemCount(): Int = items.size
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): ViewHolder {
@@ -3074,6 +3085,11 @@ private class HeroPosterRecyclerView @JvmOverloads constructor(
      *   4. 重绑后该 position 上仍是**同一张卡**（按 `posterKey` 比对）。
      */
     fun bindData(posters: List<HeroPoster>) {
+        // 【P3 触发条件】只有整排刷新（长度 / 顺序变了）才会把 holder 回池、把焦点卡摘掉；
+        // 精准刷新（notifyItemChanged）原地重绑、焦点不丢，此时写 pending 是有害的：
+        // 它会在下一次真实 onLayout 里把用户已经移走的焦点抢回旧位置。
+        // 判定与 submit 内 `sameShape`（2688-2689）完全一致，且必须在 submit 之前取（submit 会替换 items）。
+        val isFullRebind = posterAdapter.requiresFullRebind(posters)
         // 必须在 submit(notifyDataSetChanged) **之前**取：重绑之后 holder 与焦点状态都已变。
         // `focusedChild == null` 是 O(1) 快速否定，避免每次重组都做一次窗口级 findFocus()。
         val focusedPosition =
@@ -3104,11 +3120,15 @@ private class HeroPosterRecyclerView @JvmOverloads constructor(
             val sameCard = focusedKey != null &&
                 focusedPosition in 0 until posterAdapter.itemCount &&
                 posters[focusedPosition].posterKey == focusedKey
-            pendingFocusPosition =
-                if (sameCard) focusedPosition else RecyclerView.NO_POSITION
+            // 只有整排刷新才需要恢复焦点：精准刷新 holder 没回池、焦点压根没丢，
+            // 写 pending 只会在之后的真实布局里把用户已经移走的焦点抢回来。
+            if (isFullRebind) {
+                pendingFocusPosition =
+                    if (sameCard) focusedPosition else RecyclerView.NO_POSITION
+            }
             // 【诊断 d】notifyDataSetChanged 之后：焦点是否还在、滚动是否被保留、pending 写了什么。
             focusDiag {
-                "d/bindData AFTER sameCard=$sameCard pending=$pendingFocusPosition " +
+                "d/bindData AFTER full=$isFullRebind sameCard=$sameCard pending=$pendingFocusPosition " +
                     "focusedChild=${focusedChild.diagName()} focusedPos=${diagPositionOf(focusedChild)} " +
                     "scroll=${computeHorizontalScrollOffset()} itemCount=${posterAdapter.itemCount} " +
                     "视口=${diagVisibleRange()}"
@@ -3251,6 +3271,16 @@ private class HeroPosterRecyclerView @JvmOverloads constructor(
             // 【诊断 e】命中 holder 但没挂窗口：requestFocus 一定失败。
             focusDiag {
                 "e/onLayout 命中但未附着 pos=$position target=${target.diagName()} 视口=${diagVisibleRange()}"
+            }
+            return
+        }
+        // 【P3 消费前置校验】精准刷新不会摘掉焦点卡，pending 可能在用户按右移走焦点之后才被消费：
+        // 只有「焦点真空」或「焦点已经就在目标卡上」才恢复；否则说明用户已经自己选好了卡，直接丢弃。
+        val cur = focusedChild
+        val curPos = if (cur == null) RecyclerView.NO_POSITION else getPosition(cur)
+        if (curPos != RecyclerView.NO_POSITION && curPos != position) {
+            focusDiag {
+                "e/onLayout 丢弃 pos=$position 焦点已移走 curPos=$curPos 视口=${diagVisibleRange()}"
             }
             return
         }
