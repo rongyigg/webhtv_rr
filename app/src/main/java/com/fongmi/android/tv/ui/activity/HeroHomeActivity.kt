@@ -1678,11 +1678,11 @@ private fun HeroInfoArea(poster: HeroPoster, tmdbData: HeroTmdbData?) {
         Column(modifier = Modifier.fillMaxWidth()) {
             // 剧名行（原版 `activity_home_v2.xml` L82-89 / `HomeActivityV2.D2(pos)`）：
             // 有 TMDB 艺术字 Logo → 整行 96dp（艺术字太小时眼睛要凑上去，96dp 才和元数据/简介比例协调）；
-            // 没有 Logo → 保持 36dp 的 32sp 文字标题。两种状态不混排，各自固定高度。
+            // 没有 Logo **或 Logo 加载失败** → 保持 36dp 的 32sp 文字标题。两种状态不混排，各自固定高度。
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(if (hasLogo) HERO_LOGO_HEIGHT else HERO_TITLE_HEIGHT),
+                    .height(if (hasLogo && !logoFailed) HERO_LOGO_HEIGHT else HERO_TITLE_HEIGHT),
                 contentAlignment = Alignment.BottomStart,
             ) {
                 if (hasLogo && !logoFailed) {
@@ -2560,6 +2560,15 @@ private const val POSTER_DECELERATION_MS = 500
 /** 海报卡片图片淡入：300ms（产品定稿；首页其它大图仍用 500ms）。 */
 private const val POSTER_CARD_CROSSFADE_MS = 300
 
+/** 焦点卡放大倍数（与原 Compose 卡片一致；只影响绘制，不影响布局）。 */
+private const val POSTER_FOCUS_SCALE = 1.1f
+
+/** 焦点放大 / 阴影动画时长。 */
+private const val POSTER_FOCUS_ANIM_MS = 150L
+
+/** 焦点卡抬升高度（dp）：配合放大投一层影子，让卡片真的「浮起来」。 */
+private const val POSTER_FOCUS_ELEVATION_DP = 18f
+
 /**
  * Compose ↔ 海报行 RecyclerView 的握柄。
  *
@@ -2636,7 +2645,16 @@ private class HeroPosterAdapter(
             true
         }
         card.setOnKeyListener { _, keyCode, event -> holder.handleKey(keyCode, event) }
+        val density = card.resources.displayMetrics.density
         card.setOnFocusChangeListener { _, hasFocus ->
+            // 【焦点放大】原生 View 版：整张卡 1.1x 缩放 + 抬升阴影，150ms 收尾。
+            // 缩放是绘制层 transform，不参与测量，邻居不会跟着抖（与原 Compose 卡片一致）。
+            card.animate()
+                .scaleX(if (hasFocus) POSTER_FOCUS_SCALE else 1f)
+                .scaleY(if (hasFocus) POSTER_FOCUS_SCALE else 1f)
+                .translationZ(if (hasFocus) POSTER_FOCUS_ELEVATION_DP * density else 0f)
+                .setDuration(POSTER_FOCUS_ANIM_MS)
+                .start()
             if (hasFocus) {
                 val position = holder.bindingAdapterPosition
                 if (position != RecyclerView.NO_POSITION) onFocused(position)
@@ -2672,6 +2690,11 @@ private class HeroPosterAdapter(
         // 兜底：取消卡片内部可能残留的 Glide 请求并复位占位图。
         holder.card.releasePoster()
         holder.card.tag = null
+        // 复位焦点动画：被回收的卡可能还停在 1.1x / 抬升状态，不复位会带到下一条数据上。
+        holder.card.animate().cancel()
+        holder.card.scaleX = 1f
+        holder.card.scaleY = 1f
+        holder.card.translationZ = 0f
     }
 
     inner class ViewHolder(val card: HeroPosterCard) : RecyclerView.ViewHolder(card) {
@@ -2813,16 +2836,30 @@ private class HeroPosterRecyclerView @JvmOverloads constructor(
     /** 最近一次已经滚到位的下标：Compose 每次重组都会 syncFocus，这里挡住重复滚动。 */
     private var lastFocusIndex = -1
 
+    /**
+     * 待补抢焦点的位置（[RecyclerView.NO_POSITION] = 无）。
+     *
+     * 跨区瞬移定位时，原来带焦点的卡会被回收、焦点会短暂落空；如果不补，
+     * 下一次按键就会落到窗口里第一个可聚焦项（顶栏「小房子」）。
+     * 这里记下目标位置，在**同一帧布局结束**立刻把焦点交给它，中间没有按键窗口。
+     */
+    private var pendingFocusPosition = RecyclerView.NO_POSITION
+
     init {
         layoutManager = HeroPosterLayoutManager(context)
         adapter = posterAdapter
         // 铺满整行、不裁剪 padding：焦点卡可以画到 24dp 行首之外（与原 LazyRow 一致）。
         clipToPadding = false
+        // 焦点放大 / 抬升阴影都要画到卡片自身边界之外，这一层不能再裁子 View。
+        clipChildren = false
         setHasFixedSize(true)
         itemAnimator = null
         overScrollMode = View.OVER_SCROLL_NEVER
-        // 焦点只落在卡片上，容器本身不抢焦点。
+        // 【焦点收口】容器本身永远不抢焦点：只允许卡片可聚焦，焦点不可能停在 RecyclerView 上。
+        // FOCUS_AFTER_DESCENDANTS = 先交给子 View（卡片），子 View 都不要时才轮到容器（这里不可聚焦）。
         isFocusable = false
+        isFocusableInTouchMode = false
+        descendantFocusability = ViewGroup.FOCUS_AFTER_DESCENDANTS
         addItemDecoration(HeroPosterGapDecoration(gapPx))
     }
 
@@ -2843,7 +2880,11 @@ private class HeroPosterRecyclerView @JvmOverloads constructor(
 
     /** 数据没变就什么都不做：`update` 每次重组都会调用，不能每次都 notifyDataSetChanged。 */
     fun bindData(posters: List<HeroPoster>) {
-        if (posterAdapter.submit(posters)) lastFocusIndex = -1
+        if (posterAdapter.submit(posters)) {
+            lastFocusIndex = -1
+            // 数据换了，旧的下标不再可信，别在下一帧把焦点抢到一张已经换掉的卡上。
+            pendingFocusPosition = RecyclerView.NO_POSITION
+        }
     }
 
     /** Compose → View：外部焦点下标变了才滚，避免和用户按键抢同一个动画。 */
@@ -2873,6 +2914,7 @@ private class HeroPosterRecyclerView @JvmOverloads constructor(
     /** 切分类后瞬间回到最左：不做动画，避免「Tab 刚选中、下面还在滑」的错位感。 */
     fun scrollToStart() {
         stopScroll()
+        pendingFocusPosition = RecyclerView.NO_POSITION
         (layoutManager as? LinearLayoutManager)?.scrollToPositionWithOffset(0, 0)
         lastFocusIndex = 0
     }
@@ -2880,19 +2922,41 @@ private class HeroPosterRecyclerView @JvmOverloads constructor(
     /**
      * 按 index 抢焦点（Compose 的 FocusRequester 定位不到 AndroidView 里的卡片）。
      *
-     * 目标不在屏幕内时先瞬间定位到它；RecyclerView 要下一帧才完成布局，
-     * 所以本次返回 false，调用方下一帧再调一次即可。
+     * 目标已经在屏幕里 → 当场 requestFocus 并返回 true；
+     * 目标在屏幕外 → 按规则瞬移定位（贴左 / 居中），把位置记进 [pendingFocusPosition]，
+     * 由 [onLayout] 在这一帧布局结束后立刻补抢焦点，本次返回 false 让 Compose 侧继续重试。
+     *
+     * 为什么必须补：瞬移会把原来带焦点的卡回收掉，焦点一旦落空，
+     * 下一次按键就会落到顶栏第一个可聚焦项（「小房子」）—— 也就是「焦点乱跳」。
      */
     fun focusPoster(index: Int): Boolean {
         if (index < 0 || index >= posterAdapter.itemCount) return false
         val attached = findViewHolderForAdapterPosition(index)?.itemView
-        if (attached != null && attached.isAttachedToWindow && attached.requestFocus()) return true
+        if (attached != null && attached.isAttachedToWindow && attached.requestFocus()) {
+            pendingFocusPosition = RecyclerView.NO_POSITION
+            return true
+        }
+        pendingFocusPosition = index
         (layoutManager as? LinearLayoutManager)?.scrollToPositionWithOffset(
             index,
             if (index < POSTER_SCROLL_ANCHOR) 0 else centeredOffset(),
         )
-        val target = findViewHolderForAdapterPosition(index)?.itemView
-        return target != null && target.isAttachedToWindow && target.requestFocus()
+        return false
+    }
+
+    /**
+     * 布局结束后补抢焦点：`scrollToPositionWithOffset` 是「下一帧布局」生效，
+     * 在 `super.onLayout` 之后目标卡一定已经挂上，这里同步 requestFocus，
+     * 不会出现「焦点空了一拍、按键掉到顶栏」的窗口。
+     */
+    override fun onLayout(changed: Boolean, l: Int, t: Int, r: Int, b: Int) {
+        super.onLayout(changed, l, t, r, b)
+        val position = pendingFocusPosition
+        if (position == RecyclerView.NO_POSITION) return
+        val target = findViewHolderForAdapterPosition(position)?.itemView ?: return
+        if (!target.isAttachedToWindow) return
+        pendingFocusPosition = RecyclerView.NO_POSITION
+        target.requestFocus()
     }
 
     /** 卡片左边缘距 paddingStart 的距离：让卡片中心落在 RecyclerView 的几何中心。 */
@@ -2935,6 +2999,35 @@ private class HeroPosterLayoutManager(context: Context) :
         child: View,
         focused: View?,
     ): Boolean = true
+
+    /**
+     * 一次按键只走一张卡。
+     *
+     * 父类实现会用 `fill()` 把这一侧的卡片补布局出来，但**返回最远端**的那张，
+     * 电视上表现就是按一下右键直接跳过好几张（焦点乱跳）。
+     * 这里保留它的布局副作用（否则相邻卡还没创建，根本找不到），
+     * 但丢掉它返回的视图，只返回紧邻当前卡的那一张。
+     *
+     * 注意：不能因为父类返回 null 就提前 return —— 它返回 null 只代表「没有更远的目标」，
+     * 相邻卡此时可能已经填出来了。
+     */
+    override fun onFocusSearchFailed(
+        focused: View,
+        focusDirection: Int,
+        recycler: RecyclerView.Recycler,
+        state: RecyclerView.State,
+    ): View? {
+        val fallback = super.onFocusSearchFailed(focused, focusDirection, recycler, state)
+        val current = getPosition(focused)
+        if (current == RecyclerView.NO_POSITION) return fallback
+        val step = when (focusDirection) {
+            View.FOCUS_RIGHT -> 1
+            View.FOCUS_LEFT -> -1
+            else -> return fallback
+        }
+        val adjacent = findViewByPosition(current + step)
+        return if (adjacent != null && adjacent.isFocusable) adjacent else fallback
+    }
 }
 
 /**
