@@ -104,6 +104,8 @@ import coil3.load
 import coil3.request.Disposable
 import coil3.request.ImageRequest
 import coil3.request.crossfade
+import coil3.request.error
+import coil3.request.placeholder
 import com.fongmi.android.tv.App
 import com.fongmi.android.tv.BuildConfig
 import com.fongmi.android.tv.R
@@ -233,6 +235,11 @@ internal object HeroTmdbPrefetchCache {
         if (key.isNotBlank()) entries.remove(key)
         HeroLogoCache.remove(key)
     }
+
+    /** 「清理缓存」联动：进程内详情也一起丢掉，否则清完文件回首页仍能读到旧条目。 */
+    fun clear() {
+        entries.clear()
+    }
 }
 
 /**
@@ -291,6 +298,31 @@ private object HeroLogoCache {
         memory.remove(posterKey)
         if (prefs.contains(posterKey)) prefs.edit().remove(posterKey).apply()
     }
+
+    /** 「清理缓存」联动：内存镜像 + prefs 一起清（prefs 在 `shared_prefs/`，不在 cacheDir 里）。 */
+    fun clear() {
+        memory.clear()
+        prefs.edit().clear().apply()
+    }
+}
+
+/**
+ * 「清理缓存」联动的 Hero 内存缓存清理（由 `FileUtil.clearCache` 调用）。
+ *
+ * 磁盘部分已经由 `Path.clear(Path.cache())` 删掉：`cacheDir/hero_image_cache`（Coil 位图）
+ * 与 `cacheDir/app_cache`（`TmdbMatchCache` 的 JSON）都在 cacheDir 下。
+ * 删文件删不到的只剩这三份**进程内**状态：
+ * 1. Coil 内存位图缓存（不清的话回首页还是旧图）；
+ * 2. `HeroTmdbPrefetchCache`（详情预取，清完还能直接进详情页不联网）；
+ * 3. `HeroLogoCache`（艺术字存在 `shared_prefs/hero_logo_cache`，不在 cacheDir 里）。
+ *
+ * 注意：主页 Compose 里的 `tmdbOverrides` 是本轮会话内已经生效的展示数据，
+ * 退出首页 / 重新进列表时随 `homePosters` 重建，不在这里强行改写。
+ */
+fun clearHeroCaches() {
+    HeroTmdbPrefetchCache.clear()
+    HeroLogoCache.clear()
+    SingletonImageLoader.get(App.get()).memoryCache?.trimToSize(0)
 }
 
 /**
@@ -803,6 +835,11 @@ private fun HeroHomeScreen(
                 base
             }
             merged = (merged ?: tmdbOverrides) + (key to data)
+            // 【主动落盘】列表级匹配可能落在预热窗口外（快速滑动 / 后台补数据）：
+            // 这里补一次预下载，横图 / 艺术字 / 卡片竖图都提前进 Coil 磁盘缓存。
+            prefetchHeroImage(context, data.highResBackdrop, HERO_BACKDROP_PRELOAD_WIDTH)
+            prefetchHeroImage(context, data.logoUrl, HERO_LOGO_PRELOAD_WIDTH)
+            prefetchHeroImage(context, data.item.posterUrl, HERO_POSTER_PRELOAD_WIDTH)
             added++
         }
         merged?.let { tmdbOverrides = it }
@@ -830,6 +867,9 @@ private fun HeroHomeScreen(
         tmdbOverrides = tmdbOverrides + (key to merged)
         // 只在「这条数据此刻仍然有效」时写缓存：详情页拿到的一定是当前这条条目的数据。
         HeroTmdbPrefetchCache.put(key, merged)
+        // 【主动落盘】详情里才有 w1920 横图与艺术字：拿到就立刻预下载，不依赖卡片是否还在屏幕上。
+        prefetchHeroImage(context, merged.highResBackdrop, HERO_BACKDROP_PRELOAD_WIDTH)
+        prefetchHeroImage(context, merged.logoUrl, HERO_LOGO_PRELOAD_WIDTH)
     }
 
     // 真实数据可能为空：这里必须可空，不能用 `posters[0]` 兜底（空列表会直接抛越界）。
@@ -1390,6 +1430,18 @@ private fun HeroHomeScreen(
                     // 手动条目本身没有详情：已有就顺手写缓存；没有就交给焦点详情 effect 补拉
                     // （`tmdbFocusRevision` 变化会强制它重跑一次，避免这里与 effect 并发发同一个请求）。
                     HeroTmdbPrefetchCache.put(key, manualData)
+                    // 【落盘】只写内存 override 的后果是「重启后手动选择消失」：冷启动
+                    // `readHeroSyncCache` 读的是 `TmdbMatchCache`，磁盘里没有这条就只能退回
+                    // 自动匹配 / 源站竖图。写入规则与详情页 `saveManualMatch` 完全一致。
+                    // 读-改-写放 IO 线程：内存 override 已经生效，界面不等落盘。
+                    scope.launch(Dispatchers.IO) {
+                        persistManualTmdbMatch(tmdbPoster, item)
+                    }
+                    // 【主动预下载】用户确认后可能马上移开焦点：竖图 / 横图 / 艺术字全部提前抓一次，
+                    // 请求自行跑完并写入 Coil 磁盘缓存，冷启动直接命中。
+                    prefetchHeroImage(context, item.posterUrl, HERO_POSTER_PRELOAD_WIDTH)
+                    prefetchHeroImage(context, manualData.highResBackdrop, HERO_BACKDROP_PRELOAD_WIDTH)
+                    prefetchHeroImage(context, manualData.logoUrl, HERO_LOGO_PRELOAD_WIDTH)
                     if (prev?.detail == null) tmdbFocusRevision++
                     showTmdbDialog = false
                 },
@@ -2435,6 +2487,40 @@ private fun enqueuePreload(loader: ImageLoader, context: Context, url: String, w
 }
 
 /**
+ * 数据更新后的「主动落盘」预取。
+ *
+ * 与预热窗口（[enqueuePreload] + `dispose()`）的区别：那边服务的是「当前这一屏」，
+ * 焦点一换就该取消；这里服务的是**持久化**——卡片可能已经滚出屏幕，请求也必须跑完并写进
+ * Coil 磁盘缓存，所以 [Disposable] 直接丢弃、不随焦点取消。
+ *
+ * 调用点只有「新 TMDB 数据落地」（列表匹配 / 详情 / 手动确认）三处，每条最多 3 张，不会堆积。
+ */
+private fun prefetchHeroImage(context: Context, url: String?, width: Int) {
+    val target = url?.takeIf { it.isNotBlank() } ?: return
+    enqueuePreload(SingletonImageLoader.get(context), context, target, width)
+}
+
+/**
+ * 手动匹配落盘：与详情页 `TmdbUIAdapter.saveManualMatch` 同一套规则。
+ *
+ * 主键是「站点 key + 条目 id」，剧名只进别名域（同名不同季 / 重制版不会互相覆盖）。
+ * 必须 `synchronized(Setting.class)`：焦点预取、详情页、自动匹配都会读-改-写同一份
+ * `TmdbMatchCache`，不互斥就会把刚落盘的手动选择用旧快照盖掉。
+ */
+private fun persistManualTmdbMatch(poster: HeroPoster, item: TmdbItem) {
+    if (item.tmdbId <= 0) return
+    val vod = poster.vod
+    val titles = listOf(vod.name, poster.title).filter { it.isNotBlank() }.distinct()
+    runCatching {
+        synchronized(Setting::class.java) {
+            val cache = Setting.getTmdbMatchCache()
+            cache.putManual(poster.site.key, vod.id.ifBlank { vod.name }, titles, item)
+            Setting.putTmdbMatchCache(cache)
+        }
+    }.onFailure { Log.w(TAG_HOME, "手动匹配落盘失败: ${vod.name} | ${it.message}") }
+}
+
+/**
  * 统一的图片请求：首页 / 详情页所有 `AsyncImage` 都从这里拿 model。
  *
  * - 固定 [HERO_IMAGE_CROSSFADE_MS] 淡入：首载、换图、预热命中都不会硬切；
@@ -2838,6 +2924,11 @@ private class HeroPosterAdapter(
             // Coil View 扩展 + 300ms 淡入；取消在 onViewRecycled 的 dispose()。
             posterView.load(posterUrl) {
                 crossfade(POSTER_CARD_CROSSFADE_MS)
+                // 【黑屏兜底】上一段刚把旧图清成 null，而 Coil 默认「失败不动 drawable」：
+                // 403 防盗链 / 404 图已删 / 解码失败时，卡片就只剩一块纯黑。
+                // 显式给占位图：失败回灰底占位卡，淡入期间也不会出现空白帧。
+                placeholder(R.drawable.shape_source_poster_placeholder)
+                error(R.drawable.shape_source_poster_placeholder)
             }
         }
     }
