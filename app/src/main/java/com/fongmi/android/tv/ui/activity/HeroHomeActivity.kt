@@ -3277,7 +3277,7 @@ private class HeroPosterRecyclerView @JvmOverloads constructor(
         // 【P3 消费前置校验】精准刷新不会摘掉焦点卡，pending 可能在用户按右移走焦点之后才被消费：
         // 只有「焦点真空」或「焦点已经就在目标卡上」才恢复；否则说明用户已经自己选好了卡，直接丢弃。
         val cur = focusedChild
-        val curPos = if (cur == null) RecyclerView.NO_POSITION else getPosition(cur)
+        val curPos = if (cur == null) RecyclerView.NO_POSITION else getChildAdapterPosition(cur)
         if (curPos != RecyclerView.NO_POSITION && curPos != position) {
             focusDiag {
                 "e/onLayout 丢弃 pos=$position 焦点已移走 curPos=$curPos 视口=${diagVisibleRange()}"
