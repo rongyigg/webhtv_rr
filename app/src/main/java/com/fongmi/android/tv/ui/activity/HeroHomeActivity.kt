@@ -8,6 +8,7 @@ import android.graphics.Rect
 import android.graphics.drawable.ColorDrawable
 import android.os.Bundle
 import android.os.SystemClock
+import android.util.AttributeSet
 import android.util.Log
 import android.view.KeyEvent
 import android.view.View
@@ -81,6 +82,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
@@ -2800,8 +2802,13 @@ private class HeroPosterRecyclerView @JvmOverloads constructor(
         onMoveUp = { index -> onMoveUp?.invoke(index) },
     )
 
-    private val startPaddingPx: Int = dp(HERO_PADDING.value.toInt())
-    private val cardWidthPx: Int = dp(HeroPosterCard.CARD_WIDTH_DP)
+    // 纯 View 体系里不能用 Compose 的 `.dp` 扩展（它只在 Compose 的 Density 作用域里成立），
+    // 这里统一按屏幕密度换算成像素；`HERO_PADDING` / `POSTER_GAP` 仍是 Compose 侧的唯一定义，
+    // 通过 `.value`（dp 数值）换算，避免两套常量各写一份。
+    private val density: Float = resources.displayMetrics.density
+    private val startPaddingPx: Int = (HERO_PADDING.value * density).roundToInt()
+    private val cardWidthPx: Int = (HeroPosterCard.CARD_WIDTH_DP * density).roundToInt()
+    private val gapPx: Int = (POSTER_GAP.value * density).roundToInt()
 
     /** 最近一次已经滚到位的下标：Compose 每次重组都会 syncFocus，这里挡住重复滚动。 */
     private var lastFocusIndex = -1
@@ -2816,7 +2823,7 @@ private class HeroPosterRecyclerView @JvmOverloads constructor(
         overScrollMode = View.OVER_SCROLL_NEVER
         // 焦点只落在卡片上，容器本身不抢焦点。
         isFocusable = false
-        addItemDecoration(HeroPosterGapDecoration(dp(POSTER_GAP.value.toInt())))
+        addItemDecoration(HeroPosterGapDecoration(gapPx))
     }
 
     /**
@@ -2890,8 +2897,6 @@ private class HeroPosterRecyclerView @JvmOverloads constructor(
 
     /** 卡片左边缘距 paddingStart 的距离：让卡片中心落在 RecyclerView 的几何中心。 */
     private fun centeredOffset(): Int = (width - cardWidthPx) / 2 - startPaddingPx
-
-    private fun dp(value: Int): Int = (value * resources.displayMetrics.density).roundToInt()
 }
 
 /**
@@ -2918,10 +2923,15 @@ private class HeroPosterLayoutManager(context: Context) :
      * 焦点卡由 [HeroPosterRecyclerView.scrollToIndex] 统一做居中滚动，
      * 这里屏蔽 RecyclerView 默认的「最小滚动让焦点可见」——
      * 否则一次按键会先跳一下、再平滑滑到中间，正是要消除的「滚动跳跃」。
+     *
+     * 注意：签名必须和 `RecyclerView.LayoutManager` 一字不差 —— `state` 是 `@NonNull`，
+     * 写成 `RecyclerView.State?` 会因「可空性不匹配」直接报 `overrides nothing`。
+     * （两参的 `onRequestChildFocus(child, focused)` 是 `ViewGroup` 的方法，
+     *  `LayoutManager` 里没有这个重载，不能写在这里。）
      */
     override fun onRequestChildFocus(
         parent: RecyclerView,
-        state: RecyclerView.State?,
+        state: RecyclerView.State,
         child: View,
         focused: View?,
     ): Boolean = true
