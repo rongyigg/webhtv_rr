@@ -14,7 +14,6 @@ import androidx.activity.compose.setContent
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
@@ -29,8 +28,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.animateScrollBy
-import androidx.compose.foundation.gestures.stopScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.Arrangement
@@ -137,7 +134,6 @@ import com.fongmi.android.tv.utils.PushParser
 import com.google.gson.JsonObject
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
-import kotlin.math.abs
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -873,30 +869,37 @@ private fun HeroHomeScreen(
                                 withContext(Dispatchers.Main.immediate) {
                                     mergeHomeTmdbDetail(poster.posterKey, data)
                                 }
-                                // 演员头像一起入队：详情页点进去时头像已经落在 Coil 磁盘缓存里，不用再等一轮。
-                                preloadHeroAvatars(context, data.cast)
-                                Log.d(TAG_HOME, "tmdb 焦点详情完成: ${poster.title} cast=${data.cast.size}")
+                                // 只更新首页数据，**不预载演员头像**：详情页进去自己会加载。
+                                Log.d(TAG_HOME, "tmdb 焦点详情完成: ${poster.title}")
                             }
                         }
                     }
                 }
 
-                // 2) 邻居：与当前焦点并行，500ms 后只补搜索级匹配，不拉详情。
-                //    用户继续移动焦点时整个 effect 被取消，两个 launch 一起停。
+                // 2) 邻居：当前焦点先跑；500ms 后按「右 1 → 左 1 → 右 2 → 左 2 …」严格串行，
+                //    每张之间再等 500ms。只补搜索级匹配（`resolveHomeTmdb` 不做详情 / 演员），
+                //    绝不和当前焦点抢连接。用户继续移动焦点时整个 effect 被取消，两个 launch 一起停。
                 if (focusIndex >= 0) {
                     launch {
                         delay(HERO_TMDB_NEIGHBOR_DELAY_MS)
                         for (offset in 1..HERO_PRELOAD_RANGE) {
                             for (index in intArrayOf(focusIndex + offset, focusIndex - offset)) {
-                                val neighbor = posters.getOrNull(index) ?: continue
-                                if (neighbor.vod.name.isBlank()) continue
-                                if (tmdbOverrides[neighbor.posterKey] != null) continue
-                                val match = withContext(Dispatchers.IO) {
-                                    resolveHomeTmdb(neighbor, cache, service, config)
-                                } ?: continue
-                                withContext(Dispatchers.Main.immediate) {
-                                    mergeHomeTmdbMatches(listOf(match))
+                                val neighbor = posters.getOrNull(index)
+                                if (neighbor != null &&
+                                    neighbor.vod.name.isNotBlank() &&
+                                    tmdbOverrides[neighbor.posterKey] == null
+                                ) {
+                                    val match = withContext(Dispatchers.IO) {
+                                        resolveHomeTmdb(neighbor, cache, service, config)
+                                    }
+                                    if (match != null) {
+                                        withContext(Dispatchers.Main.immediate) {
+                                            mergeHomeTmdbMatches(listOf(match))
+                                        }
+                                    }
                                 }
+                                // 强制排队：无论这一张是命中缓存、跳过还是失败，都停顿 500ms 再拉下一张。
+                                delay(HERO_TMDB_NEIGHBOR_DELAY_MS)
                             }
                         }
                     }
@@ -967,57 +970,38 @@ private fun HeroHomeScreen(
         if (!requestFocus(tabRequesters, target)) requestFocus(tabRequesters, 0)
     }
 
-    // 海报行的尺子：dp→px 换算（滚动偏移量是像素）+ 卡片步距。
-    // 首尾 padding 都是半屏（见 [PosterArea]），所以 `item i` 居中 = 滚动到 `i × 步距`，
-    // 不再需要「24dp 基准线 + 负偏移」那套补偿。
+    // 海报行的尺子：dp→px 换算（`animateScrollToItem` 的 offset 是像素）。
     val density = LocalDensity.current
-    // 卡片步距（卡宽 + 间距）：所有「第几张 → 滚多少像素」的换算共用这一个值。
-    val posterStridePx = with(density) { (POSTER_CARD_WIDTH + POSTER_GAP).toPx() }
+    // 行首固定 24dp（第一张贴左），行尾保留半屏（最后一张能居中）。
+    val posterCenterStart = rememberPosterCenterStart()
+    // 「居中」相对「贴左」需要往右推的距离：`animateScrollToItem` 的 offset 以内容起点为 0，
+    // 负值 = 把目标卡往右推，推 `centerStart - 24dp` 正好落在屏幕正中。
+    val posterCenterOffsetPx = with(density) { (HERO_PADDING - posterCenterStart).roundToPx() }
 
-    /**
-     * 当前滚动位置到目标位置的**像素增量**。
-     *
-     * `animateScrollToItem` 只接受 index / offset，没有 `animationSpec`，无法控制时长与减速；
-     * 这里按固定步距还原绝对位置：`firstVisibleItemIndex × 步距 + firstVisibleItemScrollOffset`，
-     * 再用 `animateScrollBy(delta, tween(...))` 自己决定曲线，等价于原版可配置节奏的平滑滚动。
-     */
-    fun posterScrollDelta(anchor: Int, offset: Int): Float {
-        val targetPosition = anchor * posterStridePx + offset
-        val currentPosition = posterState.firstVisibleItemIndex * posterStridePx +
-            posterState.firstVisibleItemScrollOffset
-        return targetPosition - currentPosition
-    }
-
-    // → 海报行：从别的排切入时用默认参数 index = 0，第一张停在屏幕正中。
+    // → 海报行：从别的排切入时用默认参数 index = 0，第一张贴左 24dp。
     fun focusPoster(index: Int = 0) {
         // 真实数据可能为空（首次加载中 / 接口源返回空）：空列表时 `coerceIn(0, -1)` 会直接抛
         // IllegalArgumentException，所以必须先挡掉，焦点留在原地。
         if (posters.isEmpty()) return
         val target = index.coerceIn(0, posters.lastIndex)
-        // 【滚动规则】与原版 HorizontalGridView 一致：
-        // - 前 4 张（index 0..3）：整行不动（滚动位置恒为 0）；
+        // 【滚动规则】
+        // - 第 1~4 张（index 0..3）：整行回到最左，第一张停在 24dp；
         // - 第 5 张（index 4）起：把焦点卡滚到屏幕正中。
-        // 首尾 padding 都是半屏，item i 的天然位置 = 居中起点 + i × 步距，
-        // 所以居中它只需要滚到 `i × 步距`，不再需要负偏移补偿。
+        // 行首 padding 只有 24dp，`animateScrollToItem(target)` 默认把卡片贴到内容起点（24dp），
+        // 必须再补 `centerStart - 24dp` 的负偏移才是「居中」；前 4 张 anchor = 0、偏移 0。
         val anchor = if (target < POSTER_SCROLL_ANCHOR) 0 else target
-        val scrollOffset = 0
+        val centeredOffset = if (anchor == 0) 0 else posterCenterOffsetPx
         if (requestFocus(posterRequesters, target)) {
             scope.launch {
-                // 先停掉上一段滚动再取位置：连续按键时增量永远基于「定格后的真实位置」，
-                // 不会因为上一段动画还在跑而累加误差。
-                posterState.stopScroll()
-                val delta = posterScrollDelta(anchor, scrollOffset)
-                if (abs(delta) < 0.5f) return@launch
-                posterState.animateScrollBy(
-                    delta,
-                    tween(durationMillis = POSTER_SCROLL_ANIM_MS, easing = FastOutSlowInEasing),
-                )
+                // 连续按键时新滚动会取消上一段动画（`scroll` 的 MutatorMutex），
+                // 目标位置永远按 index 算，不会因为上一段动画还在跑而累加误差。
+                posterState.animateScrollToItem(anchor, centeredOffset)
             }
             return
         }
         // 目标卡片还没组合（例如刚切分类就要跳到靠后的卡片）：先滚过去，等一帧再请求焦点。
         scope.launch {
-            posterState.scrollToItem(anchor, scrollOffset)
+            posterState.scrollToItem(anchor, centeredOffset)
             withFrameNanos { }
             requestFocus(posterRequesters, target)
         }
@@ -1700,6 +1684,14 @@ private fun HeroInfoArea(poster: HeroPoster, tmdbData: HeroTmdbData?) {
         val hasLogo = logoUrl.isNotBlank()
         // 只有**真正加载失败**才回落文字：loading 阶段保持空白，才不会先闪文字再换艺术字。
         var logoFailed by remember(logoUrl) { mutableStateOf(false) }
+        // Logo 单独用 150ms 淡入：比背景的 500ms 短得多，冷启动时艺术字第一帧就位，不拖泥带水。
+        val context = LocalContext.current
+        val logoModel = remember(context, logoUrl) {
+            ImageRequest.Builder(context)
+                .data(logoUrl)
+                .crossfade(HERO_LOGO_CROSSFADE_MS)
+                .build()
+        }
         // 剧名文字兜底：只有**手动**匹配才覆盖剧名（自动匹配可能判错，名字改错比图糊更严重）。
         val titleText = if (tmdbData?.manual == true) {
             tmdbData.item.title.ifBlank { current.title }
@@ -1717,11 +1709,11 @@ private fun HeroInfoArea(poster: HeroPoster, tmdbData: HeroTmdbData?) {
                 contentAlignment = Alignment.BottomStart,
             ) {
                 if (hasLogo && !logoFailed) {
-                    // Logo 来自首帧同步缓存 / 已完成的详情：直接画图，**不再给 loading 槽留文字位**。
-                    // 图未解码完时这一行保持空白（Coil 本地命中通常不到一帧），
+                    // Logo 来自首帧同步缓存 / 已完成的详情：直接画图，**不写 loading 槽、不画文字**。
+                    // 图未解码完时这一行保持透明空白（Coil 本地命中通常不到一帧），
                     // 绝不会先闪一行 32sp 文字再换成艺术字。
                     AsyncImage(
-                        model = rememberHeroImageModel(logoUrl),
+                        model = logoModel,
                         contentDescription = current.title,
                         contentScale = ContentScale.Fit,
                         alignment = Alignment.BottomStart,
@@ -2019,8 +2011,9 @@ private fun HeroTabChip(
 /**
  * 海报行「居中起点」：焦点卡停在屏幕正中时，它左边缘的 x。
  *
- * 首尾 padding（[PosterArea]）都用这一个值：第一张静止时就在正中，最后一张也能滚到正中；
- * 两处各算一遍迟早会漂移，卡片就会停在偏心位置。
+ * 只给**行尾 padding** 和 `focusPoster` 的居中偏移使用：最后一张能滚到正中。
+ * 行首固定 [HERO_PADDING]（第一张贴左 24dp），不能和行尾共用同一个值，
+ * 否则第一张会被推到屏幕中间（上一版的错位就来自这里）。
  * 小屏兜底不小于 24dp —— 否则 120dp 卡片在窄屏上会算出负 padding。
  */
 @Composable
@@ -2032,11 +2025,11 @@ private fun rememberPosterCenterStart(): Dp =
  * 海报区（XML `posterArea`，L142-191）：整块固定高 215dp（L147），内部 recycler 同为 215dp（L156）。
  *
  * 卡片尺寸严格照抄 `ref_docs/adapter_vod_rect.xml`：120dp × 180dp、8dp 圆角、间距 12dp。
- * 列表**每张都居中**（与原版 HorizontalGridView 一致）：
- * - `contentPadding = (start 半屏, end 半屏)`：第一张静止时就停在屏幕正中，
- *   尾端同样留半屏，最后一张也能滚到正中；
+ * 首尾 padding 不同：
+ * - `start = 24dp`：第一张贴左，不再落到屏幕正中；
+ * - `end = 半屏`：最后一张仍能滚到正中；
  * - 焦点 0..3：整行不动（滚动位置恒为 0）；
- * - 焦点 4 起：把焦点卡滚到屏幕正中（`i × 步距`，见 `focusPoster`）。
+ * - 焦点 4 起：把焦点卡滚到屏幕正中（负偏移见 `focusPoster`）。
  */
 @Composable
 private fun PosterArea(
@@ -2052,7 +2045,7 @@ private fun PosterArea(
     onMoveLeft: (Int) -> Unit,
     onMoveRight: (Int) -> Unit,
 ) {
-    // 首尾都留半屏：第一张静止时就在正中，最后一张也能滚到正中。
+    // 行首固定 24dp：第一张贴左；行尾留半屏：最后一张能滚到正中。
     // padding 按**未缩放**的卡片宽度算：焦点态 1.1 倍放大是绘制层缩放，不占布局宽度。
     val centerStart = rememberPosterCenterStart()
     LazyRow(
@@ -2061,7 +2054,7 @@ private fun PosterArea(
         modifier = Modifier
             .fillMaxWidth()
             .height(POSTER_AREA_HEIGHT),
-        contentPadding = PaddingValues(horizontal = centerStart),
+        contentPadding = PaddingValues(start = HERO_PADDING, end = centerStart),
         horizontalArrangement = Arrangement.spacedBy(POSTER_GAP),
     ) {
         itemsIndexed(items = posters, key = { _, poster -> poster.id }) { index, poster ->
@@ -2344,22 +2337,13 @@ private const val HERO_LOGO_PRELOAD_WIDTH = 800
 private const val HERO_TMDB_FOCUS_DEBOUNCE_MS = 300L
 
 /**
- * 邻居预热延迟（毫秒）。
+ * 邻居预热的起跑延迟 + 每张之间的强制间隔（毫秒）。
  *
  * 当前焦点条目的搜索 + 详情先跑；500ms 后才开始补左右各 3 张的**搜索级**匹配，
- * 避免 7 条请求同时抢 TMDB 连接。焦点继续移动时整个 effect 取消，这里一起停。
+ * 并且每张之间同样停顿 500ms，避免多条请求同时抢 TMDB 连接。
+ * 焦点继续移动时整个 effect 取消，这里一起停。
  */
 private const val HERO_TMDB_NEIGHBOR_DELAY_MS = 500L
-
-/** 演员头像的预热解码宽度：详情页头像约 60dp，2x 屏 120~192px，给 192 足够。 */
-private const val HERO_AVATAR_PRELOAD_WIDTH = 192
-
-/**
- * 每次最多预热几个演员头像。
- *
- * `TmdbService.cast` 上限 18 人，详情页首屏只看得到前几个；预热太多会跟背景 / 海报抢磁盘与网络。
- */
-private const val HERO_CAST_PRELOAD_LIMIT = 12
 
 /**
  * 首页一张海报卡。
@@ -2640,32 +2624,6 @@ internal fun rememberHeroImageModel(url: String): ImageRequest {
 }
 
 /**
- * 预载焦点条目的演员头像。
- *
- * 详情页演员卡是 [HERO_AVATAR_PRELOAD_WIDTH] 量级（60dp 上下，电视 2x 屏约 192px），
- * 所以解码尺寸给到 192 就够；只入队、不等待，失败也不影响首页。
- *
- * URL 走 [homeCastAvatarUrl]，与详情页 `mergeTmdb` 的 `avatarUrl` 是**同一个表达式**：
- * 两边只要有一个字不同，用户点进去时就会重新下一张，预热等于白做。
- */
-private fun preloadHeroAvatars(context: Context, cast: List<TmdbPerson>) {
-    if (cast.isEmpty()) return
-    val loader = SingletonImageLoader.get(context)
-    var queued = 0
-    for (person in cast) {
-        if (queued >= HERO_CAST_PRELOAD_LIMIT) break
-        val url = homeCastAvatarUrl(person.profileUrl)
-        if (url.isBlank()) continue
-        enqueuePreload(loader, context, url, HERO_AVATAR_PRELOAD_WIDTH)
-        queued++
-    }
-}
-
-/** 演员头像地址：统一提到 w342（与详情页 `mergeTmdb` 的 `avatarUrl` 逐字一致）。 */
-private fun homeCastAvatarUrl(profileUrl: String): String =
-    upgradeTmdbImage(profileUrl.orEmpty(), "w342")
-
-/**
  * 元数据行：`年份 · 分类 · 备注 · TMDB 评分`，空字段自动省略，不会留下多余的 `·`。
  *
  * [year] / [rating] 来自 TMDB（缓存命中时第一帧就有值）：年份只补源站缺失的年，
@@ -2776,6 +2734,9 @@ private const val HERO_INFO_FADE_MS = 320
 /** 所有 Coil 请求的统一淡入时长：图片从透明淡到不透明，换图 / 首载都不会「啪」地硬切。 */
 private const val HERO_IMAGE_CROSSFADE_MS = 500
 
+/** 艺术字 Logo 的淡入时长：比背景短，冷启动第一帧直接出字，不做 500ms 的慢淡入。 */
+private const val HERO_LOGO_CROSSFADE_MS = 150
+
 // 简介 lineSpacingExtra=3dp（L125）。Android 的 12sp 默认行高 ≈ 14sp，加 3dp → 17sp。
 private const val HERO_DESC_LINE_HEIGHT_SP = 17f
 
@@ -2831,14 +2792,6 @@ private val POSTER_GAP = 12.dp
 // 前 4 张（index 0..3）不滚动；第 5 张（index = 4）起把焦点卡滚到屏幕正中，
 // 与逆向原版 HorizontalGridView 的“第 5 张才居中”节奏一致。
 private const val POSTER_SCROLL_ANCHOR = 4
-
-/**
- * 卡片行滚动的时长（毫秒）。
- *
- * 每次焦点移动 300ms，`FastOutSlowInEasing` 起步快、尾端减速；
- * 遥控器连按不会「甩」出去，也不会等上大半秒才落位。
- */
-private const val POSTER_SCROLL_ANIM_MS = 300
 
 // 参考 ref_docs/VodRectPresenter.java 第 39-41 行：原实现 hasFocus() ? 1.08f : 1.0f；本项目按定稿取 1.1。
 private const val POSTER_FOCUS_SCALE = 1.1f
