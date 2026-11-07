@@ -85,6 +85,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
@@ -952,6 +953,13 @@ private fun HeroHomeScreen(
     // 任意一排 → 顶栏：默认落在最左侧的第一项（小房子），不记忆上次位置。
     // 同时清掉「模块内」标记：选中的分类 Tab 立刻退成无红框、无红底（规则 ③）。
     fun focusTopBar() {
+        // 【来源守卫】只有焦点确实还停在「Tab 栏 + 海报区」这个模块里，才把焦点交给顶栏。
+        //
+        // 这里是**唯一**会把焦点无条件送给「小房子」的入口：一旦被空态回收、弹窗关闭、
+        // 数据刷新之类的旁路误触发，用户就会从海报行被直接甩到顶栏第一项。
+        // 启动（LaunchedEffect(Unit)）、空态回收、侧边栏 onClosed 都走各自的
+        // `requestFocus(topBarRequesters, 0)`，不经过本函数，所以这道守卫不会挡住它们。
+        if (!moduleFocused) return
         moduleFocused = false
         requestFocus(topBarRequesters, 0)
     }
@@ -1144,10 +1152,17 @@ private fun HeroHomeScreen(
     }
 
     // 数据从「有」变「无」（切到空源 / 接口源返回空）时，海报区的焦点会悬空，
-    // 这里统一收回小房子，保证任何时候都有明确的焦点落点。
+    // 这里在**窗口真的没有任何焦点持有者**时收回小房子，保证任何时候都有明确的焦点落点。
+    //
+    // 【守卫边界，必须知道】Compose 持有焦点时 `findFocus()` 返回的是 `AndroidComposeView`
+    // （非 null），所以本条**只能**堵「焦点真空」这一种边角场景：顶栏 / Tab / 海报卡
+    // 持有焦点时一律不动。否则「方向键切到空分类 → 列表变空 → 焦点被强行搬到小房子」
+    // 就是一条稳定复现的乱跳路径（本 bug 的根因之一）。
+    val composeRootView = LocalView.current
     LaunchedEffect(posters.isEmpty()) {
         if (!posters.isEmpty()) return@LaunchedEffect
         withFrameNanos { }
+        if (composeRootView.rootView.findFocus() != null) return@LaunchedEffect
         requestFocus(topBarRequesters, 0)
     }
 
@@ -2878,13 +2893,65 @@ private class HeroPosterRecyclerView @JvmOverloads constructor(
         super.onMeasure(widthMeasureSpec, heightMeasureSpec)
     }
 
-    /** 数据没变就什么都不做：`update` 每次重组都会调用，不能每次都 notifyDataSetChanged。 */
+    /**
+     * 数据没变就什么都不做：`update` 每次重组都会调用，不能每次都 notifyDataSetChanged。
+     *
+     * 【重绑后的焦点恢复】`notifyDataSetChanged()` 会把整排卡片重新绑定 / 回收，
+     * 带焦点的 View 一旦被摘掉，焦点就空了；下一次按键落到窗口里第一个可聚焦项，
+     * 也就是顶栏「小房子」—— 这是「移动卡片时焦点跳到小房子」的主因。
+     *
+     * 所以在**重绑之前**判断焦点是否真的落在本行的某张卡上，命中才记下位置，
+     * 由 [onLayout] 在这一轮布局结束后恢复。写入条件（保守策略：宁可让焦点自然落地，
+     * 也绝不主动抢）：
+     *   1. 窗口当前确实有 View 持有焦点，且它是本 RecyclerView 的后代；
+     *   2. 对应的卡此刻已绑定并挂在窗口上；
+     *   3. 取到的 position 在重绑后的 `itemCount` 范围内；
+     *   4. 重绑后该 position 上仍是**同一张卡**（按 `posterKey` 比对）。
+     */
     fun bindData(posters: List<HeroPoster>) {
+        // 必须在 submit(notifyDataSetChanged) **之前**取：重绑之后 holder 与焦点状态都已变。
+        // `focusedChild == null` 是 O(1) 快速否定，避免每次重组都做一次窗口级 findFocus()。
+        val focusedPosition =
+            if (focusedChild == null) RecyclerView.NO_POSITION else focusedItemPosition()
+        // 再记一个「这个位置上是哪张卡」的稳定标识：`notifyDataSetChanged()` 是整排重绑，
+        // 只校验下标的话，新数据顺序一变就会把焦点恢复到**另一张卡**上。
+        // 用 `posterKey`（首页缓存 / override 用的同一个 key，只由站点 + 条目 id 决定，
+        // TMDB 横图 / Logo 变了也不会变），不为此新增 stable ID 机制。
+        // 来源是 `onBindViewHolder` 写进卡片 `tag` 的 HeroPoster，即「重绑前该卡的原始数据」。
+        val focusedKey = if (focusedPosition == RecyclerView.NO_POSITION) {
+            null
+        } else {
+            (findViewHolderForAdapterPosition(focusedPosition)?.itemView?.tag as? HeroPoster)
+                ?.posterKey
+                ?.takeIf { it.isNotBlank() }
+        }
         if (posterAdapter.submit(posters)) {
             lastFocusIndex = -1
-            // 数据换了，旧的下标不再可信，别在下一帧把焦点抢到一张已经换掉的卡上。
-            pendingFocusPosition = RecyclerView.NO_POSITION
+            // 数据换了，旧下标不再可信：只有「重绑前焦点确实在本行 + 同一下标仍是同一张卡」
+            // 才恢复，否则保持 NO_POSITION，让焦点按正常规则落地。
+            val sameCard = focusedKey != null &&
+                focusedPosition in 0 until posterAdapter.itemCount &&
+                posters[focusedPosition].posterKey == focusedKey
+            pendingFocusPosition =
+                if (sameCard) focusedPosition else RecyclerView.NO_POSITION
         }
+    }
+
+    /**
+     * 当前焦点是否真的落在本行的某张卡上：是则返回其 adapter position，
+     * 否则返回 [RecyclerView.NO_POSITION]。
+     *
+     * 只认「窗口焦点 → 本 RecyclerView 的后代」这一条链：焦点在顶栏 / Tab / 弹窗 /
+     * 别的页面残留时一律返回 NO_POSITION，避免把无关焦点误判成「重绑丢了」再抢回来。
+     */
+    private fun focusedItemPosition(): Int {
+        val focused = rootView.findFocus() ?: return RecyclerView.NO_POSITION
+        var node: View? = focused
+        while (node != null && node !== this) node = node.parent as? View
+        if (node !== this) return RecyclerView.NO_POSITION
+        val holder = findContainingViewHolder(focused) ?: return RecyclerView.NO_POSITION
+        if (!holder.itemView.isAttachedToWindow) return RecyclerView.NO_POSITION
+        return holder.bindingAdapterPosition
     }
 
     /** Compose → View：外部焦点下标变了才滚，避免和用户按键抢同一个动画。 */
@@ -2945,17 +3012,25 @@ private class HeroPosterRecyclerView @JvmOverloads constructor(
     }
 
     /**
-     * 布局结束后补抢焦点：`scrollToPositionWithOffset` 是「下一帧布局」生效，
+     * 布局结束后恢复焦点：`scrollToPositionWithOffset`（瞬移）与 `notifyDataSetChanged()`
+     * （重绑）都要「下一帧布局」才生效，而这一帧里原来带焦点的卡可能已经被摘掉。
      * 在 `super.onLayout` 之后目标卡一定已经挂上，这里同步 requestFocus，
      * 不会出现「焦点空了一拍、按键掉到顶栏」的窗口。
+     *
+     * **零重试**：无论命中与否都立刻清空 [pendingFocusPosition]。
+     * - 命中 → 焦点已经补上；
+     * - 未命中 → 目标卡确实被移出视口 / 数据已变，这是合理结果；
+     *   继续重试只会让后续无关的布局（窗口尺寸变化、弹窗关闭等）把焦点抢到别的卡上。
      */
     override fun onLayout(changed: Boolean, l: Int, t: Int, r: Int, b: Int) {
         super.onLayout(changed, l, t, r, b)
         val position = pendingFocusPosition
         if (position == RecyclerView.NO_POSITION) return
+        // 先作废再判断：保证任何一条 return 都不会把「待恢复」留到下一次布局。
+        pendingFocusPosition = RecyclerView.NO_POSITION
+        if (position < 0 || position >= posterAdapter.itemCount) return
         val target = findViewHolderForAdapterPosition(position)?.itemView ?: return
         if (!target.isAttachedToWindow) return
-        pendingFocusPosition = RecyclerView.NO_POSITION
         target.requestFocus()
     }
 
