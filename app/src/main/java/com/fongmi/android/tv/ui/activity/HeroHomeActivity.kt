@@ -2854,22 +2854,39 @@ private class HeroPosterAdapter(
                 }
 
                 KeyEvent.KEYCODE_DPAD_LEFT -> {
-                    // 【LEFT 边界】第 1 张再按 LEFT：直接消费，绝不让事件冒泡到窗口级 FocusFinder。
+                    // 【LEFT 全 position 消费】本行左侧没有第二个可聚焦区，LEFT 永远不该外逃：
+                    // 任意一张上按左，都由卡片自己把焦点交给前一张，绝不交给 FocusFinder。
                     //
-                    // 底层链路：卡片返回 false → RecyclerView.focusSearch 在本行找不到候选 →
-                    // onFocusSearchFailed 返回 null → RecyclerView 退回 super.focusSearch →
-                    // 沿父链到 DecorView，由整个窗口的 FocusFinder 重新找目标，
-                    // 于是被左上方的顶栏接住。LEFT 是唯一会命中的方向：窗口右侧没有可聚焦项，
-                    // RIGHT 到底时 FocusFinder 返回 null，焦点原地不动。
+                    // 冒泡链路（position > 0 同样会中，position == 0 只是最容易复现的一端）：
+                    // 卡片返回 false → RecyclerView.focusSearch 在本行找不到可聚焦的左邻居
+                    // （onFocusSearchFailed 的 adjacent 为 null / 不可聚焦）→ 退回
+                    // super.focusSearch → 沿父链到 DecorView → 被整个窗口的 FocusFinder 接住
+                    // → 落到左上方的顶栏「收藏」。
                     //
-                    // 只处理「焦点确实停在 position 0」：NO_POSITION / 其它位置一律继续放行，
-                    // 保持原有「一次只走一张」的横向手感；RIGHT / UP / DOWN 完全不动。
-                    if (bindingAdapterPosition == 0) {
-                        focusDiag {
-                            "a/handleKey LEFT 边界消费 action=${event.action} pos=0 -> return true"
+                    // 移动直接复用行内现有的 [HeroPosterRecyclerView.focusPoster]，不新造第二套：
+                    // 目标卡已挂载 → 当场 requestFocus；未挂载 → 记 pendingFocusPosition +
+                    // 瞬移定位，由 onLayout 在同一帧补抢。滚动仍由 onFocused → scrollToIndex 驱动，
+                    // 「一次一张」的手感与原来完全一致。
+                    // 只有 ACTION_DOWN 移动：ACTION_UP 必须原样吞掉，否则一次按键会走两张。
+                    // 长按重复键逐次各走一张（与原生焦点重复移动一致）。
+                    // RIGHT / UP / DOWN 三个分支一行都不动。
+                    val position = bindingAdapterPosition
+                    if (event.action == KeyEvent.ACTION_DOWN && position != RecyclerView.NO_POSITION) {
+                        if (position > 0) {
+                            val target = position - 1
+                            val moved =
+                                (card.parent as? HeroPosterRecyclerView)?.focusPoster(target) == true
+                            focusDiag {
+                                "a/handleKey LEFT 手动左移 pos=$position -> target=$target " +
+                                    "当场命中=$moved repeat=${event.repeatCount} -> return true"
+                            }
+                        } else {
+                            focusDiag {
+                                "a/handleKey LEFT 边界消费 pos=0 action=${event.action} -> return true"
+                            }
                         }
-                        return true
                     }
+                    return true
                 }
             }
             // 左右放行：交给 RecyclerView 的焦点搜索，最终由 [HeroPosterRecyclerView.scrollToIndex] 居中。
