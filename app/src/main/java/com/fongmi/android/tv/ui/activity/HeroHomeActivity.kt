@@ -101,7 +101,6 @@ import androidx.lifecycle.ViewModelProvider
 import coil3.ImageLoader
 import coil3.SingletonImageLoader
 import coil3.compose.AsyncImage
-import coil3.compose.SubcomposeAsyncImage
 import coil3.request.ImageRequest
 import coil3.request.crossfade
 import com.fongmi.android.tv.App
@@ -145,8 +144,6 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Semaphore
-import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 
 /**
@@ -241,9 +238,11 @@ internal object HeroTmdbPrefetchCache {
  * 视觉上就是「先一行 32sp 文字，几百毫秒后再换成艺术字」。
  *
  * 这里单独存一份只读展示用的键值：
+ * - 首次访问 `memory` 时**同步**把整个 prefs 读进内存（SharedPreferences 本来也是一次性解析 XML），
+ *   之后 `snapshot()` 全是内存查表，冷启动第一帧没有异步空窗；
  * - 写入点只有 [HeroTmdbPrefetchCache.put]（拿到带 Logo 的完整详情时才写），频率极低；
- * - `apply()` 异步落盘，不阻塞主线程；
- * - 条数封顶 [MAX_ENTRIES]，超出时随机丢一条，避免长期使用后无限增长。
+ * - 写内存 + `apply()` 异步落盘：当前进程立刻可读，又不阻塞焦点切换；
+ * - 条数封顶 [MAX_ENTRIES]，超出时丢任意一条，避免长期使用后无限增长。
  */
 private object HeroLogoCache {
 
@@ -252,22 +251,39 @@ private object HeroLogoCache {
 
     private val prefs by lazy { App.get().getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE) }
 
+    /**
+     * 进程内镜像：`posterKey → logoUrl`。
+     *
+     * 用 [ConcurrentHashMap]：详情协程可能在 IO 线程写，首帧 / 焦点切换在主线程读。
+     * `snapshot()` 直接返回这个活映射，后续 [save] 写入当前进程立即可见。
+     */
+    private val memory: ConcurrentHashMap<String, String> by lazy {
+        ConcurrentHashMap<String, String>().apply {
+            prefs.all.forEach { (key, value) ->
+                if (value is String && value.isNotBlank()) put(key, value)
+            }
+        }
+    }
+
+    /** 首帧构建展示数据专用：一次返回全部 Logo，调用方只做内存查表。 */
+    fun snapshot(): Map<String, String> = memory
+
     fun save(posterKey: String, logoUrl: String) {
         if (posterKey.isBlank() || logoUrl.isBlank()) return
         // 同一个 URL 不重复写：焦点来回移动时 `put` 会被反复调用。
-        if (prefs.getString(posterKey, null) == logoUrl) return
-        if (prefs.all.size >= MAX_ENTRIES && !prefs.contains(posterKey)) {
-            prefs.all.keys.firstOrNull()?.let { prefs.edit().remove(it).apply() }
+        if (memory[posterKey] == logoUrl) return
+        if (memory.size >= MAX_ENTRIES && !memory.containsKey(posterKey)) {
+            memory.keys.firstOrNull()?.let { remove(it) }
         }
+        // 先写内存：当前进程立刻能读到；`apply()` 异步落盘，不阻塞主线程。
+        memory[posterKey] = logoUrl
         prefs.edit().putString(posterKey, logoUrl).apply()
     }
-
-    fun get(posterKey: String): String? =
-        if (posterKey.isBlank()) null else prefs.getString(posterKey, null)
 
     /** 手动改成别的 TMDB 条目时同步作废：旧 Logo 是上一部作品的，不能留到下一次冷启动。 */
     fun remove(posterKey: String) {
         if (posterKey.isBlank()) return
+        memory.remove(posterKey)
         if (prefs.contains(posterKey)) prefs.edit().remove(posterKey).apply()
     }
 }
@@ -304,8 +320,8 @@ internal fun heroTmdbKey(siteKey: String, vodId: String): String = siteKey + "|"
  * 焦点契约（三区各自持有 FocusRequester，全部显式交接，不依赖 2D 自动搜索）：
  * - 进入 Tab 栏（无论从 TopBar ↓ 还是从海报行 ↑）：落到**记忆中的**上一次选中 Tab。
  * - 进入 TopBar 或海报行（从别的排切入）：一律落到各自最左侧的第一项。
- * - 海报行 ←/→ 行内移动；前 4 张（index 0..3）整行不动，第 5 张（index = 4）起
- *   把焦点卡滚到屏幕正中；海报行 ↓ 留在原地（已在最底行）。
+ * - 海报行 ←/→ 行内移动；首尾各留半屏 padding，第一张静止时就在屏幕正中；
+ *   前 4 张（index 0..3）整行不动，第 5 张（index = 4）起继续把焦点卡滚到正中。
  */
 class HeroHomeActivity : ComponentActivity() {
 
@@ -540,6 +556,11 @@ private fun HeroHomeScreen(
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
 
+    // 【冷启动第一帧】先把 Logo 磁盘缓存一次性读进内存（首次访问同步解析整个 prefs XML）。
+    // 必须发生在 `syncCache` / `posters` 构建与首帧绘制之前：这样每张卡都是内存查表，
+    // 不会出现「先文字、几百毫秒后再换成艺术字」的异步空窗。
+    val syncLogoMap = remember { HeroLogoCache.snapshot() }
+
     // 三个焦点区各自持有一组 FocusRequester：跨区移动用显式 requestFocus，
     // 避免 2D 焦点搜索在“顶栏项宽 ≠ 卡片宽”时落空。
     val topBarRequesters = remember { List(TOP_BAR_LABELS.size) { FocusRequester() } }
@@ -652,7 +673,7 @@ private fun HeroHomeScreen(
     // 【首帧同步命中】列表一成型就把 `TmdbMatchCache` 读一遍（原版 `TmdbCache` 的第一帧直读）：
     // 命中则横图 / 评分 / 年份 / 手动剧名当场就位，用户看不到「源站竖图 → TMDB 横图」的硬切，
     // 也不会先闪一行没有评分的元数据。读盘只做一次（`remember(homePosters)`），不是每张卡一次。
-    val syncCache = remember(homePosters) { readHeroSyncCache(homePosters) }
+    val syncCache = remember(homePosters) { readHeroSyncCache(homePosters, syncLogoMap) }
 
     // Tab 栏的记忆索引：从第一排按“下”或从第三排按“上”进入时，都落回这一项。
     var rememberedTabIndex by remember { mutableIntStateOf(0) }
@@ -709,12 +730,16 @@ private fun HeroHomeScreen(
     // 用「计数器」而不是在弹窗回调里自己发请求，避免同一个条目被并发请求两遍。
     var tmdbFocusRevision by remember { mutableIntStateOf(0) }
     // 三级优先级：网络 / 手动 override（最新）> 首帧同步缓存（磁盘）> 源站原值。
-    // 同步缓存只参与展示，**不写进 `tmdbOverrides`**：否则列表预匹配会误以为「已解析」而跳过，
+    // 同步缓存只参与展示，**不写进 `tmdbOverrides`**：否则焦点预取会误以为「已解析」而跳过，
     // 详情页也拿不到 `detail`；这里只负责让第一帧就有横图 / 评分 / 手动剧名。
-    val posters = remember(homePosters, tmdbOverrides, syncCache) {
+    val posters = remember(homePosters, tmdbOverrides, syncCache, syncLogoMap) {
         homePosters.map { poster ->
             val data = tmdbOverrides[poster.posterKey] ?: syncCache.matches[poster.posterKey]
-            if (data == null) {
+            // 【Logo 独立兜底】艺术字缓存按 `posterKey` 存，手动换 TMDB 条目时已同步清掉；
+            // 所以即使匹配缓存没命中（`data == null`），只要 Logo 缓存在，第一帧也能画艺术字。
+            val logoUrl = data?.logoUrl?.takeIf { it.isNotBlank() }
+                ?: syncLogoMap[poster.posterKey]?.takeIf { it.isNotBlank() }
+            if (data == null && logoUrl == null) {
                 poster
             } else {
                 // 只有「有值」才覆盖：TMDB 没给横图 / 译文时，源站的图与简介原样保留。
@@ -722,10 +747,11 @@ private fun HeroHomeScreen(
                 // （见 `changeSource`）。手动词名由 `HeroInfoArea` 从 `tmdbData.manual` 直接取，
                 // 首帧同步缓存里已经带着它，展示效果一致，但不会污染换源检索。
                 poster.copy(
+                    logoUrl = logoUrl,
                     // 评分 / 年份来自 TMDB；备注仍取源站（「更新至12集」这类信息 TMDB 没有）。
-                    meta = buildMeta(poster.vod, data.year, data.rating),
-                    backdropUrl = data.highResBackdrop.ifBlank { poster.backdropUrl },
-                    synopsis = data.overview.ifBlank { poster.synopsis },
+                    meta = data?.let { buildMeta(poster.vod, it.year, it.rating) } ?: poster.meta,
+                    backdropUrl = data?.highResBackdrop?.takeIf { it.isNotBlank() } ?: poster.backdropUrl,
+                    synopsis = data?.overview?.takeIf { it.isNotBlank() } ?: poster.synopsis,
                 )
             }
         }
@@ -735,7 +761,7 @@ private fun HeroHomeScreen(
      * 列表级落库：只写「匹配到的条目 + 提档后的横图」，**不拉详情**。
      *
      * 目的只是让整排卡片的背景先就位（换焦点时不再闪回源站竖图）；详情 / 演员 / Logo 太重，
-     * 只在焦点真正停住的条目上拉一次，见下面的 `LaunchedEffect(heroPosterKey, heroTmdbId)`。
+     * 只在焦点真正停住的条目上拉一次，见下面的焦点驱动预取。
      * 已存在 override（手动 / 焦点条目先到）的 key 以先到的为准。
      */
     fun mergeHomeTmdbMatches(matches: List<HomeTmdbMatch?>): Int {
@@ -745,7 +771,20 @@ private fun HeroHomeScreen(
             if (match == null) continue
             val key = match.poster.posterKey
             if (key in (merged ?: tmdbOverrides)) continue
-            merged = (merged ?: tmdbOverrides) + (key to match.item.toHomeTmdbData(manual = match.manual))
+            val base = match.item.toHomeTmdbData(manual = match.manual)
+            // 列表级匹配没有详情，拿不到 logo。如果首帧同步缓存里**同一条 TMDB 记录**已有艺术字，
+            // 先沿用它 —— 否则 override 一落库就会把缓存里的 Logo 遮掉，焦点切过去先闪一行文字。
+            val cached = syncCache.matches[key]
+            val data = if (
+                base.logoUrl.isNullOrBlank() &&
+                cached?.logoUrl?.isNotBlank() == true &&
+                cached.item.tmdbId == base.item.tmdbId
+            ) {
+                base.copy(logoUrl = cached.logoUrl)
+            } else {
+                base
+            }
+            merged = (merged ?: tmdbOverrides) + (key to data)
             added++
         }
         merged?.let { tmdbOverrides = it }
@@ -790,103 +829,88 @@ private fun HeroHomeScreen(
     }
 
     // ------------------------------------------------------------------
-    // TMDB 自动预匹配：给首页每张卡补高清横图 / 简介（不动卡片竖图）
+    // TMDB 焦点驱动预取：当前焦点 + 左右各 3 张，滑过即取消
     // ------------------------------------------------------------------
-    // 1. 只写内存 override，**不写** `TmdbMatchCache`：自动匹配可能判错，缓存留给手动匹配与详情页，
-    //    一次误判不该把整部剧的图片永久钉死；
-    // 2. key 用「站点|条目 id」列表而不是 `homePosters` 本身：`Vod` 没有值相等语义，
-    //    用列表内容做 key，切 Tab 回来内容没变就不会把整轮搜索再跑一遍；
-    // 3. 这一轮**只匹配、不拉详情**：搜索走 1 天磁盘缓存，整排背景先就位；
-    //    详情 / 演员 / Logo 太重，只给焦点真正停住的那一张拉（见下面的焦点 effect）。
+    // 不再全局遍历整页：20+ 条同时搜索会互相抢连接，真正要看的当前这一张反而排最后。
+    // 现在只做两件事：
+    // 1. 当前焦点：已有 override 就直接拉详情；没有就先搜索再拉详情（简介 / 演员 / 艺术字 Logo）；
+    // 2. 左右各 3 张：500ms 后只做搜索级匹配，让横图先就位；详情等真正聚焦到它时再补。
+    // 焦点一变，旧 LaunchedEffect 立即取消，不会把上一条的搜索结果写进新条目。
+    // key 仍用「站点|条目 id」列表而不是 `homePosters`：`Vod` 没有值相等语义。
     val posterKeys = remember(homePosters) { homePosters.map { it.posterKey } }
-    LaunchedEffect(posterKeys) {
-        if (homePosters.isEmpty()) return@LaunchedEffect
+    val heroPosterKey = heroPoster?.posterKey
+    LaunchedEffect(heroPosterKey, posterKeys, tmdbFocusRevision) {
+        val poster = heroPoster ?: return@LaunchedEffect
         val config = TmdbConfig.effectiveCurrent()
         if (!config.isReady()) return@LaunchedEffect
-        // 已经有 override（手动 / 上一轮自动）的条目直接跳过。
-        val targets = homePosters.filter { it.posterKey !in tmdbOverrides && it.vod.name.isNotBlank() }
-        if (targets.isEmpty()) return@LaunchedEffect
-
-        val service = TmdbService()
-        // 缓存只解析一次：`Setting.getTmdbMatchCache` 是 synchronized 的「读盘 + Gson 解析」。
-        // 上面首帧同步读出来的那份直接复用，避免列表成型后立刻再把同一份 JSON 解一遍。
-        val cache = syncCache.raw ?: withContext(Dispatchers.IO) { Setting.getTmdbMatchCache() }
-
-        // 限流而不是分块：`Semaphore(4)` 让 4 个请求始终在飞，某一条命中缓存 / 快速失败后
-        // 后面的条目立刻补位，不会被 `chunked` 里最慢的一条拖住整块。
-        // 也没有 `targets.forEach { launch }` 那种无上限并发 —— 20+ 条同时打 TMDB 会互相抢连接。
-        val semaphore = Semaphore(TMDB_PREMATCH_CONCURRENCY)
-        var applied = 0
+        // 方向键滑过一排时焦点每 ~50ms 换一张：停手 300ms 才发，滑过不发。
+        delay(HERO_TMDB_FOCUS_DEBOUNCE_MS)
         try {
             coroutineScope {
-                for (poster in targets) {
-                    launch(Dispatchers.IO) {
-                        val match = semaphore.withPermit {
-                            resolveHomeTmdb(poster, cache, service, config)
-                        } ?: return@launch
-                        // Compose 状态只能回主线程改。`immediate` = 结果一到就落库，
-                        // 排在前面的（首屏可见）先换背景，而不是等整轮跑完再一起刷新。
-                        withContext(Dispatchers.Main.immediate) {
-                            if (mergeHomeTmdbMatches(listOf(match)) > 0) applied++
+                // 首帧同步读出来的那份缓存直接复用，避免列表成型后立刻再把同一份 JSON 解一遍。
+                val cache = syncCache.raw ?: withContext(Dispatchers.IO) { Setting.getTmdbMatchCache() }
+                val service = TmdbService()
+                val focusIndex = posters.indexOfFirst { it.posterKey == poster.posterKey }
+
+                // 1) 当前焦点：搜索（已有 override 就直接用）→ 详情，优先占满连接。
+                launch {
+                    val existing = tmdbOverrides[poster.posterKey]
+                    if (existing?.detail != null) {
+                        // 详情已经在内存（手动匹配拉过 / 刚才停在这张）：不重复请求，只补写跨页缓存
+                        // （切 Tab 回来时 override 还在，但缓存条目可能已被别的 Tab 挤掉）。
+                        HeroTmdbPrefetchCache.put(poster.posterKey, existing)
+                    } else if (poster.vod.name.isNotBlank()) {
+                        val match = existing?.let { HomeTmdbMatch(poster, it.item, it.manual) }
+                            ?: withContext(Dispatchers.IO) { resolveHomeTmdb(poster, cache, service, config) }
+                        if (match != null) {
+                            // Compose 状态只能回主线程改；结果一到就落库，排在前面的条目先换背景。
+                            withContext(Dispatchers.Main.immediate) {
+                                mergeHomeTmdbMatches(listOf(match))
+                            }
+                            val data = withContext(Dispatchers.IO) { loadHomeTmdbData(match, service, config) }
+                            if (data != null) {
+                                // 落库走同一个 `mergeHomeTmdbDetail`：期间手动改成别的条目时它自己会丢弃这次结果。
+                                withContext(Dispatchers.Main.immediate) {
+                                    mergeHomeTmdbDetail(poster.posterKey, data)
+                                }
+                                // 演员头像一起入队：详情页点进去时头像已经落在 Coil 磁盘缓存里，不用再等一轮。
+                                preloadHeroAvatars(context, data.cast)
+                                Log.d(TAG_HOME, "tmdb 焦点详情完成: ${poster.title} cast=${data.cast.size}")
+                            }
+                        }
+                    }
+                }
+
+                // 2) 邻居：与当前焦点并行，500ms 后只补搜索级匹配，不拉详情。
+                //    用户继续移动焦点时整个 effect 被取消，两个 launch 一起停。
+                if (focusIndex >= 0) {
+                    launch {
+                        delay(HERO_TMDB_NEIGHBOR_DELAY_MS)
+                        for (offset in 1..HERO_PRELOAD_RANGE) {
+                            for (index in intArrayOf(focusIndex + offset, focusIndex - offset)) {
+                                val neighbor = posters.getOrNull(index) ?: continue
+                                if (neighbor.vod.name.isBlank()) continue
+                                if (tmdbOverrides[neighbor.posterKey] != null) continue
+                                val match = withContext(Dispatchers.IO) {
+                                    resolveHomeTmdb(neighbor, cache, service, config)
+                                } ?: continue
+                                withContext(Dispatchers.Main.immediate) {
+                                    mergeHomeTmdbMatches(listOf(match))
+                                }
+                            }
                         }
                     }
                 }
             }
         } catch (e: CancellationException) {
-            // 列表已换 / 页面已退出：已完成的条目已经生效，原样抛出交给协程取消机制。
+            // 焦点已换 / 页面已退出：已完成的条目已经生效，原样抛出交给协程取消机制。
             throw e
         } catch (e: TmdbService.AuthException) {
-            // Key 失效：整轮停止，不拿同一个坏 Key 把剩下的条目全试一遍。
-            Log.w(TAG_HOME, "tmdb 预匹配鉴权失败: ${e.message}")
-            return@LaunchedEffect
+            // Key 失效：停止本轮，不拿同一个坏 Key 把邻居再试一遍。
+            Log.w(TAG_HOME, "tmdb 焦点预取鉴权失败: ${e.message}")
         } catch (e: Exception) {
-            Log.w(TAG_HOME, "tmdb 预匹配失败: ${e.message}")
+            Log.w(TAG_HOME, "tmdb 焦点预取失败: ${e.message}")
         }
-        if (applied > 0) Log.d(TAG_HOME, "tmdb 预匹配完成: $applied/${targets.size}")
-    }
-
-    // ------------------------------------------------------------------
-    // 焦点条目：补详情 / 演员 / 简介 / 艺术字 Logo，并预载演员头像
-    // ------------------------------------------------------------------
-    // 这里**只补详情、不再搜索**：条目由上面的列表级匹配写进 override。
-    // effect 的第二个 key 就是「这张卡匹配到的 tmdbId」，匹配一落库 effect 就重跑，
-    // 所以既不用等固定时间，也不会把同一次搜索发两遍。
-    // 方向键滑过时焦点每 ~50ms 换一张，防抖到停住才发；切走即随 key 变化取消。
-    val heroPosterKey = heroPoster?.posterKey
-    val heroTmdbId = heroPosterKey?.let { tmdbOverrides[it]?.item?.tmdbId }
-    LaunchedEffect(heroPosterKey, heroTmdbId, tmdbFocusRevision) {
-        val poster = heroPoster ?: return@LaunchedEffect
-        // 列表级匹配还没结果（或这部本来就没匹配上）：没有条目就没有详情可拉，等下一次 key 变化。
-        val existing = tmdbOverrides[poster.posterKey] ?: return@LaunchedEffect
-        if (existing.detail != null) {
-            // 详情已经在内存里（手动匹配拉过 / 刚才停在这张）：不重复请求，只补写跨页缓存
-            // （切 Tab 回来时 override 还在，但缓存条目可能已被别的 Tab 挤掉）。
-            HeroTmdbPrefetchCache.put(poster.posterKey, existing)
-            return@LaunchedEffect
-        }
-        val config = TmdbConfig.effectiveCurrent()
-        if (!config.isReady()) return@LaunchedEffect
-        delay(HERO_TMDB_FOCUS_DEBOUNCE_MS)
-
-        val data = try {
-            withContext(Dispatchers.IO) {
-                loadHomeTmdbData(HomeTmdbMatch(poster, existing.item, existing.manual), TmdbService(), config)
-            }
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: TmdbService.AuthException) {
-            Log.w(TAG_HOME, "tmdb 焦点详情鉴权失败: ${e.message}")
-            return@LaunchedEffect
-        } catch (e: Exception) {
-            Log.w(TAG_HOME, "tmdb 焦点详情失败: ${e.message}")
-            null
-        }
-        if (data == null) return@LaunchedEffect
-        // 落库走的是同一个 `mergeHomeTmdbDetail`：期间手动改成别的条目时它自己会丢弃这次结果。
-        mergeHomeTmdbDetail(poster.posterKey, data)
-        // 演员头像一起入队：详情页点进去时头像已经落在 Coil 磁盘缓存里，不用再等一轮。
-        preloadHeroAvatars(context, data.cast)
-        Log.d(TAG_HOME, "tmdb 焦点详情完成: ${poster.title} cast=${data.cast.size}")
     }
 
     // ------------------------------------------------------------------
@@ -908,9 +932,9 @@ private fun HeroHomeScreen(
         // `put` 会忽略「只匹配到、还没拉详情」的数据，所以这里不会把空壳塞进去。
         tmdbOverrides[current.posterKey]?.let { data ->
             HeroTmdbPrefetchCache.put(current.posterKey, data)
-            // 艺术字 Logo 一起预热：否则「文字标题消失 → Logo 才到」中间会空一段。
-            enqueuePreload(loader, context, data.logoUrl.orEmpty(), HERO_LOGO_PRELOAD_WIDTH)
         }
+        // 艺术字 Logo 一起预热（同步缓存命中的也要）：否则「文字标题消失 → Logo 才到」中间会空一段。
+        enqueuePreload(loader, context, current.logoUrl.orEmpty(), HERO_LOGO_PRELOAD_WIDTH)
         // 只遍历窗口内的下标：范围外的一张都不 enqueue。
         for (i in start..end) {
             val poster = posters[i]
@@ -943,23 +967,19 @@ private fun HeroHomeScreen(
         if (!requestFocus(tabRequesters, target)) requestFocus(tabRequesters, 0)
     }
 
-    // 海报行的两把尺子：dp→px 换算（滚动偏移量是像素），
-    // 以及「焦点卡居中时它的左边缘 x」——首尾 padding 与滚动偏移必须用同一个值，
-    // 否则第 5 张之后的卡片会停在偏心位置。
+    // 海报行的尺子：dp→px 换算（滚动偏移量是像素）+ 卡片步距。
+    // 首尾 padding 都是半屏（见 [PosterArea]），所以 `item i` 居中 = 滚动到 `i × 步距`，
+    // 不再需要「24dp 基准线 + 负偏移」那套补偿。
     val density = LocalDensity.current
-    val posterCenterStart = rememberPosterCenterStart()
     // 卡片步距（卡宽 + 间距）：所有「第几张 → 滚多少像素」的换算共用这一个值。
     val posterStridePx = with(density) { (POSTER_CARD_WIDTH + POSTER_GAP).toPx() }
 
     /**
      * 当前滚动位置到目标位置的**像素增量**。
      *
-     * LazyRow 没有 RecyclerView 的 LayoutManager，`LinearSmoothScroller` 无法直接使用；
-     * 但每张卡宽度固定，绝对位置可以精确还原：
-     * `firstVisibleItemIndex × 步距 + firstVisibleItemScrollOffset`。
-     * 有了增量就能用 `animateScrollBy(delta, tween(...))` 自己控制时长 / 缓动，
-     * 这正是原版 `HorizontalGridView` 可配置滚动节奏的 Compose 等价实现
-     * （`animateScrollToItem` 的曲线是框架固定的，不能调）。
+     * `animateScrollToItem` 只接受 index / offset，没有 `animationSpec`，无法控制时长与减速；
+     * 这里按固定步距还原绝对位置：`firstVisibleItemIndex × 步距 + firstVisibleItemScrollOffset`，
+     * 再用 `animateScrollBy(delta, tween(...))` 自己决定曲线，等价于原版可配置节奏的平滑滚动。
      */
     fun posterScrollDelta(anchor: Int, offset: Int): Float {
         val targetPosition = anchor * posterStridePx + offset
@@ -968,27 +988,23 @@ private fun HeroHomeScreen(
         return targetPosition - currentPosition
     }
 
-    // → 海报行：从别的排切入时用默认参数 index = 0，落在第一张（行首基准线 24dp）。
+    // → 海报行：从别的排切入时用默认参数 index = 0，第一张停在屏幕正中。
     fun focusPoster(index: Int = 0) {
         // 真实数据可能为空（首次加载中 / 接口源返回空）：空列表时 `coerceIn(0, -1)` 会直接抛
         // IllegalArgumentException，所以必须先挡掉，焦点留在原地。
         if (posters.isEmpty()) return
         val target = index.coerceIn(0, posters.lastIndex)
         // 【滚动规则】与原版 HorizontalGridView 一致：
-        // - 前 4 张（index 0..3）：整行不动，第 0 张本来就压在 24dp 基准线上；
+        // - 前 4 张（index 0..3）：整行不动（滚动位置恒为 0）；
         // - 第 5 张（index 4）起：把焦点卡滚到屏幕正中。
-        // 每张卡宽度固定，目标位置可以直接算：`24dp + index × 步距 - 居中起点`。
-        // 这个位置随 index 单调递增，不会出现“第 4 张靠左、第 5 张又倒回去”的跳动。
+        // 首尾 padding 都是半屏，item i 的天然位置 = 居中起点 + i × 步距，
+        // 所以居中它只需要滚到 `i × 步距`，不再需要负偏移补偿。
         val anchor = if (target < POSTER_SCROLL_ANCHOR) 0 else target
-        val scrollOffset = if (target < POSTER_SCROLL_ANCHOR) {
-            0
-        } else {
-            with(density) { HERO_PADDING.roundToPx() - posterCenterStart.roundToPx() }
-        }
+        val scrollOffset = 0
         if (requestFocus(posterRequesters, target)) {
             scope.launch {
                 // 先停掉上一段滚动再取位置：连续按键时增量永远基于「定格后的真实位置」，
-                // 不会因为上一段动画还在跑而累加误差（原版 SmoothScroller 也是这个语义）。
+                // 不会因为上一段动画还在跑而累加误差。
                 posterState.stopScroll()
                 val delta = posterScrollDelta(anchor, scrollOffset)
                 if (abs(delta) < 0.5f) return@launch
@@ -1298,7 +1314,8 @@ private fun HeroHomeScreen(
                         poster.vod,
                         poster.site,
                         poster.backdropUrl,
-                        tmdbData?.logoUrl.orEmpty(),
+                        // Logo 同样兜底：override 没有时用海报上带下来的同步缓存值。
+                        tmdbData?.logoUrl ?: poster.logoUrl.orEmpty(),
                         tmdbData?.overview.orEmpty(),
                     )
                 },
@@ -1656,7 +1673,7 @@ private fun HeroTopBarItem(
  * 320ms 比背景略快，文字先落位，避免整屏同时变化显得迟滞。
  *
  * `tmdbData` 只影响剧名行：有艺术字 Logo（`logoUrl`）时整行换成 Logo（高 96dp、最宽 720dp、
- * `ContentScale.Fit`、贴底左对齐）并隐藏文字；没有 Logo 时仍显示 32sp 文字，
+ * `ContentScale.Fit`、贴底左对齐）并隐藏文字；没有 Logo 或加载失败时仍显示 32sp 文字，
  * 且**只有手动匹配**才允许覆盖剧名（自动匹配可能判错，见历史决策）。
  */
 @Composable
@@ -1678,8 +1695,11 @@ private fun HeroInfoArea(poster: HeroPoster, tmdbData: HeroTmdbData?) {
             .padding(horizontal = HERO_PADDING)
             .padding(bottom = HERO_INFO_BOTTOM_GAP),
     ) { current ->
-        val logoUrl = tmdbData?.logoUrl.orEmpty()
+        // Logo 优先级：网络 / 手动 override（最新）→ 首帧同步缓存（已随 `poster` 带下来）。
+        val logoUrl = (tmdbData?.logoUrl ?: current.logoUrl).orEmpty()
         val hasLogo = logoUrl.isNotBlank()
+        // 只有**真正加载失败**才回落文字：loading 阶段保持空白，才不会先闪文字再换艺术字。
+        var logoFailed by remember(logoUrl) { mutableStateOf(false) }
         // 剧名文字兜底：只有**手动**匹配才覆盖剧名（自动匹配可能判错，名字改错比图糊更严重）。
         val titleText = if (tmdbData?.manual == true) {
             tmdbData.item.title.ifBlank { current.title }
@@ -1696,37 +1716,19 @@ private fun HeroInfoArea(poster: HeroPoster, tmdbData: HeroTmdbData?) {
                     .height(if (hasLogo) HERO_LOGO_HEIGHT else HERO_TITLE_HEIGHT),
                 contentAlignment = Alignment.BottomStart,
             ) {
-                if (hasLogo) {
-                    // Subcompose：图没到之前 / 加载失败时，槽内继续渲染原本的 32sp 文字，
-                    // 视觉上就是「文字标题原位等图」，绝不出现一行空白再突然冒出艺术字。
-                    SubcomposeAsyncImage(
+                if (hasLogo && !logoFailed) {
+                    // Logo 来自首帧同步缓存 / 已完成的详情：直接画图，**不再给 loading 槽留文字位**。
+                    // 图未解码完时这一行保持空白（Coil 本地命中通常不到一帧），
+                    // 绝不会先闪一行 32sp 文字再换成艺术字。
+                    AsyncImage(
                         model = rememberHeroImageModel(logoUrl),
                         contentDescription = current.title,
                         contentScale = ContentScale.Fit,
                         alignment = Alignment.BottomStart,
-                        // fillMaxWidth 是给 loading / error 槽里的文字留排版宽度：
-                        // Subcompose 在图片未到达时没有固有尺寸，只写 widthIn(max) 会缩成 0 宽，
-                        // 兜底文字一个字都看不见 —— 那正好又回到「先闪一下空白标题」。
+                        onError = { logoFailed = true },
                         modifier = Modifier
                             .fillMaxHeight()
-                            .widthIn(max = HERO_LOGO_MAX_WIDTH)
-                            .fillMaxWidth(),
-                        loading = {
-                            Box(
-                                modifier = Modifier.fillMaxSize(),
-                                contentAlignment = Alignment.BottomStart,
-                            ) {
-                                HeroTitleText(titleText)
-                            }
-                        },
-                        error = {
-                            Box(
-                                modifier = Modifier.fillMaxSize(),
-                                contentAlignment = Alignment.BottomStart,
-                            ) {
-                                HeroTitleText(titleText)
-                            }
-                        },
+                            .widthIn(max = HERO_LOGO_MAX_WIDTH),
                     )
                 } else {
                     HeroTitleText(titleText)
@@ -2017,9 +2019,9 @@ private fun HeroTabChip(
 /**
  * 海报行「居中起点」：焦点卡停在屏幕正中时，它左边缘的 x。
  *
- * 首尾 padding（[PosterArea]）与滚动偏移（`focusPoster`）共用这一个值：
+ * 首尾 padding（[PosterArea]）都用这一个值：第一张静止时就在正中，最后一张也能滚到正中；
  * 两处各算一遍迟早会漂移，卡片就会停在偏心位置。
- * 小屏兜底不小于行首基准线 24dp —— 否则 `end` 会变成负数。
+ * 小屏兜底不小于 24dp —— 否则 120dp 卡片在窄屏上会算出负 padding。
  */
 @Composable
 private fun rememberPosterCenterStart(): Dp =
@@ -2030,12 +2032,11 @@ private fun rememberPosterCenterStart(): Dp =
  * 海报区（XML `posterArea`，L142-191）：整块固定高 215dp（L147），内部 recycler 同为 215dp（L156）。
  *
  * 卡片尺寸严格照抄 `ref_docs/adapter_vod_rect.xml`：120dp × 180dp、8dp 圆角、间距 12dp。
- * 列表**行首吸附 + 后段居中**（与原版 HorizontalGridView 一致）：
- * - `contentPadding = (start 24dp, end 半屏)`：第一张静止时压在 24dp 基准线上，
- *   而尾端留出 `(屏宽 - 卡片宽) / 2`，保证最后一张也能被滚到屏幕正中；
- * - 焦点 0..3：整行不动 —— 第一张本来就压在 24dp 基准线上；
- * - 焦点 4 起：以焦点卡自身为锚点，把它的左边缘滚到居中起点
- *   （`24dp - 居中起点` 的像素偏移，见 `focusPoster`）。
+ * 列表**每张都居中**（与原版 HorizontalGridView 一致）：
+ * - `contentPadding = (start 半屏, end 半屏)`：第一张静止时就停在屏幕正中，
+ *   尾端同样留半屏，最后一张也能滚到正中；
+ * - 焦点 0..3：整行不动（滚动位置恒为 0）；
+ * - 焦点 4 起：把焦点卡滚到屏幕正中（`i × 步距`，见 `focusPoster`）。
  */
 @Composable
 private fun PosterArea(
@@ -2051,16 +2052,16 @@ private fun PosterArea(
     onMoveLeft: (Int) -> Unit,
     onMoveRight: (Int) -> Unit,
 ) {
-    // 首端只留 24dp 基准线（第一张必须贴着左边，不能跑到屏幕中间）；
-    // 尾端留半屏，最后一张才能滚到正中。两者都按**未缩放**的卡片宽度算：
-    // 焦点态 1.1 倍放大是绘制层缩放，不占布局宽度。
+    // 首尾都留半屏：第一张静止时就在正中，最后一张也能滚到正中。
+    // padding 按**未缩放**的卡片宽度算：焦点态 1.1 倍放大是绘制层缩放，不占布局宽度。
+    val centerStart = rememberPosterCenterStart()
     LazyRow(
         state = state,
         // 铺满整行、无外层 padding：LazyRow 的裁剪边界 = 屏幕边缘（Compose 等价于 clipToPadding=false）。
         modifier = Modifier
             .fillMaxWidth()
             .height(POSTER_AREA_HEIGHT),
-        contentPadding = PaddingValues(start = HERO_PADDING, end = rememberPosterCenterStart()),
+        contentPadding = PaddingValues(horizontal = centerStart),
         horizontalArrangement = Arrangement.spacedBy(POSTER_GAP),
     ) {
         itemsIndexed(items = posters, key = { _, poster -> poster.id }) { index, poster ->
@@ -2321,9 +2322,6 @@ private fun requestFocus(requesters: List<FocusRequester>, index: Int): Boolean 
 /** 首页日志统一 TAG：`adb logcat -s HeroHome` 就能看到源切换、请求与回调条数。 */
 private const val TAG_HOME = "HeroHome"
 
-/** TMDB 预匹配的并发上限（`Semaphore` 许可数）：TMDB 没有批量接口，串行 20+ 次要十几秒。 */
-private const val TMDB_PREMATCH_CONCURRENCY = 4
-
 /** 预加载半径：焦点前后各 3 张。 */
 private const val HERO_PRELOAD_RANGE = 3
 
@@ -2340,10 +2338,18 @@ private const val HERO_LOGO_PRELOAD_WIDTH = 800
  * 电视端按住方向键时焦点每 ~50ms 换一张卡，若每次焦点变化都发详情请求，滑过一排就是十几次。
  * 300ms 对应逆向原版「新焦点到来先取消上一个任务，再延迟发请求」的节奏：
  * 用户停手后约 0.3 秒出结果，连续滑过则一次都不发。
- * 取消由 `LaunchedEffect(heroPosterKey, ...)` 的 key 变化天然完成（换 key = cancel 上一条协程），
+ * 取消由 `LaunchedEffect(heroPosterKey, posterKeys, ...)` 的 key 变化天然完成（换 key = cancel 上一条协程），
  * 不需要额外持有 `Job` 句柄，也就不会有忘记清理的泄漏。
  */
 private const val HERO_TMDB_FOCUS_DEBOUNCE_MS = 300L
+
+/**
+ * 邻居预热延迟（毫秒）。
+ *
+ * 当前焦点条目的搜索 + 详情先跑；500ms 后才开始补左右各 3 张的**搜索级**匹配，
+ * 避免 7 条请求同时抢 TMDB 连接。焦点继续移动时整个 effect 取消，这里一起停。
+ */
+private const val HERO_TMDB_NEIGHBOR_DELAY_MS = 500L
 
 /** 演员头像的预热解码宽度：详情页头像约 60dp，2x 屏 120~192px，给 192 足够。 */
 private const val HERO_AVATAR_PRELOAD_WIDTH = 192
@@ -2369,6 +2375,13 @@ private data class HeroPoster(
     val synopsis: String,
     val url: String,
     val backdropUrl: String,
+    /**
+     * 艺术字 Logo：**由磁盘同步缓存直接带下来**，不依赖 `TmdbMatchCache` 是否命中。
+     *
+     * 冷启动第一帧就有值，信息区可以直接画图，不会先闪一行 32sp 文字再换成艺术字。
+     * null / 空串 = 用 [title] 的文字标题（对齐逆向原版 `HeroImageView` 的两态）。
+     */
+    val logoUrl: String? = null,
     /** 真实的点播条目（名称 / 图片 / 简介 / 年份 / 站点都在里面）。 */
     val vod: Vod,
     /** 这条数据所属的接口源。`homeContent()` 不盖 site，由观察者手动补好后再带下来。 */
@@ -2412,7 +2425,7 @@ private fun Result?.toHomePosters(): List<HeroPoster> {
  */
 private data class HeroSyncCache(
     val matches: Map<String, HeroTmdbData>,
-    /** 同一次读盘的原始缓存：列表预匹配直接复用，冷启动不必把同一份 JSON 再解析一遍。 */
+    /** 同一次读盘的原始缓存：焦点预取直接复用，冷启动不必把同一份 JSON 再解析一遍。 */
     val raw: TmdbMatchCache?,
 ) {
     companion object {
@@ -2427,11 +2440,14 @@ private data class HeroSyncCache(
  *   每张卡查一次会把主线程卡住；
  * - 手动域优先（`findManual`）：手动词名 / 横图与自动匹配冲突时以用户选择为准；
  * - **只产出展示数据**：不写 `tmdbOverrides`、不写 [HeroTmdbPrefetchCache]，
- *   列表预匹配和详情页仍走原有「已解析 / 手动优先」闸门，不会被首帧数据误判成已完成；
- * - 磁盘缓存没有 Logo 字段（`TmdbMatchCache.Entry` 无 logoUrl），只能从进程内
- *   [HeroTmdbPrefetchCache] `peek`：冷启动时为空，联网拿到详情后 Logo 才会出现。
+ *   焦点预取和详情页仍走原有「已解析 / 手动优先」闸门，不会被首帧数据误判成已完成；
+ * - 磁盘缓存没有 Logo 字段（`TmdbMatchCache.Entry` 无 logoUrl），所以 Logo 从
+ *   [HeroLogoCache.snapshot] 的内存映射直接取：冷启动第一帧就有艺术字，不再等联网详情。
  */
-private fun readHeroSyncCache(posters: List<HeroPoster>): HeroSyncCache {
+private fun readHeroSyncCache(
+    posters: List<HeroPoster>,
+    logoMap: Map<String, String> = HeroLogoCache.snapshot(),
+): HeroSyncCache {
     if (posters.isEmpty()) return HeroSyncCache.EMPTY
     val cache = runCatching { Setting.getTmdbMatchCache() }.getOrNull() ?: return HeroSyncCache.EMPTY
     val matches = HashMap<String, HeroTmdbData>()
@@ -2442,9 +2458,7 @@ private fun readHeroSyncCache(posters: List<HeroPoster>): HeroSyncCache {
         val data = item.toHomeTmdbData(manual = manual != null)
         matches[poster.posterKey] = data.copy(
             // 冷启动第一帧的 Logo 优先级：磁盘缓存（上次联网拿到的艺术字）→ 进程内详情缓存 → 空。
-            logoUrl = runCatching { HeroLogoCache.get(poster.posterKey) }
-                .getOrNull()
-                ?.takeIf { it.isNotBlank() }
+            logoUrl = logoMap[poster.posterKey]?.takeIf { it.isNotBlank() }
                 ?: HeroTmdbPrefetchCache.peek(poster.posterKey)?.logoUrl
                 ?: data.logoUrl,
         )
@@ -2526,7 +2540,7 @@ private suspend fun resolveHomeTmdb(
     } catch (e: TmdbService.AuthException) {
         throw e
     } catch (e: Exception) {
-        Log.w(TAG_HOME, "tmdb 预匹配失败: ${vod.name} | ${e.message}")
+        Log.w(TAG_HOME, "tmdb 匹配失败: ${vod.name} | ${e.message}")
         null
     }
 }
@@ -2606,7 +2620,7 @@ private fun enqueuePreload(loader: ImageLoader, context: Context, url: String, w
 }
 
 /**
- * 统一的图片请求：首页 / 详情页所有 `AsyncImage` / `SubcomposeAsyncImage` 都从这里拿 model。
+ * 统一的图片请求：首页 / 详情页所有 `AsyncImage` 都从这里拿 model。
  *
  * - 固定 [HERO_IMAGE_CROSSFADE_MS] 淡入：首载、换图、预热命中都不会硬切；
  * - `remember(context, url)`：同一个 URL 重组时复用同一个请求，Coil 才能命中内存 / 磁盘缓存，
@@ -2821,9 +2835,8 @@ private const val POSTER_SCROLL_ANCHOR = 4
 /**
  * 卡片行滚动的时长（毫秒）。
  *
- * 逆向原版用 `LinearSmoothScroller.calculateTimeForScrolling / calculateTimeForDeceleration`
- * 控制快慢；LazyRow 没有 LayoutManager，这里用 `tween + FastOutSlowInEasing` 复刻同一节奏：
- * 起步快、尾端减速，单张步进约 300ms，遥控器连按不会「甩」出去。
+ * 每次焦点移动 300ms，`FastOutSlowInEasing` 起步快、尾端减速；
+ * 遥控器连按不会「甩」出去，也不会等上大半秒才落位。
  */
 private const val POSTER_SCROLL_ANIM_MS = 300
 
