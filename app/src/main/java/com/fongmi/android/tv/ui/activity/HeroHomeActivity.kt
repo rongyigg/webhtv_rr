@@ -12,8 +12,9 @@ import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.compose.setContent
 import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.Crossfade
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
@@ -28,6 +29,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.animateScrollBy
+import androidx.compose.foundation.gestures.stopScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.Arrangement
@@ -101,6 +104,7 @@ import coil3.compose.AsyncImage
 import coil3.compose.SubcomposeAsyncImage
 import coil3.request.ImageRequest
 import coil3.request.crossfade
+import com.fongmi.android.tv.App
 import com.fongmi.android.tv.R
 import com.fongmi.android.tv.api.SiteApi
 import com.fongmi.android.tv.api.config.VodConfig
@@ -134,6 +138,7 @@ import com.fongmi.android.tv.utils.PushParser
 import com.google.gson.JsonObject
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
+import kotlin.math.abs
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -205,6 +210,9 @@ internal object HeroTmdbPrefetchCache {
             entries.keys.firstOrNull()?.let { entries.remove(it) }
         }
         entries[key] = data
+        // Logo 再单独落一份极简磁盘缓存：`TmdbMatchCache.Entry` 没有 logo 字段，
+        // 冷启动第一帧只能靠这份键值把艺术字直接画出来（详见 [HeroLogoCache]）。
+        HeroLogoCache.save(key, data.logoUrl.orEmpty())
     }
 
     /** 取出并删除：详情页用过一次就作废，避免用户手动改过匹配后仍拿到旧条目。 */
@@ -221,6 +229,46 @@ internal object HeroTmdbPrefetchCache {
     /** 显式作废（手动改成别的 TMDB 条目时调用）。 */
     fun remove(key: String) {
         if (key.isNotBlank()) entries.remove(key)
+        HeroLogoCache.remove(key)
+    }
+}
+
+/**
+ * 首页艺术字 Logo 的极简磁盘缓存：`posterKey → logoUrl`。
+ *
+ * `TmdbMatchCache.Entry` 只有 tmdbId / title / 横图 / 评分等字段，**没有 logoUrl**
+ * （见 `TmdbMatchCache.java`）。所以冷启动时即使匹配命中磁盘缓存，Logo 也只能等联网详情回来，
+ * 视觉上就是「先一行 32sp 文字，几百毫秒后再换成艺术字」。
+ *
+ * 这里单独存一份只读展示用的键值：
+ * - 写入点只有 [HeroTmdbPrefetchCache.put]（拿到带 Logo 的完整详情时才写），频率极低；
+ * - `apply()` 异步落盘，不阻塞主线程；
+ * - 条数封顶 [MAX_ENTRIES]，超出时随机丢一条，避免长期使用后无限增长。
+ */
+private object HeroLogoCache {
+
+    private const val PREFS_NAME = "hero_logo_cache"
+    private const val MAX_ENTRIES = 200
+
+    private val prefs by lazy { App.get().getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE) }
+
+    fun save(posterKey: String, logoUrl: String) {
+        if (posterKey.isBlank() || logoUrl.isBlank()) return
+        // 同一个 URL 不重复写：焦点来回移动时 `put` 会被反复调用。
+        if (prefs.getString(posterKey, null) == logoUrl) return
+        if (prefs.all.size >= MAX_ENTRIES && !prefs.contains(posterKey)) {
+            prefs.all.keys.firstOrNull()?.let { prefs.edit().remove(it).apply() }
+        }
+        prefs.edit().putString(posterKey, logoUrl).apply()
+    }
+
+    fun get(posterKey: String): String? =
+        if (posterKey.isBlank()) null else prefs.getString(posterKey, null)
+
+    /** 手动改成别的 TMDB 条目时同步作废：旧 Logo 是上一部作品的，不能留到下一次冷启动。 */
+    fun remove(posterKey: String) {
+        if (posterKey.isBlank()) return
+        if (prefs.contains(posterKey)) prefs.edit().remove(posterKey).apply()
     }
 }
 
@@ -239,7 +287,7 @@ internal fun heroTmdbKey(siteKey: String, vodId: String): String = siteKey + "|"
  * 不再有“按屏幕反推”或“目测调参”的数值。行号注释指向该 XML。
  *
  * 分层（自下而上，与 XML 的子节点顺序一一对应）：
- * 1. [HeroBackdrop]：全屏背景大图（XML `heroBg`），随海报焦点用 [Crossfade] 平滑切换。
+ * 1. [HeroBackdrop]：全屏背景大图（XML `heroBg`），旧图托底 + 新图淡入切换。
  * 2. [HeroMaskLeft]：横向黑色渐变（XML `maskLeft` / `bg_hero_mask_h`）。
  * 3. [HeroMaskBottom]：纵向黑色渐变（XML `maskBottom` / `bg_hero_mask_v`）。
  * 4. 内容 Column（XML `bottomContent` + `navBar`）：顶栏 → 弹性留白 → 左侧剧名信息 → 分类 Tab → 海报区。
@@ -256,8 +304,8 @@ internal fun heroTmdbKey(siteKey: String, vodId: String): String = siteKey + "|"
  * 焦点契约（三区各自持有 FocusRequester，全部显式交接，不依赖 2D 自动搜索）：
  * - 进入 Tab 栏（无论从 TopBar ↓ 还是从海报行 ↑）：落到**记忆中的**上一次选中 Tab。
  * - 进入 TopBar 或海报行（从别的排切入）：一律落到各自最左侧的第一项。
- * - 海报行 ←/→ 行内移动；仅当焦点到达第 5 张（index = 4）时把该段推到视觉最左侧，
- *   index 0..3 不滚动、左侧不露出上一张的边；海报行 ↓ 留在原地（已在最底行）。
+ * - 海报行 ←/→ 行内移动；前 4 张（index 0..3）整行不动，第 5 张（index = 4）起
+ *   把焦点卡滚到屏幕正中；海报行 ↓ 留在原地（已在最底行）。
  */
 class HeroHomeActivity : ComponentActivity() {
 
@@ -895,11 +943,30 @@ private fun HeroHomeScreen(
         if (!requestFocus(tabRequesters, target)) requestFocus(tabRequesters, 0)
     }
 
-    // 海报行的两把尺子：dp→px 换算（`animateScrollToItem` 的偏移量是像素），
+    // 海报行的两把尺子：dp→px 换算（滚动偏移量是像素），
     // 以及「焦点卡居中时它的左边缘 x」——首尾 padding 与滚动偏移必须用同一个值，
     // 否则第 5 张之后的卡片会停在偏心位置。
     val density = LocalDensity.current
     val posterCenterStart = rememberPosterCenterStart()
+    // 卡片步距（卡宽 + 间距）：所有「第几张 → 滚多少像素」的换算共用这一个值。
+    val posterStridePx = with(density) { (POSTER_CARD_WIDTH + POSTER_GAP).toPx() }
+
+    /**
+     * 当前滚动位置到目标位置的**像素增量**。
+     *
+     * LazyRow 没有 RecyclerView 的 LayoutManager，`LinearSmoothScroller` 无法直接使用；
+     * 但每张卡宽度固定，绝对位置可以精确还原：
+     * `firstVisibleItemIndex × 步距 + firstVisibleItemScrollOffset`。
+     * 有了增量就能用 `animateScrollBy(delta, tween(...))` 自己控制时长 / 缓动，
+     * 这正是原版 `HorizontalGridView` 可配置滚动节奏的 Compose 等价实现
+     * （`animateScrollToItem` 的曲线是框架固定的，不能调）。
+     */
+    fun posterScrollDelta(anchor: Int, offset: Int): Float {
+        val targetPosition = anchor * posterStridePx + offset
+        val currentPosition = posterState.firstVisibleItemIndex * posterStridePx +
+            posterState.firstVisibleItemScrollOffset
+        return targetPosition - currentPosition
+    }
 
     // → 海报行：从别的排切入时用默认参数 index = 0，落在第一张（行首基准线 24dp）。
     fun focusPoster(index: Int = 0) {
@@ -907,24 +974,29 @@ private fun HeroHomeScreen(
         // IllegalArgumentException，所以必须先挡掉，焦点留在原地。
         if (posters.isEmpty()) return
         val target = index.coerceIn(0, posters.lastIndex)
-        // 【滚动规则】与原版 Leanback 横排一致（start padding 固定 24dp，end padding = 半屏）：
-        // - index 0..3：整行不动 —— 第 0 张本来就压在 24dp 基准线上；
-        // - index 4：滚到基准线 —— 第 4 张压 24dp，前面的卡全部滚出去（offset = 0）；
-        // - index 5 起：仍以第 4 张为锚点，但补一段**负偏移**（把锚点往右顶），
-        //   让焦点卡正好停在屏幕正中：`animateScrollToItem(4, offset)` 里
-        //   item4 的左边缘 = 24dp - offset，所以 offset = 132dp*(target-4) - (居中起点-24dp)。
-        val anchor = if (target < POSTER_SCROLL_ANCHOR) 0 else POSTER_SCROLL_ANCHOR
-        val scrollOffset = if (target <= POSTER_SCROLL_ANCHOR) {
+        // 【滚动规则】与原版 HorizontalGridView 一致：
+        // - 前 4 张（index 0..3）：整行不动，第 0 张本来就压在 24dp 基准线上；
+        // - 第 5 张（index 4）起：把焦点卡滚到屏幕正中。
+        // 每张卡宽度固定，目标位置可以直接算：`24dp + index × 步距 - 居中起点`。
+        // 这个位置随 index 单调递增，不会出现“第 4 张靠左、第 5 张又倒回去”的跳动。
+        val anchor = if (target < POSTER_SCROLL_ANCHOR) 0 else target
+        val scrollOffset = if (target < POSTER_SCROLL_ANCHOR) {
             0
         } else {
-            with(density) {
-                (POSTER_CARD_WIDTH + POSTER_GAP).roundToPx() * (target - POSTER_SCROLL_ANCHOR) -
-                    (posterCenterStart - HERO_PADDING).roundToPx()
-            }
+            with(density) { HERO_PADDING.roundToPx() - posterCenterStart.roundToPx() }
         }
         if (requestFocus(posterRequesters, target)) {
-            if (posterState.firstVisibleItemIndex == anchor && posterState.firstVisibleItemScrollOffset == scrollOffset) return
-            scope.launch { posterState.animateScrollToItem(anchor, scrollOffset) }
+            scope.launch {
+                // 先停掉上一段滚动再取位置：连续按键时增量永远基于「定格后的真实位置」，
+                // 不会因为上一段动画还在跑而累加误差（原版 SmoothScroller 也是这个语义）。
+                posterState.stopScroll()
+                val delta = posterScrollDelta(anchor, scrollOffset)
+                if (abs(delta) < 0.5f) return@launch
+                posterState.animateScrollBy(
+                    delta,
+                    tween(durationMillis = POSTER_SCROLL_ANIM_MS, easing = FastOutSlowInEasing),
+                )
+            }
             return
         }
         // 目标卡片还没组合（例如刚切分类就要跳到靠后的卡片）：先滚过去，等一帧再请求焦点。
@@ -1295,25 +1367,72 @@ private fun HeroHomeScreen(
 /**
  * 底层背景大图（XML `heroBg`）。
  *
- * 用 [Crossfade] 让“海报焦点变化 → 背景切换”是交叉淡入淡出，而不是硬切；
- * 800ms 足够慢，换焦点时背景像「呼吸」一样过渡，不会闪白/闪黑；
+ * 逆向原版 `HeroImageView` 是**两层 ImageView**：旧图一直铺在底层，新图真正加载成功后才在
+ * 它上面淡入，完全就位才丢掉旧图。Compose 的 `Crossfade` 只有固定时长窗口，网络慢时
+ * 新图还没解码完、旧图已经淡出，中间就会露黑帧 —— 这里改成显式双图层托底：
+ *
+ * 1. 底层：最近一张**已成功显示**的图（同一请求参数，Coil 内存缓存命中，几乎零成本）；
+ * 2. 顶层：目标图，`onSuccess` 之前 `alpha = 0`，成功后 800ms 淡入；
+ * 3. 淡入结束才释放底层，全屏大图不会长期同时驻留两张。
+ *
  * 左侧文字仍用 320ms，先落位，背景再慢慢跟上。
  */
 @Composable
 private fun HeroBackdrop(url: String) {
-    Crossfade(
-        targetState = url,
-        animationSpec = tween(durationMillis = HERO_BACKDROP_FADE_MS),
-        label = "heroBackdrop",
-        modifier = Modifier.fillMaxSize(),
-    ) { backdropUrl ->
-        AsyncImage(
-            // 容器本身已经 800ms 交叉淡入，图片再叠 500ms 淡入，首帧不会先黑再显示。
-            model = rememberHeroImageModel(backdropUrl),
-            contentDescription = null,
-            contentScale = ContentScale.Crop,
-            modifier = Modifier.fillMaxSize(),
-        )
+    var shownUrl by remember { mutableStateOf(url) }    // 目标：当前应该显示的图
+    var previousUrl by remember { mutableStateOf("") }   // 托底：最近一张已经成功显示的图
+    var loadedUrl by remember { mutableStateOf("") }     // Coil 回调：最新成功加载的 URL
+
+    LaunchedEffect(url) {
+        if (url.isBlank()) {
+            // 与改造前一致：没有海报时背景整块为空，不把上一部剧的图留在屏幕上。
+            shownUrl = ""
+            previousUrl = ""
+            loadedUrl = ""
+            return@LaunchedEffect
+        }
+        if (url == shownUrl) return@LaunchedEffect
+        // 只拿「已成功显示过」的图托底，绝不拿一张还在加载的 URL 当底图。
+        previousUrl = loadedUrl
+        shownUrl = url
+    }
+
+    val current = shownUrl
+    // 只有「确实存在另一张已加载的旧图」才需要从 0 淡入；首屏 / 切回同一张时直接 1，
+    // 交给 Coil 自己的 500ms 淡入，避免多等 800ms，也避免切回时中间空一帧。
+    // 每换一个 URL 就换一只 Animatable：新图的第一帧 alpha 就是 0，
+    // 不会出现「内存缓存命中 → 先整张闪一下 → 再从头淡入」。
+    val hasPrevious = previousUrl.isNotBlank() && previousUrl != current
+    val fade = remember(current) { Animatable(if (hasPrevious) 0f else 1f) }
+
+    LaunchedEffect(current, loadedUrl) {
+        if (current.isBlank() || loadedUrl != current) return@LaunchedEffect
+        fade.animateTo(1f, tween(durationMillis = HERO_BACKDROP_FADE_MS))
+        // 新图已经完全盖住旧图：释放底层，避免两张全屏图长期同时驻留。
+        previousUrl = ""
+    }
+
+    Box(modifier = Modifier.fillMaxSize()) {
+        if (hasPrevious) {
+            AsyncImage(
+                model = rememberHeroImageModel(previousUrl),
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
+        if (current.isNotBlank()) {
+            AsyncImage(
+                model = rememberHeroImageModel(current),
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                // 新图成功之前 alpha 恒为 0：底层旧图始终可见，不会出现空白帧。
+                onSuccess = { loadedUrl = current },
+                modifier = Modifier
+                    .fillMaxSize()
+                    .graphicsLayer { alpha = fade.value },
+            )
+        }
     }
 }
 
@@ -1911,12 +2030,12 @@ private fun rememberPosterCenterStart(): Dp =
  * 海报区（XML `posterArea`，L142-191）：整块固定高 215dp（L147），内部 recycler 同为 215dp（L156）。
  *
  * 卡片尺寸严格照抄 `ref_docs/adapter_vod_rect.xml`：120dp × 180dp、8dp 圆角、间距 12dp。
- * 列表**行首吸附 + 后段居中**（与原版 Leanback 横排一致）：
+ * 列表**行首吸附 + 后段居中**（与原版 HorizontalGridView 一致）：
  * - `contentPadding = (start 24dp, end 半屏)`：第一张静止时压在 24dp 基准线上，
  *   而尾端留出 `(屏宽 - 卡片宽) / 2`，保证最后一张也能被滚到屏幕正中；
- * - 焦点 0..3：锚点 0，整行不动；
- * - 焦点 4：`animateScrollToItem(4)` → 第 4 张压在 24dp 基准线；
- * - 焦点 5+：锚点仍是 4，再补一段负偏移把焦点卡顶到正中（见 `focusPoster`）。
+ * - 焦点 0..3：整行不动 —— 第一张本来就压在 24dp 基准线上；
+ * - 焦点 4 起：以焦点卡自身为锚点，把它的左边缘滚到居中起点
+ *   （`24dp - 居中起点` 的像素偏移，见 `focusPoster`）。
  */
 @Composable
 private fun PosterArea(
@@ -2322,7 +2441,12 @@ private fun readHeroSyncCache(posters: List<HeroPoster>): HeroSyncCache {
         val item = manual ?: runCatching { cache.find(poster.site.key, vod.id, vod.name) }.getOrNull() ?: continue
         val data = item.toHomeTmdbData(manual = manual != null)
         matches[poster.posterKey] = data.copy(
-            logoUrl = HeroTmdbPrefetchCache.peek(poster.posterKey)?.logoUrl ?: data.logoUrl,
+            // 冷启动第一帧的 Logo 优先级：磁盘缓存（上次联网拿到的艺术字）→ 进程内详情缓存 → 空。
+            logoUrl = runCatching { HeroLogoCache.get(poster.posterKey) }
+                .getOrNull()
+                ?.takeIf { it.isNotBlank() }
+                ?: HeroTmdbPrefetchCache.peek(poster.posterKey)?.logoUrl
+                ?: data.logoUrl,
         )
     }
     return HeroSyncCache(matches, cache)
@@ -2690,9 +2814,18 @@ private val POSTER_CARD_WIDTH = 120.dp
 private val POSTER_CARD_HEIGHT = 180.dp
 private val POSTER_GAP = 12.dp
 
-// 焦点到第 5 张（index = 4）起，列表才真正开始滚动：index 4 停在 24dp 行首基准线，
-// index 5 及以后以 4 为锚点补负偏移，把焦点卡顶到屏幕正中 —— 与原版 Leanback 横排一致。
+// 前 4 张（index 0..3）不滚动；第 5 张（index = 4）起把焦点卡滚到屏幕正中，
+// 与逆向原版 HorizontalGridView 的“第 5 张才居中”节奏一致。
 private const val POSTER_SCROLL_ANCHOR = 4
+
+/**
+ * 卡片行滚动的时长（毫秒）。
+ *
+ * 逆向原版用 `LinearSmoothScroller.calculateTimeForScrolling / calculateTimeForDeceleration`
+ * 控制快慢；LazyRow 没有 LayoutManager，这里用 `tween + FastOutSlowInEasing` 复刻同一节奏：
+ * 起步快、尾端减速，单张步进约 300ms，遥控器连按不会「甩」出去。
+ */
+private const val POSTER_SCROLL_ANIM_MS = 300
 
 // 参考 ref_docs/VodRectPresenter.java 第 39-41 行：原实现 hasFocus() ? 1.08f : 1.0f；本项目按定稿取 1.1。
 private const val POSTER_FOCUS_SCALE = 1.1f
