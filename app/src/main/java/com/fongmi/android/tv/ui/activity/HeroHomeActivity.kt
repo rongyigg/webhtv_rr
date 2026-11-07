@@ -1429,7 +1429,7 @@ private fun HeroBackdrop(url: String, verticalUrl: String) {
         if (url == shownUrl) return@LaunchedEffect
         // 托底只允许「同一部剧的上一张横图」：竖图（源站 `vod.pic`）绝不当横图的淡入底图，
         // 否则焦点停下后会先看到竖版海报、再淡入 TMDB 横图（先竖后横）。
-        previousUrl = loadedUrl.takeIf { it.isNotBlank() && it != verticalUrl }
+        previousUrl = loadedUrl.takeIf { it.isNotBlank() && it != verticalUrl } ?: ""
         shownUrl = url
     }
 
