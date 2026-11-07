@@ -92,6 +92,40 @@ class HeroPosterCard @JvmOverloads constructor(
             titleView.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, value)
         }
 
+    /**
+     * 是否由调用方自行加载海报图（例如 RecyclerView + Coil）。
+     *
+     * 默认 `false` = 保持原有行为：设 [title] / [imageUrl] 时由卡片内部用 Glide 加载。
+     * 置 `true` 后 [bindPoster] 不再发起任何 Glide 请求、也不再显示「剧名首字」占位，
+     * 图片完全交给调用方通过 [posterImageView] 加载，并用 [releasePoster] 释放。
+     *
+     * 历史页 / 搜索页 / 换源弹窗都不设置本字段，行为与改动前逐字一致。
+     */
+    var externalImageLoading: Boolean = false
+        set(value) {
+            field = value
+            bindPoster()
+        }
+
+    /**
+     * 海报图层（`ShapeableImageView`，120×180、8dp 圆角）。
+     *
+     * 只给「外部加载模式」使用：调用方把请求交给自己的图片库（`coil3.load` / `dispose`），
+     * 卡片本身不参与加载，避免 Glide 与 Coil 同时往同一个 ImageView 写图。
+     */
+    val posterImageView: ImageView get() = image
+
+    /**
+     * 释放海报图层：取消在途的 Glide 请求并复位占位图。
+     *
+     * RecyclerView 的 `onViewRecycled` 必须调用：卡片被复用时旧请求晚到会把上一张图
+     * 贴到新条目上（快速滑动时的串图 / 错位）。
+     */
+    fun releasePoster() {
+        Glide.with(context.applicationContext).clear(image)
+        image.setImageResource(R.drawable.shape_source_poster_placeholder)
+    }
+
     /** 左上角标签：「MM-dd | 来源」，13sp + `shape_vod_site`，单行省略。 */
     var topStartTag: String = ""
         set(value) {
@@ -478,6 +512,12 @@ class HeroPosterCard @JvmOverloads constructor(
     }
 
     private fun bindPoster() {
+        // 外部加载模式：图片完全由调用方（Coil）负责。
+        // 这里连「剧名首字」占位也不能画：它会盖在 Coil 已经加载好的海报上面。
+        if (externalImageLoading) {
+            placeholder.visibility = View.GONE
+            return
+        }
         if (imageUrl.isBlank()) {
             image.setImageResource(R.drawable.shape_source_poster_placeholder)
         } else {

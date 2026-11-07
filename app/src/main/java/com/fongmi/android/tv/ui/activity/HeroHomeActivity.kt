@@ -4,32 +4,31 @@ import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
 import android.graphics.Color as AndroidColor
+import android.graphics.Rect
 import android.graphics.drawable.ColorDrawable
 import android.os.Bundle
 import android.os.SystemClock
 import android.util.Log
+import android.view.KeyEvent
+import android.view.View
+import android.view.ViewGroup
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.compose.setContent
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
-import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -45,7 +44,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
@@ -82,22 +80,23 @@ import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.Dp
-import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.Observer
 import androidx.lifecycle.ViewModelProvider
+import androidx.recyclerview.widget.LinearLayoutManager
+import androidx.recyclerview.widget.LinearSmoothScroller
+import androidx.recyclerview.widget.RecyclerView
 import coil3.ImageLoader
 import coil3.SingletonImageLoader
 import coil3.compose.AsyncImage
+import coil3.dispose
+import coil3.load
 import coil3.request.ImageRequest
 import coil3.request.crossfade
 import com.fongmi.android.tv.App
@@ -124,6 +123,7 @@ import com.fongmi.android.tv.ui.hero.HeroAccentColor
 import com.fongmi.android.tv.ui.hero.HeroFocusBrush
 import com.fongmi.android.tv.ui.hero.HeroHomeLogoButton
 import com.fongmi.android.tv.ui.hero.HeroImageLoader
+import com.fongmi.android.tv.ui.hero.HeroPosterCard
 import com.fongmi.android.tv.ui.hero.HeroSourceEntry
 import com.fongmi.android.tv.ui.hero.SourceSidebar
 import com.fongmi.android.tv.ui.hero.SourceSidebarMode
@@ -134,6 +134,7 @@ import com.fongmi.android.tv.utils.PushParser
 import com.google.gson.JsonObject
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
+import kotlin.math.roundToInt
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -547,7 +548,9 @@ private fun HeroHomeScreen(
     // 顶栏「设置」：真正打开页面的逻辑在 HeroHomeActivity 里（需要按 flavor 反射），由调用方传 lambda。
     onOpenSettings: () -> Unit,
 ) {
-    val posterState = rememberLazyListState()
+    // 海报行是原生 RecyclerView（AndroidView 承载）：Compose 侧只留一个握柄，
+    // 跨区移动 / 弹窗关闭还焦点都按 index 直接请求，不再维护一整套 posterRequesters。
+    val posterRow = remember { HeroPosterRowHost() }
     val tabState = rememberLazyListState()
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
@@ -810,9 +813,6 @@ private fun HeroHomeScreen(
         HeroTmdbPrefetchCache.put(key, merged)
     }
 
-    // 【防越界】真实列表长度不固定：必须跟着 posters.size 重建。
-    // 写死成 `List(常量)` 会在接口源返回更多条目时于 `requesters[index]` 处越界崩溃。
-    val posterRequesters = remember(posters.size) { List(posters.size) { FocusRequester() } }
     // 真实数据可能为空：这里必须可空，不能用 `posters[0]` 兜底（空列表会直接抛越界）。
     val heroPoster = posters.getOrNull(focusedPosterIndex) ?: posters.firstOrNull()
 
@@ -970,48 +970,24 @@ private fun HeroHomeScreen(
         if (!requestFocus(tabRequesters, target)) requestFocus(tabRequesters, 0)
     }
 
-    // 海报行的尺子：dp→px 换算（`animateScrollToItem` 的 offset 是像素）。
-    val density = LocalDensity.current
-    // 行首固定 24dp（第一张贴左），行尾保留半屏（最后一张能居中）。
-    val posterCenterStart = rememberPosterCenterStart()
-    // 「居中」相对「贴左」需要往右推的距离：`animateScrollToItem` 的 offset 以内容起点为 0，
-    // 负值 = 把目标卡往右推，推 `centerStart - 24dp` 正好落在屏幕正中。
-    val posterCenterOffsetPx = with(density) { (HERO_PADDING - posterCenterStart).roundToPx() }
-
     // → 海报行：从别的排切入时用默认参数 index = 0，第一张贴左 24dp。
+    // 滚动规则统一在 HeroPosterRecyclerView 里：
+    // - 第 1~4 张（index 0..3）：整行在最左，第一张贴左 24dp；
+    // - 第 5 张（index 4）起：把焦点卡平滑滚到屏幕正中。
     fun focusPoster(index: Int = 0) {
         // 真实数据可能为空（首次加载中 / 接口源返回空）：空列表时 `coerceIn(0, -1)` 会直接抛
         // IllegalArgumentException，所以必须先挡掉，焦点留在原地。
         if (posters.isEmpty()) return
         val target = index.coerceIn(0, posters.lastIndex)
-        // 【滚动规则】
-        // - 第 1~4 张（index 0..3）：整行回到最左，第一张停在 24dp；
-        // - 第 5 张（index 4）起：把焦点卡滚到屏幕正中。
-        // 行首 padding 只有 24dp，`animateScrollToItem(target)` 默认把卡片贴到内容起点（24dp），
-        // 必须再补 `centerStart - 24dp` 的负偏移才是「居中」；前 4 张 anchor = 0、偏移 0。
-        val anchor = if (target < POSTER_SCROLL_ANCHOR) 0 else target
-        val centeredOffset = if (anchor == 0) 0 else posterCenterOffsetPx
-        if (requestFocus(posterRequesters, target)) {
-            scope.launch {
-                // 连续按键时新滚动会取消上一段动画（`scroll` 的 MutatorMutex），
-                // 目标位置永远按 index 算，不会因为上一段动画还在跑而累加误差。
-                posterState.animateScrollToItem(anchor, centeredOffset)
-            }
-            return
-        }
-        // 目标卡片还没组合（例如刚切分类就要跳到靠后的卡片）：先滚过去，等一帧再请求焦点。
+        if (posterRow.focusPoster(target)) return
+        // 目标卡还没布局（首帧 / 刚切分类就要跳到靠后的卡片）：
+        // focusPoster 已把它瞬间滚进屏幕，RecyclerView 要下一帧才完成布局，这里多等几帧再抢。
         scope.launch {
-            posterState.scrollToItem(anchor, centeredOffset)
-            withFrameNanos { }
-            requestFocus(posterRequesters, target)
+            repeat(5) {
+                withFrameNanos { }
+                if (posterRow.focusPoster(target)) return@launch
+            }
         }
-    }
-
-    // 海报行内左右移动：到行首/行尾时事件已被消费，焦点留在原地，不会掉出海报区。
-    fun focusPosterHorizontal(fromIndex: Int, delta: Int) {
-        val target = fromIndex + delta
-        if (target !in posters.indices) return
-        focusPoster(target)
     }
 
     // 长按卡片确定键 → 换源弹窗（View 体系独立 Dialog，见 [ChangeSourceDialog]，层级盖在首页之上）。
@@ -1099,7 +1075,7 @@ private fun HeroHomeScreen(
         pendingPosterFocus = -1
         if (target < 0) return@LaunchedEffect
         repeat(5) {
-            if (requestFocus(posterRequesters, target)) return@LaunchedEffect
+            if (posterRow.focusPoster(target)) return@LaunchedEffect
             withFrameNanos { }
         }
     }
@@ -1112,7 +1088,7 @@ private fun HeroHomeScreen(
         pendingPosterFocus = -1
         if (target < 0) return@LaunchedEffect
         repeat(5) {
-            if (requestFocus(posterRequesters, target)) return@LaunchedEffect
+            if (posterRow.focusPoster(target)) return@LaunchedEffect
             withFrameNanos { }
         }
     }
@@ -1124,7 +1100,7 @@ private fun HeroHomeScreen(
 
     // 切分类后海报行回到最左，保证“Tab ↓ 落到第一张”和视觉一致。
     LaunchedEffect(selectedTabIndex) {
-        posterState.scrollToItem(0)
+        posterRow.scrollToStart()
     }
 
     // ------------------------------------------------------------------
@@ -1281,8 +1257,8 @@ private fun HeroHomeScreen(
             )
             PosterArea(
                 posters = posters,
-                state = posterState,
-                requesters = posterRequesters,
+                row = posterRow,
+                focusedPosterIndex = focusedPosterIndex,
                 onFocused = { index ->
                     focusedPosterIndex = index
                     // 焦点进了卡片：选中的分类 Tab 从实心红块退成红框（规则 ②），
@@ -1314,10 +1290,9 @@ private fun HeroHomeScreen(
                     showTmdbDialog = true
                 },
                 // 海报行 ↑ 回 Tab 栏：落到**当前选中的分类**（见 focusTab 的注释）。
+                // 左右移动交给 RecyclerView 自己的焦点搜索（原生 LinearLayoutManager 会正确滚到下一张），
+                // 方向下键在卡片里被消费：短按不动（下面没有可聚焦控件）、长按 1.5s 呼出 TMDB 匹配。
                 onMoveUp = { focusTab() },
-                onMoveDown = { },
-                onMoveLeft = { index -> focusPosterHorizontal(index, -1) },
-                onMoveRight = { index -> focusPosterHorizontal(index, 1) },
             )
         }
 
@@ -2009,301 +1984,65 @@ private fun HeroTabChip(
 }
 
 /**
- * 海报行「居中起点」：焦点卡停在屏幕正中时，它左边缘的 x。
+ * 海报区（XML `posterArea`，L142-191）：整块固定高 215dp（L147）。
  *
- * 只给**行尾 padding** 和 `focusPoster` 的居中偏移使用：最后一张能滚到正中。
- * 行首固定 [HERO_PADDING]（第一张贴左 24dp），不能和行尾共用同一个值，
- * 否则第一张会被推到屏幕中间（上一版的错位就来自这里）。
- * 小屏兜底不小于 24dp —— 否则 120dp 卡片在窄屏上会算出负 padding。
- */
-@Composable
-private fun rememberPosterCenterStart(): Dp =
-    ((LocalConfiguration.current.screenWidthDp.dp - POSTER_CARD_WIDTH) / 2)
-        .coerceAtLeast(HERO_PADDING)
-
-/**
- * 海报区（XML `posterArea`，L142-191）：整块固定高 215dp（L147），内部 recycler 同为 215dp（L156）。
+ * 内部是**原生 RecyclerView**（`AndroidView` 承载），不再用 Compose `LazyRow`：
+ * LazyRow 在电视端快速连按时会滚动跳跃、复用卡片时图片错位；原生 RecyclerView 的
+ * `onViewRecycled` 能真正取消在途图片请求，配合自定义 SmoothScroller 得到稳定的居中吸附。
  *
- * 卡片尺寸严格照抄 `ref_docs/adapter_vod_rect.xml`：120dp × 180dp、8dp 圆角、间距 12dp。
- * 首尾 padding 不同：
- * - `start = 24dp`：第一张贴左，不再落到屏幕正中；
- * - `end = 半屏`：最后一张仍能滚到正中；
- * - 焦点 0..3：整行不动（滚动位置恒为 0）；
- * - 焦点 4 起：把焦点卡滚到屏幕正中（负偏移见 `focusPoster`）。
+ * 尺寸与对齐全部由 [HeroPosterRecyclerView] 负责：
+ * - 卡片：全局唯一 [HeroPosterCard] 120dp × 214dp，间距 12dp（ItemDecoration，末项不加）；
+ * - `paddingStart = 24dp`：第一张贴左；
+ * - `paddingEnd = (屏宽 - 120dp) / 2` + `clipToPadding = false`：最后一张能滚到屏幕正中；
+ * - 焦点 0..3：整行不动；焦点 4 起：焦点卡平滑滚到屏幕正中。
  */
 @Composable
 private fun PosterArea(
     posters: List<HeroPoster>,
-    state: LazyListState,
-    requesters: List<FocusRequester>,
+    row: HeroPosterRowHost,
+    focusedPosterIndex: Int,
     onFocused: (Int) -> Unit,
     onClick: (HeroPoster) -> Unit,
     onLongPress: (HeroPoster) -> Unit,
     onLongPressTmdb: (Int) -> Unit,
     onMoveUp: (Int) -> Unit,
-    onMoveDown: (Int) -> Unit,
-    onMoveLeft: (Int) -> Unit,
-    onMoveRight: (Int) -> Unit,
 ) {
-    // 行首固定 24dp：第一张贴左；行尾留半屏：最后一张能滚到正中。
-    // padding 按**未缩放**的卡片宽度算：焦点态 1.1 倍放大是绘制层缩放，不占布局宽度。
-    val centerStart = rememberPosterCenterStart()
-    LazyRow(
-        state = state,
-        // 铺满整行、无外层 padding：LazyRow 的裁剪边界 = 屏幕边缘（Compose 等价于 clipToPadding=false）。
+    AndroidView(
+        // 回调只在 factory 里挂一次：它们捕获的是 Compose 的状态委托（读写永远拿到最新值），
+        // 每次重组重建 lambda 只会白白分配对象。
+        factory = { context ->
+            HeroPosterRecyclerView(context).also { view ->
+                // 不用 `apply`：apply 的隐式接收者会让 `onClick(...)` 先解析到 RecyclerView 自己的
+                // 可空回调属性，和外层同名参数撞车；这里显式用 `view.` 前缀，避免隐式接收者遮蔽。
+                view.onPosterFocused = { index -> onFocused(index) }
+                view.onClick = { poster -> onClick(poster) }
+                view.onLongPress = { poster -> onLongPress(poster) }
+                view.onLongPressTmdb = { index -> onLongPressTmdb(index) }
+                view.onMoveUp = { index -> onMoveUp(index) }
+                row.attach(view)
+            }
+        },
+        onRelease = { view ->
+            // 列表被移除（切源 / 换页 / 退出）时彻底断开：
+            // Adapter 持有卡片，回调持有 Compose 状态，都不能跟着 View 一起泄漏。
+            view.onPosterFocused = null
+            view.onClick = null
+            view.onLongPress = null
+            view.onLongPressTmdb = null
+            view.onMoveUp = null
+            row.detach(view)
+            view.adapter = null
+        },
+        update = { view ->
+            // 数据去重在 bindData 内部：列表没变时完全不动，避免每次重组都 notifyDataSetChanged。
+            view.bindData(posters)
+            // 焦点同步：只有 index 变化且焦点还在海报行内才滚动，不会和用户按键抢动画。
+            view.syncFocus(focusedPosterIndex)
+        },
         modifier = Modifier
             .fillMaxWidth()
             .height(POSTER_AREA_HEIGHT),
-        contentPadding = PaddingValues(start = HERO_PADDING, end = centerStart),
-        horizontalArrangement = Arrangement.spacedBy(POSTER_GAP),
-    ) {
-        itemsIndexed(items = posters, key = { _, poster -> poster.id }) { index, poster ->
-            PosterCard(
-                poster = poster,
-                requester = requesters[index],
-                onFocused = { onFocused(index) },
-                onClick = { onClick(poster) },
-                // 长按确定键 = 呼出换源弹窗：把这张卡自己带上去，上层不用再猜 heroPoster。
-                onLongPress = { onLongPress(poster) },
-                // 长按方向下键 1.5s = 呼出 TMDB 手动匹配弹窗（按这张卡自己的剧名去匹配）。
-                onLongPressTmdb = { onLongPressTmdb(index) },
-                // 把“从哪一张发起”带回上层：滚动锚点与左右边界都在上层统一处理。
-                onMoveUp = { onMoveUp(index) },
-                onMoveDown = { onMoveDown(index) },
-                onMoveLeft = { onMoveLeft(index) },
-                onMoveRight = { onMoveRight(index) },
-            )
-        }
-    }
-}
-
-/**
- * 单张海报卡片：图片区与文字区完全剥离。
- *
- * 尺寸与样式全部对齐参考文件（`ref_docs/adapter_vod_rect.xml`）：
- * - 图片：120dp × 180dp（L24-25），固定尺寸，严格 2:3；圆角 8dp（L27 `Vod.Grid.Large`）。
- * - 标题：13sp（L46）+ marginTop 8dp（L53）+ `#ccffffff`（L47）+ marquee（L48），
- *   这里用 13sp + 8dp 间距 + [basicMarquee]（仅焦点态跑马灯，未聚焦时省略号收尾）。
- * - 焦点缩放：`ref_docs/VodRectPresenter.java` 第 39-41 行 `1.08f`，本项目按产品要求取 1.1。
- * - 描边/阴影：VodRectPresenter 第 90-101 行的 overlay 视觉厚度约 2dp，Compose 用贴边 `border(2.dp)`
- *   加焦点态 `shadow(18.dp)` 表达同一层级。
- *
- * `graphicsLayer` 只挂在图片 Box 上：文字容器字号不变，放大时既不变形也不会被挤压截断。
- */
-@Composable
-private fun PosterCard(
-    poster: HeroPoster,
-    requester: FocusRequester,
-    onFocused: () -> Unit,
-    onClick: () -> Unit,
-    onLongPress: () -> Unit,
-    onLongPressTmdb: () -> Unit,
-    onMoveUp: () -> Unit,
-    onMoveDown: () -> Unit,
-    onMoveLeft: () -> Unit,
-    onMoveRight: () -> Unit,
-) {
-    // 真实焦点状态一律从 interactionSource 取（Modifier.clickable 会派发 FocusInteraction），
-    // 不再用 border(width = 0.dp) 表达“无边框”——0dp 描边在 Skia 里等于 hairline，
-    // 会给未选中的卡片画出一圈 1px 红边。
-    val interaction = remember { MutableInteractionSource() }
-    val isFocused by interaction.collectIsFocusedAsState()
-    // 只有真正获得焦点时才存在描边；否则传 null，Modifier.border 完全不绘制。
-    val borderStroke: BorderStroke? =
-        if (isFocused) BorderStroke(POSTER_FOCUS_BORDER, HeroAccentColor) else null
-
-    val scale by animateFloatAsState(
-        targetValue = if (isFocused) POSTER_FOCUS_SCALE else 1f,
-        animationSpec = spring(
-            dampingRatio = POSTER_SPRING_DAMPING,
-            stiffness = POSTER_SPRING_STIFFNESS,
-        ),
-        label = "posterScale",
     )
-    val elevation by animateDpAsState(
-        targetValue = if (isFocused) POSTER_FOCUS_ELEVATION else 0.dp,
-        animationSpec = spring(
-            dampingRatio = POSTER_SPRING_DAMPING,
-            stiffness = POSTER_SPRING_STIFFNESS,
-        ),
-        label = "posterElevation",
-    )
-    // 长按自己计时：遥控器长按会重复发 KeyDown，Compose 的 clickable long-click 在 TV 上不可靠，
-    // 所以这里用「首次 KeyDown 起一个 Job → delay → 直接回调」的方式，**完全不等 KeyUp**。
-    //
-    // 不用 `LaunchedEffect(pressAt)`：那条路只能靠改状态间接触发/取消，
-    // 触发后还要先把状态复位（否则弹窗抢走 KeyUp 就永远停在「按着」），时序很难保证。
-    // Job 是唯一可靠的取消句柄：KeyUp / 失焦 / 离开组合都能精确取消。
-    val scope = rememberCoroutineScope()
-    // 海报请求带上统一淡入：左右换焦点时旧图淡出、新图淡入，不再硬切。
-    val posterModel = rememberHeroImageModel(poster.url)
-    var longPressJob by remember { mutableStateOf<Job?>(null) }
-    // 这一次按下是否已经被长按消费：KeyUp 时据此决定「不再触发点击」，并且必须消费掉 KeyUp。
-    // 真正的解锁交给 `onPreviewKeyEvent` 最前面的长按锁（只认 KeyUp）；
-    // 下面 KeyDown 里的复位只是兜底，锁生效时根本走不到那里。
-    var isLongPressTriggered by remember { mutableStateOf(false) }
-    var downLongPressJob by remember { mutableStateOf<Job?>(null) }
-    var isDownLongPressTriggered by remember { mutableStateOf(false) }
-
-    // 卡片被移出组合（切分类 / 换源后列表重建）时取消计时，绝不让协程打到已销毁的卡片上。
-    DisposableEffect(Unit) {
-        onDispose {
-            longPressJob?.cancel()
-            downLongPressJob?.cancel()
-        }
-    }
-
-    Column(
-        modifier = Modifier
-            .width(POSTER_CARD_WIDTH)
-            .focusRequester(requester)
-            .onFocusChanged {
-                // 这里只负责把“焦点换到哪一张”通知给上层，焦点样式统一走 interactionSource。
-                if (it.isFocused) {
-                    onFocused()
-                } else {
-                    // 失焦只取消计时，**不复位触发标记**：弹窗拿到焦点时 KeyUp 会送到弹窗窗口，
-                    // 卡片收不到；若在这里复位，焦点回到卡片后的第一个 KeyUp 会被误判成点击。
-                    longPressJob?.cancel()
-                    longPressJob = null
-                    downLongPressJob?.cancel()
-                    downLongPressJob = null
-                }
-            }
-            .onPreviewKeyEvent { event ->
-                // 【长按锁】长按一旦被消费，后续所有事件（系统重复 KeyDown、迟到的 KeyUp、
-                // 甚至方向键）全部吃掉，只有松开按键（KeyUp）才解锁。
-                // 不加这道锁时，长按呼出弹窗后残留的按键会漏到底层：弹窗下面又打开一次详情页，
-                // 或者列表被继续滚动 —— 用户看到的就是「按一下弹了两个界面」。
-                if (isLongPressTriggered) {
-                    if (event.type == KeyEventType.KeyUp) isLongPressTriggered = false
-                    return@onPreviewKeyEvent true
-                }
-                // 确定键 / 回车完全由卡片接管（见下方 when 的前两个分支），
-                // 这样「短按 = 进详情、长按 ≥ 1s = 呼出换源弹窗」才不会和 clickable 冲突。
-                when (event.key) {
-                    Key.DirectionCenter, Key.Enter -> {
-                        if (event.type == KeyEventType.KeyDown) {
-                            // 系统长按会重复发 KeyDown：只有首次按下（repeatCount == 0）才起计时，
-                            // 其余重复事件一律吞掉，绝不透传给底层 clickable 触发一次点击。
-                            if (event.nativeKeyEvent.repeatCount == 0) {
-                                isLongPressTriggered = false
-                                longPressJob?.cancel()
-                                longPressJob = scope.launch {
-                                    delay(POSTER_LONG_PRESS_MS)
-                                    // 到时**直接**触发，不等 KeyUp：先置标记再回调，
-                                    // 上层同步把弹窗标志位置 true，Compose 毫秒级重组把弹窗盖上来。
-                                    isLongPressTriggered = true
-                                    longPressJob = null
-                                    Log.e("ChangeSource", "卡片长按 ${POSTER_LONG_PRESS_MS}ms 触发换源")
-                                    onLongPress()
-                                }
-                            }
-                        } else {
-                            // KeyUp：先取消计时；已经触发过长按 → 这个 KeyUp 必须被消费，
-                            // 绝不能再让卡片响应一次点击（否则弹窗下面会同时打开详情页）。
-                            longPressJob?.cancel()
-                            longPressJob = null
-                            if (!isLongPressTriggered) onClick()
-                        }
-                        return@onPreviewKeyEvent true
-                    }
-
-                    else -> Unit
-                }
-                // 方向下键必须在下面的「只处理 KeyDown」总闸之前拦一次，
-                // 否则 KeyUp 会被直接放行，永远算不出按住了多久。
-                if (event.key == Key.DirectionDown) {
-                    if (event.type == KeyEventType.KeyDown) {
-                        if (event.nativeKeyEvent.repeatCount == 0) {
-                            isDownLongPressTriggered = false
-                            downLongPressJob?.cancel()
-                            downLongPressJob = scope.launch {
-                                delay(TMDB_LONG_PRESS_MS)
-                                // 同确定键：到时直接呼出 TMDB 手动匹配弹窗，不等松手。
-                                isDownLongPressTriggered = true
-                                downLongPressJob = null
-                                Log.e("ChangeSource", "卡片长按下键 ${TMDB_LONG_PRESS_MS}ms 触发 TMDB 匹配")
-                                onLongPressTmdb()
-                            }
-                        }
-                    } else {
-                        // 短按 → 原来的下移；长按已经呼出过 TMDB → 这次 KeyUp 什么都不做。
-                        downLongPressJob?.cancel()
-                        downLongPressJob = null
-                        if (!isDownLongPressTriggered) onMoveDown()
-                    }
-                    return@onPreviewKeyEvent true
-                }
-                if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
-                // 三个方向由卡片自己接管：左右决定行滚动锚点，上回分类条。
-                // （↓ 已在上面单独处理：短按下移 / 长按呼出 TMDB 匹配，走不到这里。）
-                when (event.key) {
-                    Key.DirectionUp -> {
-                        onMoveUp()
-                        true
-                    }
-
-                    Key.DirectionLeft -> {
-                        onMoveLeft()
-                        true
-                    }
-
-                    Key.DirectionRight -> {
-                        onMoveRight()
-                        true
-                    }
-
-                    else -> false
-                }
-            }
-            .clickable(interactionSource = interaction, indication = null, onClick = onClick),
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        // 图片区：只有这一层参与缩放、描边与阴影。120dp × 180dp 是 adapter_vod_rect 的固定值。
-        Box(
-            modifier = Modifier
-                .width(POSTER_CARD_WIDTH)
-                .height(POSTER_CARD_HEIGHT)
-                .graphicsLayer {
-                    scaleX = scale
-                    scaleY = scale
-                }
-                .shadow(elevation = elevation, shape = POSTER_SHAPE, clip = false)
-                .clip(POSTER_SHAPE)
-                .background(POSTER_PLACEHOLDER)
-                // 焦点框：未聚焦时 borderStroke 为 null，直接跳过 border 修饰符，一行都不会画；
-                // 只有聚焦时才是 2dp 主题红（用 0dp 描边“隐藏”在 Skia 里仍会画出 hairline 红边）。
-                .then(if (borderStroke != null) Modifier.border(borderStroke, POSTER_SHAPE) else Modifier),
-        ) {
-            AsyncImage(
-                model = posterModel,
-                contentDescription = poster.title,
-                contentScale = ContentScale.Crop,
-                modifier = Modifier.fillMaxSize(),
-            )
-        }
-        // 文字区：marginTop 8dp + 13sp 单行，图片放大时这里尺寸与字号都不变。
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(top = POSTER_TITLE_GAP),
-            contentAlignment = Alignment.Center,
-        ) {
-            Text(
-                text = poster.title,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .then(if (isFocused) Modifier.basicMarquee(iterations = Int.MAX_VALUE) else Modifier),
-                color = if (isFocused) Color.White else POSTER_TITLE_COLOR,
-                fontSize = POSTER_TITLE_SP.sp,
-                maxLines = 1,
-                softWrap = false,
-                overflow = TextOverflow.Ellipsis,
-                textAlign = TextAlign.Center,
-            )
-        }
-    }
 }
 
 /** 在已挂载的 FocusRequester 列表里安全地请求焦点：未组合的 Lazy 项会抛异常，这里降级返回 false。 */
@@ -2352,7 +2091,7 @@ private const val HERO_TMDB_NEIGHBOR_DELAY_MS = 500L
  * 不再按剧名二次搜索（剧名可能重名，`Vod.getId()` 才是站点内唯一键）。
  */
 private data class HeroPoster(
-    /** 在列表中的下标：只用于 LazyRow 的稳定 key，不参与业务。 */
+    /** 在列表中的下标：仅用于排查 / 日志，不参与业务（RecyclerView 按 position 绑定）。 */
     val id: Int,
     val title: String,
     val meta: String,
@@ -2780,34 +2519,14 @@ private val HERO_TAB_RING_STROKE = 1.5.dp
 // 海报区 posterArea（L142-191）+ 卡片 adapter_vod_rect（L24-27、L45-57）
 // ---------------------------------------------------------------------------
 private val POSTER_AREA_HEIGHT = 215.dp     // L147 / L156
-private val POSTER_TITLE_GAP = 8.dp         // adapter_vod_rect L53 layout_marginTop
 private const val POSTER_TITLE_SP = 13f     // adapter_vod_rect L46 textSize
-private val POSTER_TITLE_COLOR = Color(0xCCFFFFFF) // adapter_vod_rect L47
 
-// 卡片尺寸严格照抄 adapter_vod_rect.xml（L24-25），不再按屏幕反推。
-private val POSTER_CARD_WIDTH = 120.dp
-private val POSTER_CARD_HEIGHT = 180.dp
+// 卡片间距 12dp；卡片自身的宽高 / 圆角 / 焦点红框全部写死在 HeroPosterCard 里。
 private val POSTER_GAP = 12.dp
 
 // 前 4 张（index 0..3）不滚动；第 5 张（index = 4）起把焦点卡滚到屏幕正中，
 // 与逆向原版 HorizontalGridView 的“第 5 张才居中”节奏一致。
 private const val POSTER_SCROLL_ANCHOR = 4
-
-// 参考 ref_docs/VodRectPresenter.java 第 39-41 行：原实现 hasFocus() ? 1.08f : 1.0f；本项目按定稿取 1.1。
-private const val POSTER_FOCUS_SCALE = 1.1f
-
-// 焦点缩放的弹簧参数：dampingRatio 0.8（略有回弹但不过冲）+ stiffness 400（电视遥控器连按时跟手）。
-private const val POSTER_SPRING_DAMPING = 0.8f
-private const val POSTER_SPRING_STIFFNESS = 400f
-
-private val POSTER_FOCUS_ELEVATION = 18.dp
-
-// 参考 VodRectPresenter.java 第 90-101 行：overlay 线宽 density*1dp、四边各外扩 1dp，视觉厚度约 2dp。
-private val POSTER_FOCUS_BORDER = 2.dp
-
-// styles.xml:12-14 —— `Vod.Grid.Large` 的 cornerSize 精确值就是 8dp（父样式 `Vod.Grid` 同为 8dp 圆角）。
-private val POSTER_SHAPE = RoundedCornerShape(8.dp)
-private val POSTER_PLACEHOLDER = Color(0xFF161616)
 
 // 长按阈值：按住 1s 才当成「长按确定键 = 换源」，短按仍是进详情。
 // 用 1s 而不是 500ms：遥控器长按会先重复发 KeyDown，阈值太短容易在「想短按」时误触发换源。
@@ -2825,3 +2544,430 @@ private const val TMDB_LONG_PRESS_MS = 1500L
 
 // 第二排（Tab 胶囊）专用字号：第一排已独立到 [TOP_BAR_SP] = 16sp，形成视觉层级。
 private const val HERO_LABEL_SP = 13f
+
+// ---------------------------------------------------------------------------
+// 海报行（原生 RecyclerView）
+// ---------------------------------------------------------------------------
+
+/** 平滑滚动时长：普通滚动 300ms（`calculateTimeForScrolling`）。 */
+private const val POSTER_SCROLL_MS = 300
+
+/** 末段减速时长：500ms（`calculateTimeForDeceleration`）。 */
+private const val POSTER_DECELERATION_MS = 500
+
+/** 海报卡片图片淡入：300ms（产品定稿；首页其它大图仍用 500ms）。 */
+private const val POSTER_CARD_CROSSFADE_MS = 300
+
+/**
+ * Compose ↔ 海报行 RecyclerView 的握柄。
+ *
+ * `FocusRequester` 只能定位 Compose 节点，定位不到 `AndroidView` 里的卡片；
+ * RecyclerView 挂载时把实例登记进来，Compose 跨区移动（Tab ↓ / 弹窗关闭还焦点）
+ * 直接按 index 请求焦点，不再维护一整套 `posterRequesters`。
+ */
+private class HeroPosterRowHost {
+
+    private var view: HeroPosterRecyclerView? = null
+
+    fun attach(target: HeroPosterRecyclerView) {
+        view = target
+    }
+
+    fun detach(target: HeroPosterRecyclerView) {
+        if (view === target) view = null
+    }
+
+    fun focusPoster(index: Int): Boolean = view?.focusPoster(index) == true
+
+    fun scrollToStart() {
+        view?.scrollToStart()
+    }
+}
+
+/**
+ * 海报行 Adapter：**只做数据绑定**，尺寸 / 圆角 / 焦点红框全部来自全局唯一 [HeroPosterCard]。
+ *
+ * 图片走 Coil 的 View 扩展（300ms 淡入）而不是卡片内部的 Glide：
+ * 卡片已置 `externalImageLoading = true`，自身不再发请求；`onViewRecycled` 里
+ * `dispose()` 取消在途下载，彻底避免快速滑动时「上一张图晚到、贴到复用的卡上」。
+ *
+ * 按键语义与重构前的 Compose 卡片逐条对齐：
+ * - 确定键短按 = 进详情；按住 1s = 换源弹窗（触发后吞掉后续所有事件，直到 KeyUp）；
+ * - 方向下键短按 = 原地不动（下面没有可聚焦控件）；按住 1.5s = TMDB 手动匹配；
+ * - 方向上下左右之外的按键全部放行；左右交给 RecyclerView 自己的焦点搜索。
+ */
+private class HeroPosterAdapter(
+    private val onFocused: (Int) -> Unit,
+    private val onClick: (HeroPoster) -> Unit,
+    private val onLongPress: (HeroPoster) -> Unit,
+    private val onLongPressTmdb: (Int) -> Unit,
+    private val onMoveUp: (Int) -> Unit,
+) : RecyclerView.Adapter<HeroPosterAdapter.ViewHolder>() {
+
+    private var items: List<HeroPoster> = emptyList()
+
+    /** 返回 true 表示列表真的换了（调用方据此复位焦点锚点）。 */
+    fun submit(next: List<HeroPoster>): Boolean {
+        // HeroPoster 是 data class，Vod 没有 equals，但列表重建时元素引用不变 => 这里能挡住无意义的刷新。
+        if (next == items) return false
+        items = next
+        notifyDataSetChanged()
+        return true
+    }
+
+    override fun getItemCount(): Int = items.size
+
+    override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): ViewHolder {
+        val card = HeroPosterCard(parent.context).apply {
+            // 首页剧名 13sp（adapter_vod_rect L46）；宽高 / 圆角 / 红框全部写死在卡片里，这里不动。
+            titleTextSizeSp = POSTER_TITLE_SP
+            // 图片交给 Coil：卡片自己不再发 Glide 请求，也不会画「剧名首字」盖住海报。
+            externalImageLoading = true
+        }
+        val holder = ViewHolder(card)
+        card.setOnClickListener {
+            holder.poster()?.let(onClick)
+        }
+        card.setOnLongClickListener {
+            val poster = holder.poster() ?: return@setOnLongClickListener false
+            onLongPress(poster)
+            true
+        }
+        card.setOnKeyListener { _, keyCode, event -> holder.handleKey(keyCode, event) }
+        card.setOnFocusChangeListener { _, hasFocus ->
+            if (hasFocus) {
+                val position = holder.bindingAdapterPosition
+                if (position != RecyclerView.NO_POSITION) onFocused(position)
+            } else {
+                // 失焦只停计时，**不复位**「已触发」标记：弹窗拿走了 KeyUp，卡片收不到。
+                holder.cancelTimers()
+            }
+        }
+        return holder
+    }
+
+    override fun onBindViewHolder(holder: ViewHolder, position: Int) {
+        val poster = items[position]
+        val card = holder.card
+        holder.cancelTimers()
+        // tag 只是排查用的旁路信息，不参与点击定位（点击一律按 bindingAdapterPosition 取）。
+        card.tag = poster
+        // 先 title、再 imageUrl：两个 setter 都会走 bindPoster()，externalImageLoading = true
+        // 时它们只维护占位状态，不会发 Glide 请求。
+        card.title = poster.title
+        card.imageUrl = poster.url
+        // Coil View 扩展 + 300ms 淡入；取消在 onViewRecycled 的 dispose()。
+        card.posterImageView.load(poster.url) {
+            crossfade(POSTER_CARD_CROSSFADE_MS)
+        }
+    }
+
+    override fun onViewRecycled(holder: ViewHolder) {
+        super.onViewRecycled(holder)
+        holder.cancelTimers()
+        // 【必须】取消在途的 Coil 请求：请求晚到时会把上一张图贴到复用的卡上（串图 / 错位）。
+        holder.card.posterImageView.dispose()
+        // 兜底：取消卡片内部可能残留的 Glide 请求并复位占位图。
+        holder.card.releasePoster()
+        holder.card.tag = null
+    }
+
+    inner class ViewHolder(val card: HeroPosterCard) : RecyclerView.ViewHolder(card) {
+
+        private var centerTimer: Runnable? = null
+        private var centerTriggered = false
+        private var downTimer: Runnable? = null
+
+        /** 当前绑定的条目：位置可能因为 notifyDataSetChanged 失效，取不到就当作无数据。 */
+        fun poster(): HeroPoster? = items.getOrNull(bindingAdapterPosition)
+
+        fun cancelTimers() {
+            centerTimer?.let(card::removeCallbacks)
+            centerTimer = null
+            downTimer?.let(card::removeCallbacks)
+            downTimer = null
+        }
+
+        fun handleKey(keyCode: Int, event: KeyEvent): Boolean {
+            // 【长按锁】长按一旦被消费，后续所有事件（系统重复 KeyDown、迟到的 KeyUp、方向键）
+            // 全部吃掉，只有松开按键（KeyUp）才解锁 —— 否则弹窗下面会再打开一次详情页。
+            if (centerTriggered) {
+                if (event.action == KeyEvent.ACTION_UP) centerTriggered = false
+                return true
+            }
+            when (keyCode) {
+                KeyEvent.KEYCODE_DPAD_CENTER,
+                KeyEvent.KEYCODE_ENTER,
+                KeyEvent.KEYCODE_NUMPAD_ENTER,
+                -> {
+                    if (event.action == KeyEvent.ACTION_DOWN) {
+                        // 系统长按会重复发 KeyDown：只有首次按下才起计时，其余重复事件吞掉。
+                        if (event.repeatCount == 0) {
+                            centerTriggered = false
+                            cancelCenter()
+                            val timer = Runnable {
+                                centerTriggered = true
+                                centerTimer = null
+                                Log.e("ChangeSource", "卡片长按 ${POSTER_LONG_PRESS_MS}ms 触发换源")
+                                poster()?.let(onLongPress)
+                            }
+                            centerTimer = timer
+                            card.postDelayed(timer, POSTER_LONG_PRESS_MS)
+                        }
+                    } else {
+                        // KeyUp：先停计时；触发过长按 → 这次 KeyUp 必须被吞掉，绝不能再进详情。
+                        cancelCenter()
+                        if (!centerTriggered) poster()?.let(onClick)
+                    }
+                    return true
+                }
+
+                KeyEvent.KEYCODE_DPAD_DOWN -> {
+                    if (event.action == KeyEvent.ACTION_DOWN) {
+                        if (event.repeatCount == 0) {
+                            cancelDown()
+                            val position = bindingAdapterPosition
+                            if (position != RecyclerView.NO_POSITION) {
+                                val timer = Runnable {
+                                    downTimer = null
+                                    Log.e("ChangeSource", "卡片长按下键 ${TMDB_LONG_PRESS_MS}ms 触发 TMDB 匹配")
+                                    onLongPressTmdb(position)
+                                }
+                                downTimer = timer
+                                card.postDelayed(timer, TMDB_LONG_PRESS_MS)
+                            }
+                        }
+                    } else {
+                        // 短按保持原来的「不动」（重构前 onMoveDown = {}），但仍消费掉事件。
+                        cancelDown()
+                    }
+                    return true
+                }
+
+                KeyEvent.KEYCODE_DPAD_UP -> {
+                    if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
+                        val position = bindingAdapterPosition
+                        if (position != RecyclerView.NO_POSITION) onMoveUp(position)
+                    }
+                    return true
+                }
+            }
+            // 左右放行：交给 RecyclerView 的焦点搜索，最终由 [HeroPosterRecyclerView.scrollToIndex] 居中。
+            return false
+        }
+
+        private fun cancelCenter() {
+            centerTimer?.let(card::removeCallbacks)
+            centerTimer = null
+        }
+
+        private fun cancelDown() {
+            downTimer?.let(card::removeCallbacks)
+            downTimer = null
+        }
+    }
+}
+
+/**
+ * 海报行：横向 RecyclerView + 自定义 SmoothScroller。
+ *
+ * 对齐规则（与原 Compose 版逐字一致）：
+ * - `clipToPadding = false` + `paddingStart = 24dp`：第一张贴左，滚动时卡片可以画进行首 padding 区；
+ * - `paddingEnd = (宽度 - 120dp) / 2`：最后一张也能滚到屏幕正中；
+ * - `scrollToIndex(index)`：index < 4 回 position 0；index >= 4 平滑滚到该 position 并居中。
+ */
+private class HeroPosterRecyclerView @JvmOverloads constructor(
+    context: Context,
+    attrs: AttributeSet? = null,
+) : RecyclerView(context, attrs) {
+
+    var onPosterFocused: ((Int) -> Unit)? = null
+    var onClick: ((HeroPoster) -> Unit)? = null
+    var onLongPress: ((HeroPoster) -> Unit)? = null
+    var onLongPressTmdb: ((Int) -> Unit)? = null
+    var onMoveUp: ((Int) -> Unit)? = null
+
+    private val posterAdapter = HeroPosterAdapter(
+        onFocused = { index ->
+            // 焦点走到哪一张，就按规则把哪一张滚到位（Leanback 的「第 5 张起居中」）。
+            lastFocusIndex = index
+            scrollToIndex(index)
+            onPosterFocused?.invoke(index)
+        },
+        onClick = { poster -> onClick?.invoke(poster) },
+        onLongPress = { poster -> onLongPress?.invoke(poster) },
+        onLongPressTmdb = { index -> onLongPressTmdb?.invoke(index) },
+        onMoveUp = { index -> onMoveUp?.invoke(index) },
+    )
+
+    private val startPaddingPx: Int = dp(HERO_PADDING.value.toInt())
+    private val cardWidthPx: Int = dp(HeroPosterCard.CARD_WIDTH_DP)
+
+    /** 最近一次已经滚到位的下标：Compose 每次重组都会 syncFocus，这里挡住重复滚动。 */
+    private var lastFocusIndex = -1
+
+    init {
+        layoutManager = HeroPosterLayoutManager(context)
+        adapter = posterAdapter
+        // 铺满整行、不裁剪 padding：焦点卡可以画到 24dp 行首之外（与原 LazyRow 一致）。
+        clipToPadding = false
+        setHasFixedSize(true)
+        itemAnimator = null
+        overScrollMode = View.OVER_SCROLL_NEVER
+        // 焦点只落在卡片上，容器本身不抢焦点。
+        isFocusable = false
+        addItemDecoration(HeroPosterGapDecoration(dp(POSTER_GAP.value.toInt())))
+    }
+
+    /**
+     * 行尾 padding 必须按**当前宽度**算：Compose 侧是 `fillMaxWidth()`，
+     * 宽度 = 屏幕宽度，`(宽 - 120dp) / 2` 才能让最后一张停在正中。
+     *
+     * 放在 `super.onMeasure` 之前：同一帧就用正确 padding 布局。
+     */
+    override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+        val width = View.MeasureSpec.getSize(widthMeasureSpec)
+        val end = ((width - cardWidthPx) / 2).coerceAtLeast(startPaddingPx)
+        if (paddingLeft != startPaddingPx || paddingRight != end) {
+            setPadding(startPaddingPx, 0, end, 0)
+        }
+        super.onMeasure(widthMeasureSpec, heightMeasureSpec)
+    }
+
+    /** 数据没变就什么都不做：`update` 每次重组都会调用，不能每次都 notifyDataSetChanged。 */
+    fun bindData(posters: List<HeroPoster>) {
+        if (posterAdapter.submit(posters)) lastFocusIndex = -1
+    }
+
+    /** Compose → View：外部焦点下标变了才滚，避免和用户按键抢同一个动画。 */
+    fun syncFocus(index: Int) {
+        if (index < 0 || index >= posterAdapter.itemCount) return
+        if (index == lastFocusIndex) return
+        lastFocusIndex = index
+        // 焦点不在海报行（例如刚切完分类、焦点还在 Tab 上）时只记状态，不滚动。
+        if (focusedChild == null) return
+        scrollToIndex(index)
+    }
+
+    /**
+     * 居中吸附：
+     * - index < [POSTER_SCROLL_ANCHOR]：整行回最左，第一张贴左 24dp（已经在最左就完全不动）；
+     * - index >= [POSTER_SCROLL_ANCHOR]：平滑滚到该 position，由 [HeroPosterSmoothScroller] 居中。
+     */
+    fun scrollToIndex(index: Int) {
+        if (index < 0 || index >= posterAdapter.itemCount) return
+        if (index < POSTER_SCROLL_ANCHOR) {
+            if (computeHorizontalScrollOffset() != 0) smoothScrollToPosition(0)
+            return
+        }
+        smoothScrollToPosition(index)
+    }
+
+    /** 切分类后瞬间回到最左：不做动画，避免「Tab 刚选中、下面还在滑」的错位感。 */
+    fun scrollToStart() {
+        stopScroll()
+        (layoutManager as? LinearLayoutManager)?.scrollToPositionWithOffset(0, 0)
+        lastFocusIndex = 0
+    }
+
+    /**
+     * 按 index 抢焦点（Compose 的 FocusRequester 定位不到 AndroidView 里的卡片）。
+     *
+     * 目标不在屏幕内时先瞬间定位到它；RecyclerView 要下一帧才完成布局，
+     * 所以本次返回 false，调用方下一帧再调一次即可。
+     */
+    fun focusPoster(index: Int): Boolean {
+        if (index < 0 || index >= posterAdapter.itemCount) return false
+        val attached = findViewHolderForAdapterPosition(index)?.itemView
+        if (attached != null && attached.isAttachedToWindow && attached.requestFocus()) return true
+        (layoutManager as? LinearLayoutManager)?.scrollToPositionWithOffset(
+            index,
+            if (index < POSTER_SCROLL_ANCHOR) 0 else centeredOffset(),
+        )
+        val target = findViewHolderForAdapterPosition(index)?.itemView
+        return target != null && target.isAttachedToWindow && target.requestFocus()
+    }
+
+    /** 卡片左边缘距 paddingStart 的距离：让卡片中心落在 RecyclerView 的几何中心。 */
+    private fun centeredOffset(): Int = (width - cardWidthPx) / 2 - startPaddingPx
+
+    private fun dp(value: Int): Int = (value * resources.displayMetrics.density).roundToInt()
+}
+
+/**
+ * 横向 LayoutManager：`smoothScrollToPosition` 换成 [HeroPosterSmoothScroller]。
+ *
+ * `RecyclerView.smoothScrollToPosition()` 没有 offset 参数，居中只能由 Scroller 决定；
+ * 这也是不能直接用系统 API 做「第 5 张起居中」的原因。
+ */
+private class HeroPosterLayoutManager(context: Context) :
+    LinearLayoutManager(context, LinearLayoutManager.HORIZONTAL, false) {
+
+    override fun smoothScrollToPosition(
+        recyclerView: RecyclerView,
+        state: RecyclerView.State?,
+        position: Int,
+    ) {
+        val scroller = HeroPosterSmoothScroller(recyclerView.context).apply {
+            targetPosition = position
+        }
+        startSmoothScroll(scroller)
+    }
+
+    /**
+     * 焦点卡由 [HeroPosterRecyclerView.scrollToIndex] 统一做居中滚动，
+     * 这里屏蔽 RecyclerView 默认的「最小滚动让焦点可见」——
+     * 否则一次按键会先跳一下、再平滑滑到中间，正是要消除的「滚动跳跃」。
+     */
+    override fun onRequestChildFocus(
+        parent: RecyclerView,
+        state: RecyclerView.State?,
+        child: View,
+        focused: View?,
+    ): Boolean = true
+}
+
+/**
+ * 居中吸附的 SmoothScroller。
+ *
+ * 时间参数按定稿：普通滚动 300ms、末段减速 500ms。
+ */
+private class HeroPosterSmoothScroller(context: Context) : LinearSmoothScroller(context) {
+
+    /**
+     * 末段位移：把目标卡中心对准 **RecyclerView 的几何中心**。
+     *
+     * 不能复用默认的 `calculateDtToFit(boxStart, boxEnd)`：
+     * - 行首 24dp、行尾半屏的 padding 不对称，内容区中心整体偏左；
+     * - `getDecoratedRight` 还会把 ItemDecoration 的 12dp 右间距算进去。
+     * 这里直接读 View 的未装饰左右边界，误差为 0。
+     */
+    override fun calculateDxToMakeVisible(view: View, snapPreference: Int): Int {
+        val manager = layoutManager ?: return 0
+        return manager.width / 2 - (view.left + view.right) / 2
+    }
+
+    override fun calculateTimeForScrolling(dx: Int): Int = POSTER_SCROLL_MS
+
+    override fun calculateTimeForDeceleration(dx: Int): Int =
+        if (dx == 0) 0 else POSTER_DECELERATION_MS
+}
+
+/**
+ * 卡片间距：只在**非末项**右侧留 12dp。
+ *
+ * 末项不加右间距，行尾 padding `(宽 - 120dp) / 2` 才能把它精确停在屏幕正中。
+ */
+private class HeroPosterGapDecoration(private val gapPx: Int) : RecyclerView.ItemDecoration() {
+
+    override fun getItemOffsets(
+        outRect: Rect,
+        view: View,
+        parent: RecyclerView,
+        state: RecyclerView.State,
+    ) {
+        val position = parent.getChildAdapterPosition(view)
+        val last = (parent.adapter?.itemCount ?: 0) - 1
+        outRect.set(0, 0, if (position in 0 until last) gapPx else 0, 0)
+    }
+}
