@@ -2852,6 +2852,25 @@ private class HeroPosterAdapter(
                     focusDiag { "a/handleKey UP action=${event.action} pos=${bindingAdapterPosition} -> return true" }
                     return true
                 }
+
+                KeyEvent.KEYCODE_DPAD_LEFT -> {
+                    // 【LEFT 边界】第 1 张再按 LEFT：直接消费，绝不让事件冒泡到窗口级 FocusFinder。
+                    //
+                    // 底层链路：卡片返回 false → RecyclerView.focusSearch 在本行找不到候选 →
+                    // onFocusSearchFailed 返回 null → RecyclerView 退回 super.focusSearch →
+                    // 沿父链到 DecorView，由整个窗口的 FocusFinder 重新找目标，
+                    // 于是被左上方的顶栏接住。LEFT 是唯一会命中的方向：窗口右侧没有可聚焦项，
+                    // RIGHT 到底时 FocusFinder 返回 null，焦点原地不动。
+                    //
+                    // 只处理「焦点确实停在 position 0」：NO_POSITION / 其它位置一律继续放行，
+                    // 保持原有「一次只走一张」的横向手感；RIGHT / UP / DOWN 完全不动。
+                    if (bindingAdapterPosition == 0) {
+                        focusDiag {
+                            "a/handleKey LEFT 边界消费 action=${event.action} pos=0 -> return true"
+                        }
+                        return true
+                    }
+                }
             }
             // 左右放行：交给 RecyclerView 的焦点搜索，最终由 [HeroPosterRecyclerView.scrollToIndex] 居中。
             if (horizontal) {
