@@ -2673,10 +2673,41 @@ private class HeroPosterAdapter(
 
     /** 返回 true 表示列表真的换了（调用方据此复位焦点锚点）。 */
     fun submit(next: List<HeroPoster>): Boolean {
-        // HeroPoster 是 data class，Vod 没有 equals，但列表重建时元素引用不变 => 这里能挡住无意义的刷新。
+        // 值比较：HeroPoster 是 data class（逐字段），Vod.equals 按 id（无 id 按 name），
+        // Site.equals 按 key，所以列表重建但内容一致时这里就能挡住无意义的刷新。
         if (next == items) return false
+        val previous = items
         items = next
-        notifyDataSetChanged()
+        // 【精准刷新】长度与 posterKey 序列都没变 = 只是「同一条目上的某些字段变了」
+        // （典型来源：焦点驱动的 TMDB 合并写回 synopsis / backdropUrl / logoUrl）。
+        // 此时绝不能 notifyDataSetChanged()：它把整排 holder 标成 FLAG_INVALID 回池，
+        // 正在放大的焦点卡会被 onViewRecycled 硬复位 scale = 1f，再被 onLayout 抢回焦点
+        // 重新放大 —— 视觉上就是「呼吸」。notifyItemChanged 只标 FLAG_UPDATE：
+        // 同一个 holder 原地重 bind，不回池、不经过 onViewRecycled，其余卡一帧都不动。
+        // 长度 / 顺序变了才退回整排刷新（没有 stable id，位置一换就无法安全复用 holder）。
+        val sameShape = previous.size == next.size &&
+            previous.indices.all { previous[it].posterKey == next[it].posterKey }
+        if (!sameShape) {
+            focusDiag {
+                "d/submit 整排刷新 oldCount=${previous.size} newCount=${next.size} " +
+                    "同一序列=${previous.size == next.size}"
+            }
+            notifyDataSetChanged()
+            return true
+        }
+        // 「字段真的变了」直接复用上面那套 equals：按 position 逐项比较，不新造字段比对。
+        // 只有内容确实不同的 position 才标脏，焦点卡内容没变时连 bind 都不会发生。
+        var changed = 0
+        for (index in next.indices) {
+            if (previous[index] != next[index]) {
+                notifyItemChanged(index)
+                changed++
+            }
+        }
+        focusDiag {
+            "d/submit 精准刷新 count=${next.size} changed=$changed " +
+                "positions=${next.indices.filter { previous[it] != next[it] }}"
+        }
         return true
     }
 
