@@ -751,9 +751,12 @@ private fun HeroHomeScreen(
                 // 首帧同步缓存里已经带着它，展示效果一致，但不会污染换源检索。
                 poster.copy(
                     logoUrl = logoUrl,
-                    // 竖版海报仍以源站为准（见 `toHomeTmdbData`：卡片图不替换）；
-                    // 只有源站没给图时才用 TMDB 竖图兜底 —— 否则手动匹配后卡片依旧空白。
-                    url = poster.url.ifBlank { data?.item?.posterUrl.orEmpty() },
+                    // 竖版海报：自动匹配仍以源站为准（见 `toHomeTmdbData`：卡片图不替换）；
+                    // 手动匹配是用户明确选定的条目，且源站图可能为空 / 403 打不开，这里直接换成
+                    // TMDB 竖图（空值不覆盖）。否则手动匹配后卡片依旧空白。
+                    url = poster.url.takeIf { it.isNotBlank() && data?.manual != true }
+                        ?: data?.item?.posterUrl?.takeIf { it.isNotBlank() }
+                        ?: poster.url,
                     // 评分 / 年份来自 TMDB；备注仍取源站（「更新至12集」这类信息 TMDB 没有）。
                     meta = data?.let { buildMeta(poster.vod, it.year, it.rating) } ?: poster.meta,
                     backdropUrl = data?.highResBackdrop?.takeIf { it.isNotBlank() } ?: poster.backdropUrl,
@@ -2653,6 +2656,15 @@ private class HeroPosterRowHost {
 }
 
 /**
+ * `posterImageView.tag` 的绑定标记：串图防护用。
+ *
+ * 只比对 URL 不够：不同条目完全可能拿到同一个地址（空串 / 站点占位图 / 失效 CDN），
+ * 此时旧 drawable 会被当成「同一张图」保留下来。所以同时记条目身份（`posterKey`）与 URL，
+ * 任一变化都视为换了图，先取消在途请求并清掉旧图。
+ */
+private data class BoundPosterThumb(val posterKey: String, val url: String)
+
+/**
  * 海报行 Adapter：**只做数据绑定**，尺寸 / 圆角 / 焦点红框全部来自全局唯一 [HeroPosterCard]。
  *
  * 图片走 Coil 的 View 扩展（300ms 淡入）而不是卡片内部的 Glide：
@@ -2781,9 +2793,10 @@ private class HeroPosterAdapter(
         // 因此换 URL 时先取消该 View 的在途请求、清掉旧图；同 URL 的精准刷新保留原图，避免闪白。
         val posterView = card.posterImageView
         val posterUrl = poster.url
-        if (posterView.tag != posterUrl) {
+        val bound = posterView.tag as? BoundPosterThumb
+        if (bound == null || bound.posterKey != poster.posterKey || bound.url != posterUrl) {
             posterView.dispose()
-            posterView.tag = posterUrl
+            posterView.tag = BoundPosterThumb(poster.posterKey, posterUrl)
             if (posterUrl.isBlank()) {
                 // 空地址没有可加载的内容：直接回占位图，绝不复用上一张卡的图。
                 card.releasePoster()
