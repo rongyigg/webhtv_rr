@@ -751,6 +751,9 @@ private fun HeroHomeScreen(
                 // 首帧同步缓存里已经带着它，展示效果一致，但不会污染换源检索。
                 poster.copy(
                     logoUrl = logoUrl,
+                    // 竖版海报仍以源站为准（见 `toHomeTmdbData`：卡片图不替换）；
+                    // 只有源站没给图时才用 TMDB 竖图兜底 —— 否则手动匹配后卡片依旧空白。
+                    url = poster.url.ifBlank { data?.item?.posterUrl.orEmpty() },
                     // 评分 / 年份来自 TMDB；备注仍取源站（「更新至12集」这类信息 TMDB 没有）。
                     meta = data?.let { buildMeta(poster.vod, it.year, it.rating) } ?: poster.meta,
                     backdropUrl = data?.highResBackdrop?.takeIf { it.isNotBlank() } ?: poster.backdropUrl,
@@ -2772,9 +2775,27 @@ private class HeroPosterAdapter(
         // 时它们只维护占位状态，不会发 Glide 请求。
         card.title = poster.title
         card.imageUrl = poster.url
-        // Coil View 扩展 + 300ms 淡入；取消在 onViewRecycled 的 dispose()。
-        card.posterImageView.load(poster.url) {
-            crossfade(POSTER_CARD_CROSSFADE_MS)
+        // 【串图防护】Coil 的 crossfade 以 View 当前 drawable 为起点：同一个 holder 换成另一条数据时，
+        // 上一张卡的海报会一直留在画面里，直到新请求成功；而源站本来就没有海报（空地址）时
+        // 新请求永远不会成功，旧剧海报就会永久贴在别的条目上。
+        // 因此换 URL 时先取消该 View 的在途请求、清掉旧图；同 URL 的精准刷新保留原图，避免闪白。
+        val posterView = card.posterImageView
+        val posterUrl = poster.url
+        if (posterView.tag != posterUrl) {
+            posterView.dispose()
+            posterView.tag = posterUrl
+            if (posterUrl.isBlank()) {
+                // 空地址没有可加载的内容：直接回占位图，绝不复用上一张卡的图。
+                card.releasePoster()
+            } else {
+                posterView.setImageDrawable(null)
+            }
+        }
+        if (posterUrl.isNotBlank()) {
+            // Coil View 扩展 + 300ms 淡入；取消在 onViewRecycled 的 dispose()。
+            posterView.load(posterUrl) {
+                crossfade(POSTER_CARD_CROSSFADE_MS)
+            }
         }
     }
 
@@ -2783,6 +2804,8 @@ private class HeroPosterAdapter(
         holder.cancelTimers()
         // 【必须】取消在途的 Coil 请求：请求晚到时会把上一张图贴到复用的卡上（串图 / 错位）。
         holder.card.posterImageView.dispose()
+        // 清掉「本 holder 上次绑定的是哪个 URL」的标记，下次 bind 一定会重新加载。
+        holder.card.posterImageView.tag = null
         // 兜底：取消卡片内部可能残留的 Glide 请求并复位占位图。
         holder.card.releasePoster()
         holder.card.tag = null
