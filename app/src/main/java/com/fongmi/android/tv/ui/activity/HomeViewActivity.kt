@@ -1664,7 +1664,7 @@ private class HomeChipAdapter(
  * RecyclerView 自身的滚动夹取与 `clipToPadding="false"` 的 24dp 内边距决定。
  */
 class CenterSmoothScroller(context: Context) : LinearSmoothScroller(context) {
-    override fun getHorizontalSnapPreference(): Int = SNAP_TO_CENTER
+    override fun getHorizontalSnapPreference(): Int = SNAP_TO_START
     override fun getVerticalSnapPreference(): Int = SNAP_TO_START
 
     override fun calculateDxToMakeVisible(view: View, snapPreference: Int): Int {
