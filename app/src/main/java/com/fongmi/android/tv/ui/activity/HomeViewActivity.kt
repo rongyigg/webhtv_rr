@@ -14,7 +14,6 @@ import android.util.TypedValue
 import android.view.Gravity
 import android.view.KeyEvent
 import android.view.View
-import android.view.ViewConfiguration
 import android.view.ViewGroup
 import android.widget.FrameLayout
 import android.widget.ImageView
@@ -141,8 +140,20 @@ class HomeViewActivity : AppCompatActivity() {
     /** 原版 `X`：长按下键 → TMDB 手动匹配弹窗。 */
     private val longPressDownRunnable = Runnable { onPosterLongPressFired(KeyEvent.KEYCODE_DPAD_DOWN) }
 
+    /** 长按阈值：写死 1000ms（防误触，不用系统 500ms 的默认长按时长）。 */
+    private val posterLongPressMs = 1000L
+
     /** TMDB 手动匹配弹窗的 Compose 宿主（0×0，只承载组合；窗口由弹窗自己开）。 */
     private var tmdbMatchHost: ComposeView? = null
+
+    /**
+     * 横图同步兜底缓存：`posterKey → 已解析横图`。
+     *
+     * `bindBackdrop` 在**首帧绘制之前**同步查一次磁盘匹配缓存；命中后写进这里，
+     * 焦点来回移动时不必重复读盘（`Setting.getTmdbMatchCache()` 是 synchronized 的读盘 + Gson 解析）。
+     * 每次 `renderHome` 换数据时清空，避免换源后拿到旧地址。
+     */
+    private val syncBackdrops = HashMap<String, String>()
 
     // ------------------------------------------------------------------
     // XML 节点
@@ -278,6 +289,22 @@ class HomeViewActivity : AppCompatActivity() {
         if (site.key.orEmpty() == loadedHomeSiteKey) return
         Log.d(TAG, "接口源已变化: $loadedHomeSiteKey -> ${site.key}，重新请求 homeContent")
         refreshHome("设置页返回")
+    }
+
+    /**
+     * 长按状态的**生命周期兜底**（不是另一套状态机）：
+     *
+     * 换源 / TMDB 两个弹窗都是独立 Window，拿到焦点后本窗口收不到那次 `ACTION_UP`，
+     * `isLongPressTriggered` 会一直挂着，导致之后所有连发被误吞。窗口重新拿到焦点
+     * （弹窗关闭 / 回前台）时，物理按键必然已经松开，这里无条件清一次即可。
+     */
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (!hasFocus || !::recycler.isInitialized) return
+        recycler.removeCallbacks(longPressDownRunnable)
+        recycler.removeCallbacks(longPressCenterRunnable)
+        isKeyDown = false
+        isLongPressTriggered = false
     }
 
     override fun onDestroy() {
@@ -696,6 +723,8 @@ class HomeViewActivity : AppCompatActivity() {
     private fun renderHome(list: List<Vod>, site: Site) {
         val next = buildPosterItems(list, site)
         items = next
+        // 换了一整页数据：上一页解析出来的横图地址全部作废（换源 / 换 Tab 后 key 可能撞上旧值）。
+        syncBackdrops.clear()
         navBar.visibility = View.VISIBLE
         if (next.isEmpty()) {
             showEmpty()
@@ -885,29 +914,67 @@ class HomeViewActivity : AppCompatActivity() {
      * 所以这里必须先看 `tmdb.item.backdropUrl`，否则又会把竖图拉满全屏。
      */
     private fun bindBackdrop(item: HomePosterItem, tmdb: HeroTmdbData?, position: Int) {
-        val backdrop = when {
-            // 详情已经回来：以详情为准（没有真横图就用竖图，哪怕缓存里曾匹配到别的条目）。
-            tmdb != null -> if (tmdb.item.backdropUrl.isNullOrBlank()) "" else tmdb.highResBackdrop
-            else -> item.backdropUrl
-        }
-        // 【铁律】先判横图地址，再决定竖图与 heroBg —— 两者互斥，不共帧。
-        // 只要 `backdrop` 非空，`posterCard` 就**只能** GONE；全文件不存在第二处可见入口。
-        if (backdrop.isNullOrEmpty()) {
-            // 没有真横图：清空 heroBg，竖图只放在右上角 posterCard 里。
-            HeroImageView.setSharedUrl("")
-            heroBg.reset()
-            heroBg.visibility = View.GONE
-            posterCard.visibility = View.VISIBLE
-            loadPosterCard(item.posterUrl)
+        // 【首帧防闪第一步】在任何布局 / 绘制 / 图片请求之前，把横图**同步**解析出来：
+        // 覆盖表 → item（`buildPosterItems` 已查过一遍）→ 进程内 prefetch → 磁盘匹配缓存。
+        // 冷启动那次绘制只在这里判一次，判空就会一直空到数据回来，绝不会「先竖图后横图」。
+        val backdrop = resolveBackdrop(item, tmdb)
+
+        // 【铁律】只要拿到横图，立刻收竖图，再发请求 —— 顺序绝不能反，
+        // 也绝不把 `posterCard.visibility = View.GONE` 写进 `loadImage` 的异步回调。
+        if (backdrop.isNotEmpty()) {
+            posterCard.visibility = View.GONE
+            HeroImageView.setSharedUrl(backdrop)
+            heroBg.visibility = View.VISIBLE
+            // 不传回调：竖图在上面那一行之前就已经收掉了，成功 / 失败都不需要再动 `posterCard`。
+            heroBg.loadImage(backdrop, position, null)
             return
         }
-        // 有横图：**先**收竖图、**再**发请求。绝不把 GONE 放进 `loadImage` 回调，
-        // 否则首帧（冷启动 / 焦点切换 / TMDB 结果异步到达任意一拍）必闪一张竖图。
-        posterCard.visibility = View.GONE
-        HeroImageView.setSharedUrl(backdrop)
-        heroBg.visibility = View.VISIBLE
-        // 不传回调：竖图在这一行之前就已经收掉了，成功 / 失败都不需要再动 `posterCard`。
-        heroBg.loadImage(backdrop, position, null)
+
+        // 走完全部同步来源仍然没有横图 → 确认该显示竖图，这时才允许 posterCard 可见。
+        HeroImageView.setSharedUrl("")
+        heroBg.reset()
+        heroBg.visibility = View.GONE
+        posterCard.visibility = View.VISIBLE
+        loadPosterCard(item.posterUrl)
+    }
+
+    /**
+     * 同步解析一张卡此刻的横图地址（**零网络、零异步**）。
+     *
+     * 顺序即优先级：
+     * 1. [tmdb]：本次会话已经拿到的 TMDB 覆盖，以它为准（它没有真横图就认为是空，回落竖图）；
+     * 2. `item.backdropUrl`：`buildPosterItems` 建表时已经同步查过一轮；
+     * 3. [syncBackdrops]：本轮首页已解析过的结果（含「确认没有」的空串），避免重复读盘；
+     * 4. [HeroTmdbPrefetchCache]：进程内详情缓存，比磁盘新；
+     * 5. [Setting.getTmdbMatchCache]：冷启动唯一可靠来源，手动匹配优先。
+     *
+     * @return 提档后的横图地址；空串 = 确认没有横图，此时 `posterCard` 才允许显示竖图。
+     */
+    private fun resolveBackdrop(item: HomePosterItem, tmdb: HeroTmdbData?): String {
+        if (tmdb != null) return if (tmdb.item.backdropUrl.isNullOrBlank()) "" else tmdb.highResBackdrop
+        if (item.backdropUrl.isNotBlank()) return item.backdropUrl
+        syncBackdrops[item.posterKey]?.let { return it }
+        val resolved = readBackdropFromCaches(item)
+        // 命中与「确认没有」都记下来：焦点来回移动时不再读盘。
+        syncBackdrops[item.posterKey] = resolved
+        return resolved
+    }
+
+    /** 真正去查缓存的部分：prefetch 优先，其次磁盘匹配缓存（手动匹配优先）。 */
+    private fun readBackdropFromCaches(item: HomePosterItem): String {
+        HeroTmdbPrefetchCache.peek(item.posterKey)?.let { data ->
+            if (!data.item.backdropUrl.isNullOrBlank()) return data.highResBackdrop
+        }
+        // `Setting.getTmdbMatchCache()` 是 synchronized 的读盘 + Gson 解析：
+        // 每张卡最多读一次，结果由 [syncBackdrops] 记住。
+        val cache = runCatching { Setting.getTmdbMatchCache() }.getOrNull() ?: return ""
+        val siteKey = item.site.key.orEmpty()
+        val vodId = item.vod.id.orEmpty()
+        val name = item.vod.name.orEmpty()
+        val manual = runCatching { cache.findManual(siteKey, vodId, name) }.getOrNull()
+        val matched = manual ?: runCatching { cache.find(siteKey, vodId, name) }.getOrNull()
+        if (matched == null || matched.backdropUrl.isNullOrBlank()) return ""
+        return upgradeTmdbImage(matched.backdropUrl.orEmpty(), TMDB_BACKDROP_WIDTH)
     }
 
     private fun loadPosterCard(url: String) {
@@ -977,14 +1044,18 @@ class HomeViewActivity : AppCompatActivity() {
         val vod = item.vod
         val cache = Setting.getTmdbMatchCache()
         val manualItem = cache.findManual(siteKey, vod.id, vod.name)
+        // 磁盘里已有的（手动 / 自动）都不必再搜。
+        val cachedItem = manualItem ?: cache.find(siteKey, vod.id, vod.name)
         // 显式声明可空：Java 侧是平台类型，`?:` 链的推断结果直接 `== null` 判断 + 智能转换最稳。
-        val matched: TmdbItem? = manualItem
-            ?: cache.find(siteKey, vod.id, vod.name)
-            ?: TmdbMatcher(service, config).searchAndMatch(vod.name, vod)
+        val matched: TmdbItem? = cachedItem ?: TmdbMatcher(service, config).searchAndMatch(vod.name, vod)
         if (matched == null) {
             null
         } else {
             val detail = service.detail(matched, config, false)
+            // 【冷启动根治】本次是**在线新匹配**的条目 → 立刻落盘。
+            // 否则它只活在内存（overrides / prefetch），下次冷启动 `resolveBackdrop`
+            // 查不到任何横图，第一帧必然先画竖图、等异步结果回来再收起 —— 这就是那颗闪。
+            if (cachedItem == null) persistAutoTmdbMatch(siteKey, vod, matched)
             HeroTmdbData(
                 item = matched,
                 detail = detail,
@@ -1070,49 +1141,55 @@ class HomeViewActivity : AppCompatActivity() {
      * 焦点落在 Adapter 代码创建的子项上时容器属性不起作用，FocusFinder 会按几何去猜
      * （海报行 ↑ 常常落到最右边的「设置」）。在分发口拦截是唯一能 100% 命中原版语义的位置。
      *
-     * **长按照抄 ref_docs/HomeActivityV2.java**：
-     * - `ACTION_DOWN` + `repeatCount == 0` → `V = true`、`W = false`、`removeCallbacks` +
-     *   `postDelayed(..., ViewConfiguration.getLongPressTimeout())`（`recycler` 作为宿主，与原版 `this.L` 一致）；
-     * - `ACTION_DOWN` + `repeatCount != 0` → `return true`（原版的打断机制）；
-     * - `ACTION_UP` → `removeCallbacks(U / X)`、`z = V && !W`、`V = W = false`、`z` 为真走短按。
+     * **长按（1000ms，防误触）**：
+     * - `ACTION_DOWN` + `repeatCount == 0` → `isKeyDown = true`、`isLongPressTriggered = false`，
+     *   `recycler` 上 `removeCallbacks` + `postDelayed(..., 1000L)`；
+     * - `ACTION_DOWN` + `repeatCount > 0` → **只要 `isLongPressTriggered` 为真就一律 `return true`**，
+     *   弹窗弹出后按键连发一个都不许漏回首页；
+     * - `ACTION_UP` → 撤定时器、算短按、然后才把 `isLongPressTriggered` 复位（**唯一复位点**）。
+     *
+     * **短按只给确定键**：`KEYCODE_DPAD_DOWN` 的短按只吞事件，绝不跳详情。
      */
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         val key = event.keyCode
-        // 原版只在海报行 `L` 里认「下键 / 确定键」（`m2(this.L, getCurrentFocus())` + `tf.L(keyEvent)`）。
+        // 海报行只接管「下键 / 确定键」。
         val isPosterKey = key == KeyEvent.KEYCODE_DPAD_DOWN ||
             key == KeyEvent.KEYCODE_DPAD_CENTER ||
             key == KeyEvent.KEYCODE_ENTER
 
-        // ── ACTION_UP（原版 L1236-1249）────────────────────────────────────────
-        // removeCallbacks(U / X)；z = V && !W；V = false；W = false；z 为真 = 短按 → 回详情。
+        // ── ACTION_UP：真正的抬手，长按状态只在这里复位 ─────────────────────────
         if (event.action == KeyEvent.ACTION_UP && isPosterKey && (isKeyDown || isLongPressTriggered)) {
             recycler.removeCallbacks(longPressDownRunnable)
             recycler.removeCallbacks(longPressCenterRunnable)
             val shortPress = isKeyDown && !isLongPressTriggered
             isKeyDown = false
+            // 弹窗弹出时不改这个标记，必须等到这里（真正收到 ACTION_UP）才允许清零。
             isLongPressTriggered = false
-            // 短按：原版在这里拿 `currentFocus.tag` 的 Vod 直接进详情；
-            // 我们的卡片 tag 不一定是 Vod，用同一个 `focusedIndex`，走同一条路由。
-            if (shortPress) items.getOrNull(focusedIndex)?.let(::onPosterClicked)
+            // 【防误触】短按跳详情只绑定确定键 / Enter；下键短按一律不跳转。
+            if (shortPress && key != KeyEvent.KEYCODE_DPAD_DOWN) {
+                items.getOrNull(focusedIndex)?.let(::onPosterClicked)
+            }
             return true
         }
 
-        // ── ACTION_DOWN（原版 L1344-1360）──────────────────────────────────────
-        if (event.action == KeyEvent.ACTION_DOWN && isPosterKey && recycler.findFocus() != null) {
-            // 连发：原版 `if (repeatCount != 0) return true` —— 这就是「打断连续按键输出」的机制本身。
-            if (event.repeatCount != 0) return true
-            isKeyDown = true
-            isLongPressTriggered = false
-            // 原版：removeCallbacks 后 postDelayed(getLongPressTimeout())
-            val timeout = ViewConfiguration.getLongPressTimeout().toLong()
-            if (key == KeyEvent.KEYCODE_DPAD_DOWN) {
-                recycler.removeCallbacks(longPressDownRunnable)
-                recycler.postDelayed(longPressDownRunnable, timeout)
-            } else {
-                recycler.removeCallbacks(longPressCenterRunnable)
-                recycler.postDelayed(longPressCenterRunnable, timeout)
+        // ── ACTION_DOWN ─────────────────────────────────────────────────────────
+        if (event.action == KeyEvent.ACTION_DOWN) {
+            // 长按已触发：连发事件全部吃掉，一个都不准漏。
+            if (isLongPressTriggered && event.repeatCount > 0) return true
+            if (isPosterKey && recycler.findFocus() != null) {
+                // 未触发的连发：同样吃掉，避免重复起定时器 / 漏键。
+                if (event.repeatCount != 0) return true
+                isKeyDown = true
+                isLongPressTriggered = false
+                if (key == KeyEvent.KEYCODE_DPAD_DOWN) {
+                    recycler.removeCallbacks(longPressDownRunnable)
+                    recycler.postDelayed(longPressDownRunnable, posterLongPressMs)
+                } else {
+                    recycler.removeCallbacks(longPressCenterRunnable)
+                    recycler.postDelayed(longPressCenterRunnable, posterLongPressMs)
+                }
+                return true
             }
-            return true
         }
 
         // ── 其余按键：原焦点路由原样保留 ───────────────────────────────────────
@@ -1126,10 +1203,10 @@ class HomeViewActivity : AppCompatActivity() {
     }
 
     /**
-     * 长按到点（对应原版 `U` / `X` 两个 Runnable 的 `run()`）：`W = true` 后弹窗。
+     * 1000ms 到点：先落 `isLongPressTriggered = true`，再弹窗。
      *
-     * 弹窗是独立 Window，弹出后系统自然把焦点交给它，后续按键不会再回到 `recycler`，
-     * 所以不需要任何额外的锁 —— 这与原版 `this.W` 的唯一职责完全一致（防止再走短按）。
+     * 标记**绝不在这里复位**：只有真正收到 `ACTION_UP`（[dispatchKeyEvent] 的 UP 分支）
+     * 或窗口重新拿到焦点（[onWindowFocusChanged] 兜底）才允许清零。
      */
     private fun onPosterLongPressFired(key: Int) {
         isLongPressTriggered = true
@@ -1245,6 +1322,27 @@ class HomeViewActivity : AppCompatActivity() {
                 Setting.putTmdbMatchCache(cache)
             }
         }.onFailure { Log.w(TAG, "手动匹配落盘失败: ${item.title} | ${it.message}") }
+    }
+
+    /**
+     * 把**在线新匹配**到的条目写进磁盘匹配缓存 —— 这是冷启动唯一的同步横图来源。
+     *
+     * 不落盘的话，匹配结果只活在内存（`tmdbOverrides` / `HeroTmdbPrefetchCache`），
+     * 下次冷启动 `resolveBackdrop` 什么都查不到，首帧只能先画竖图再等异步结果收起。
+     *
+     * - 只在 TMDB 的 IO 链路里调用，不占主线程；
+     * - `TmdbMatchCache.put` 内部拒绝覆盖手动选择，不会冲掉用户手动匹配；
+     * - 失败只记日志，本次会话的界面不受影响。
+     */
+    private fun persistAutoTmdbMatch(siteKey: String?, vod: Vod, item: TmdbItem) {
+        if (item.tmdbId <= 0) return
+        runCatching {
+            synchronized(Setting::class.java) {
+                val cache = Setting.getTmdbMatchCache()
+                cache.put(siteKey, vod.id.ifBlank { vod.name }, vod.name, item)
+                Setting.putTmdbMatchCache(cache)
+            }
+        }.onFailure { Log.w(TAG, "自动匹配落盘失败: ${vod.name} | ${it.message}") }
     }
 
     private fun onDpadUp(): Boolean {
