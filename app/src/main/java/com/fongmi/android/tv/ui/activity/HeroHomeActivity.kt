@@ -19,6 +19,7 @@ import androidx.activity.compose.setContent
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -59,6 +60,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
@@ -800,6 +802,12 @@ private fun HeroHomeScreen(
                     // 评分 / 年份来自 TMDB；备注仍取源站（「更新至12集」这类信息 TMDB 没有）。
                     meta = data?.let { buildMeta(poster.vod, it.year, it.rating) } ?: poster.meta,
                     backdropUrl = data?.highResBackdrop?.takeIf { it.isNotBlank() } ?: poster.backdropUrl,
+                    // 【首帧判定】只认真横图：`highResBackdrop` 本身带「TMDB 没有横图就退回竖图」
+                    // 的兜底（见 `toHomeTmdbData`），那一条在这里**不能**算横图，否则又变成竖图拉满全屏。
+                    // 判据用 `item.backdropUrl`（TMDB 原始值，磁盘缓存里也单独存了这一列）。
+                    // 命中 → 第一帧直接铺横图，竖图连一帧都不出现；没命中 → 空串，背景为空。
+                    horizontalUrl = data?.takeIf { it.item.backdropUrl.isNotBlank() }?.highResBackdrop
+                        ?.takeIf { it.isNotBlank() } ?: poster.horizontalUrl,
                     synopsis = data?.overview?.takeIf { it.isNotBlank() } ?: poster.synopsis,
                 )
             }
@@ -873,6 +881,13 @@ private fun HeroHomeScreen(
 
     // 真实数据可能为空：这里必须可空，不能用 `posters[0]` 兜底（空列表会直接抛越界）。
     val heroPoster = posters.getOrNull(focusedPosterIndex) ?: posters.firstOrNull()
+
+    // 【重组收口】顶栏「搜索」要带当前大图去做磨砂背景，但**不能直接捕获 `heroPoster`**：
+    // 那样每移动一格焦点都会生成一个新的 lambda 实例（Kotlin 把 `heroPoster` 按值捕进闭包），
+    // `HeroTopBar` 的参数因此发生变化而跟着重组一遍 —— 顶栏有 5 个焦点项，全部带 focusRequester
+    // 与焦点视觉 modifier，是焦点移动时最不该被牵连的一块。
+    // 这里只捕获一个**实例恒定**的 `State`，真正的读取推迟到点击那一刻，lambda 就能被稳定跳过。
+    val searchBackdropUrl by rememberUpdatedState(heroPoster?.backdropUrl.orEmpty())
 
     // 换源 / 刷新后列表可能变短：把记忆下标夹回合法范围，
     // 否则「信息区显示第一张、焦点却在第 N 张」会错位。
@@ -1000,7 +1015,8 @@ private fun HeroHomeScreen(
         val start = maxOf(0, currentIndex - HERO_PRELOAD_RANGE)
         val end = minOf(posters.lastIndex, currentIndex + HERO_PRELOAD_RANGE)
         // 本窗口「应该存在」的 URL。同一个 URL 只登记一次并取最大解码宽度：
-        // 源站没有 TMDB 横图时 `url == backdropUrl`，一张图不该因为两种用途被下载两遍。
+        // 竖图（卡片，360 宽）与 TMDB 横图（背景，960 宽）本来就是两张不同的图，
+        // 源站不给横图时背景这一档直接为空，不会拿竖图去凑。
         val wanted = LinkedHashMap<String, Int>(HERO_PRELOAD_RANGE * 4 + 4)
         fun want(url: String?, width: Int) {
             val target = url?.takeIf { it.isNotBlank() } ?: return
@@ -1008,7 +1024,7 @@ private fun HeroHomeScreen(
         }
         // 焦点条目最先登记：当前这一屏的背景 + 艺术字 Logo，必须比邻居更早出图。
         val current = posters[currentIndex]
-        want(current.backdropUrl, HERO_BACKDROP_PRELOAD_WIDTH)
+        want(current.horizontalUrl, HERO_BACKDROP_PRELOAD_WIDTH)
         // 焦点条目补写跨页缓存：切 Tab 回来时 override 还在，但缓存条目可能已被别的 Tab 挤掉。
         // `put` 会忽略「只匹配到、还没拉详情」的数据，所以这里不会把空壳塞进去。
         tmdbOverrides[current.posterKey]?.let { data ->
@@ -1021,7 +1037,7 @@ private fun HeroHomeScreen(
             val poster = posters[i]
             want(poster.url, HERO_POSTER_PRELOAD_WIDTH)
             // 当前这张的背景上面已经登记过，这里只补前后邻居。
-            if (i != currentIndex) want(poster.backdropUrl, HERO_BACKDROP_PRELOAD_WIDTH)
+            if (i != currentIndex) want(poster.horizontalUrl, HERO_BACKDROP_PRELOAD_WIDTH)
         }
         // 先回收窗口外的在途请求（它们已经不可能被看到），再补齐窗口内缺的。
         preloads.keys.filter { it !in wanted }.forEach { preloads.remove(it)?.dispose() }
@@ -1262,7 +1278,9 @@ private fun HeroHomeScreen(
         // 每次换焦点都会闪一帧纯黑。现在把条目身份当参数传进去，由 HeroBackdrop 内部迁移状态。
         HeroBackdrop(
             posterKey = heroPoster?.posterKey.orEmpty(),
-            url = heroPoster?.backdropUrl.orEmpty(),
+            // 只喂真横图：为空时背景就是空的（黑底 + 两层遮罩），竖图留在下面的海报卡里 ——
+            // 对齐原版 `E2` 的「无横图 → heroImageView.a() 清空 heroBg + posterCard 可见」。
+            url = heroPoster?.horizontalUrl.orEmpty(),
         )
         HeroMaskLeft()
         HeroMaskBottom()
@@ -1317,7 +1335,8 @@ private fun HeroHomeScreen(
                 onOpenHistory = { HeroHistoryActivity.start(context) },
                 // 顶栏「搜索」→ HeroSearchActivity（Compose 体系，纯 UI 结构 + 假数据）。
                 // 把首页当前这张大图一起带过去：搜索页用它做磨砂背景（同原版模糊首页大图的做法）。
-                onOpenSearch = { HeroSearchActivity.start(context, heroPoster?.backdropUrl.orEmpty()) },
+                // 读的是上面那个稳定 `State`，不是 `heroPoster` —— 见 `searchBackdropUrl` 的注释。
+                onOpenSearch = { HeroSearchActivity.start(context, searchBackdropUrl) },
                 // 顶栏「设置」→ SettingActivity（只存在于 leanback flavor，由 Activity 侧反射打开）。
                 onOpenSettings = onOpenSettings,
                 // 顶栏 ↓ 进入 Tab 栏：落到记忆中的 Tab，而不是与顶栏项横向对齐的那一个。
@@ -1474,8 +1493,9 @@ private fun HeroHomeScreen(
  * 新图还没解码完、旧图已经淡出，中间就会露黑帧 —— 这里改成显式双图层托底：
  *
  * 1. 底层：最近一张**已成功显示**的图（同一个 Coil 请求参数，内存缓存命中，几乎零成本）；
- * 2. 顶层：目标图，`onSuccess` 之前 `alpha = 0`，成功后淡入；
- * 3. 淡入结束才释放底层，全屏大图不会长期同时驻留两张。
+ * 2. 顶层：目标图，`onSuccess` 之前 `alpha = 0`；成功后按原版做 450ms 的
+ *    `scaleX/scaleY 1.03 → 1.0` + `alpha 0 → 1`（DecelerateInterpolator）；
+ * 3. 动画跑完才释放底层，全屏大图不会长期同时驻留两张。
  *
  * 【为什么条目身份是参数而不是 `key()`】调用点以前用 `key(posterKey)` 把整块 HeroBackdrop
  * 包起来，换剧就整块重建：`previousUrl` 跟着被重置为空，新图解码前底层什么都没有，
@@ -1505,25 +1525,33 @@ private fun HeroBackdrop(posterKey: String, url: String) {
         if (url == shownUrl) return@LaunchedEffect
         // 【双缓冲】只换「目标」，绝不清「底」：把最近一张解码成功的图压到底层，
         // 等新图真正解码完成（下面的 onSuccess → animateTo(1f)）之后才释放。
-        // 这里刻意**不再区分条目、也不再区分横竖**：上一版只允许「同一部剧的横图」托底，
-        // 同一条目从竖图升级到横图时底层被清空 —— 那正好是最常见的一帧纯黑。
-        // 跨条目时底下是上一部剧的剧照，只是过渡画面，新图完全盖住后立刻释放。
-        previousUrl = loadedUrl.takeIf { it.isNotBlank() && it != url } ?: ""
+        // 不区分条目：跨条目时底下是上一部剧的剧照，只是过渡画面，新图完全盖住后立刻释放。
+        // 传进来的永远只有**真横图**（见 `HeroPoster.horizontalUrl`），不存在「竖图当背景」的路径。
+        // 【快速来回】目标恰好就是底层这张（A→B→A，B 还没解码完就切了回来）时**不能动底层**：
+        // 否则 A 会先被从底层撤掉，再让顶层从 alpha 0 淡回来，中间必然出现一帧纯黑。
+        if (url != loadedUrl) {
+            previousUrl = loadedUrl.takeIf { it.isNotBlank() && it != url } ?: ""
+        }
         shownUrl = url
     }
 
     val current = shownUrl
-    // 只有「确实存在另一张已加载的旧图」才需要从 0 淡入；首屏 / 切回同一张时直接 1，
-    // 交给 Coil 自己的 500ms 淡入，避免多等 800ms，也避免切回时中间空一帧。
-    // 每换一个 URL 就换一只 Animatable：新图的第一帧 alpha 就是 0，
-    // 不会出现「内存缓存命中 → 先整张闪一下 → 再从头淡入」。
-    val hasPrevious = previousUrl.isNotBlank() && previousUrl != current
-    val fade = remember(current) { Animatable(if (hasPrevious) 0f else 1f) }
+    // 【原版同款动画】`HeroImageView` 构造函数里的 AnimatorSet：
+    // `scaleX 1.03 → 1.0` + `scaleY 1.03 → 1.0` + `alpha 0 → 1`，450ms、DecelerateInterpolator，
+    // 三个属性共用同一条时间轴。这里用**同一个进度**同时驱动三件事，逐帧与原生侧等价：
+    //   alpha = p，scale = 1.03 + (1 - 1.03) * p
+    // 每换一个 URL 就换一只 Animatable：新图第一帧 alpha 一定是 0，
+    // 不会出现「内存缓存命中 → 整张闪一下 → 再从头发淡入」。
+    val progress = remember(current) { Animatable(if (current.isBlank()) 1f else 0f) }
 
     LaunchedEffect(current, loadedUrl) {
         if (current.isBlank() || loadedUrl != current) return@LaunchedEffect
-        fade.animateTo(1f, tween(durationMillis = HERO_BACKDROP_FADE_MS))
-        // 新图已经完全盖住旧图：释放底层，避免两张全屏图长期同时驻留。
+        // 目标图**真的解码成功**才开始：在这之前新图 alpha 恒为 0、底层旧图 alpha 恒为 1，
+        // 所以无论网络多慢都不存在空白帧。
+        progress.snapTo(0f)
+        progress.animateTo(1f, tween(HERO_BACKDROP_FADE_MS, easing = HERO_BACKDROP_EASING))
+        // 原版是在动画结束回调里才丢掉底层（`HeroImageView.d()`）；这里同样等动画跑完再释放，
+        // 避免两张全屏图长期同时驻留，也避免动画中途抽掉底层导致「淡到一半背景变黑」。
         previousUrl = ""
     }
 
@@ -1531,7 +1559,10 @@ private fun HeroBackdrop(posterKey: String, url: String) {
         // 【固定的两个图层】底层永远在（没有托底图时模型传 null，Coil 什么都不加载）。
         // 槽位固定有两个好处：托底图出现 / 消失时顶层那个 AsyncImage 不会被重建，
         // 刚解码好的图不会跟着丢；也不会因为前后兄弟节点增删触发额外的组合移动。
-        val baseModel = rememberHeroImageModel(previousUrl)
+        //
+        // 两层都 `crossfadeMs = 0`：淡入 / 缩放完全交给上面那条 450ms 进度，
+        // 否则 Coil 自己再淡 500ms，等于叠了两层淡入，观感比原版慢一倍还发灰。
+        val baseModel = rememberHeroImageModel(previousUrl, crossfadeMs = 0)
         AsyncImage(
             model = if (previousUrl.isBlank()) null else baseModel,
             contentDescription = null,
@@ -1540,7 +1571,7 @@ private fun HeroBackdrop(posterKey: String, url: String) {
         )
         if (current.isNotBlank()) {
             AsyncImage(
-                model = rememberHeroImageModel(current),
+                model = rememberHeroImageModel(current, crossfadeMs = 0),
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
                 // 新图成功之前 alpha 恒为 0：底层旧图始终可见，不会出现空白帧。
@@ -1567,7 +1598,16 @@ private fun HeroBackdrop(posterKey: String, url: String) {
                 },
                 modifier = Modifier
                     .fillMaxSize()
-                    .graphicsLayer { alpha = fade.value },
+                    // 【逐帧只走 draw 阶段】`graphicsLayer { }` 的 lambda 里读 `progress.value` 不会
+                    // 触发重组 / 重测：每帧只改一次图层的 alpha 与缩放（硬件层一次纹理变换），
+                    // 和原版对 View 的 `scaleX/scaleY/alpha` 做属性动画是同一量级的开销。
+                    .graphicsLayer {
+                        val p = progress.value
+                        alpha = p
+                        val scale = HERO_BACKDROP_START_SCALE + (1f - HERO_BACKDROP_START_SCALE) * p
+                        scaleX = scale
+                        scaleY = scale
+                    },
             )
         }
     }
@@ -2289,6 +2329,18 @@ private data class HeroPoster(
     val url: String,
     val backdropUrl: String,
     /**
+     * **只装真横图**（TMDB `highResBackdrop`，w1920；源站接口没有横图）。
+     *
+     * 对齐逆向原版 `HomeActivityV2.E2(pos)` 的 if-else：
+     * 有横图 → `heroImageView.f(url)` 铺满 heroBg 并**隐藏** `posterCard`；
+     * 没有横图 → `heroImageView.a()` 清空 heroBg，竖图只留在 `posterCard`（海报卡）里。
+     *
+     * 所以本字段为空 ⇒ 首页背景图必须为空，**绝不再拿竖图 `url` 拉伸铺满全屏** ——
+     * 那正是「首帧先闪一张被裁成 16:9 的竖图」的来源。
+     * [backdropUrl] 保留原有语义（源站竖图兜底），继续服务详情页 / 搜索页背景。
+     */
+    val horizontalUrl: String = "",
+    /**
      * 艺术字 Logo：**由磁盘同步缓存直接带下来**，不依赖 `TmdbMatchCache` 是否命中。
      *
      * 冷启动第一帧就有值，信息区可以直接画图，不会先闪一行 32sp 文字再换成艺术字。
@@ -2320,10 +2372,14 @@ private fun Result?.toHomePosters(): List<HeroPoster> {
             title = vod.name.ifBlank { "未命名" },
             meta = buildMeta(vod),
             synopsis = vod.content,
-            // 首页接口只给竖版 `vod_pic`，没有独立的横版背景图：背景同样用它，
-            // 由 Coil 的 ContentScale.Crop 裁成 16:9（比留一片纯黑更接近真实产品观感）。
+            // 首页接口只给竖版 `vod_pic`，**没有独立的横版背景图**：`backdropUrl` 保留
+            // 「源站竖图兜底」的旧语义（详情页磨砂背景 / 搜索页背景仍在消费它），
+            // 首页大图只认 `horizontalUrl`（见 `HeroPoster.horizontalUrl` 的注释）。
             url = vod.pic,
             backdropUrl = vod.pic,
+            // 真横图只可能来自 TMDB（见 `posters` 的 override）；源站没有横图时留空 ——
+            // 与原版 `E2` 一致：没有横图就清空 heroBg，竖图留在海报卡里，不拉伸。
+            horizontalUrl = "",
             vod = vod,
             site = site,
         )
@@ -2494,7 +2550,9 @@ private fun loadHomeTmdbData(
  *
  * 只提档横图：w780 → w1920（TMDB 图床实测支持 w1920）；`original` / 自定义图床原样保留，
  * 绝不改写用户自己配的图床。竖版海报**不提档也不替换**：卡片图始终是接口返回的那张。
- * 没有横图时退回竖图当全屏背景（与首页原来「竖图裁 16:9」的行为一致）。
+ * 没有横图时 `highResBackdrop` 退回竖图 —— 这条兜底只服务详情页 / 搜索页的磨砂背景；
+ * 首页大图另有判定（`HeroPoster.horizontalUrl` 只认 `item.backdropUrl` 非空的那种），
+ * 不会把竖图当背景拉满全屏。
  */
 private fun TmdbItem.toHomeTmdbData(
     detail: JsonObject? = null,
@@ -2573,18 +2631,20 @@ private fun persistManualTmdbMatch(poster: HeroPoster, item: TmdbItem) {
  * 统一的图片请求：首页 / 详情页所有 `AsyncImage` 都从这里拿 model。
  *
  * - 固定 [HERO_IMAGE_CROSSFADE_MS] 淡入：首载、换图、预热命中都不会硬切；
+ * - `crossfadeMs = 0` 是给首页背景大图用的：它自己有一条 450ms 的 scale + alpha 动画
+ *   （对齐 `HeroImageView` 的 AnimatorSet），再叠一层 Coil 淡入就会变成「两次淡入」；
  * - `remember(context, url)`：同一个 URL 重组时复用同一个请求，Coil 才能命中内存 / 磁盘缓存，
  *   否则每帧新建 ImageRequest 会被当成新请求重新读一遍；
  * - `internal`：详情页（同包）的背景 / 海报 / 演员头像复用同一份实现，
  *   保证与首页预热**参数逐字一致**，点进详情时图片已经在缓存里。
  */
 @Composable
-internal fun rememberHeroImageModel(url: String): ImageRequest {
+internal fun rememberHeroImageModel(url: String, crossfadeMs: Int = HERO_IMAGE_CROSSFADE_MS): ImageRequest {
     val context = LocalContext.current
-    return remember(context, url) {
+    return remember(context, url, crossfadeMs) {
         ImageRequest.Builder(context)
             .data(url)
-            .crossfade(HERO_IMAGE_CROSSFADE_MS)
+            .crossfade(crossfadeMs)
             .build()
     }
 }
@@ -2695,7 +2755,26 @@ private val HERO_DESC_TOP_GAP = 4.dp        // L109 layout_marginTop
 private val HERO_DESC_HEIGHT = 40.dp        // L118 layout_height
 private const val HERO_DESC_SP = 12f        // L112 textSize
 private const val HERO_DESC_WIDTH_FRACTION = 0.5f // L110 weightSum=2 + L124 weight=1
-private const val HERO_BACKDROP_FADE_MS = 800
+/**
+ * 背景大图动画时长：逆向原版 `HeroImageView` 的 `AnimatorSet.setDuration(450L)`。
+ *
+ * 同一段动画**同时**驱动 `scaleX/scaleY 1.03 → 1.0` 与 `alpha 0 → 1`（见 [HERO_BACKDROP_START_SCALE]）。
+ * 不要单独调大：原版的节奏就是「先快后慢、450ms 落位」，慢了会和左侧 320ms 的信息区脱节。
+ */
+private const val HERO_BACKDROP_FADE_MS = 450
+
+/** 原版动画的起始放大倍数：`ObjectAnimator.ofFloat(this, "scaleX", 1.03f, 1.0f)`。 */
+private const val HERO_BACKDROP_START_SCALE = 1.03f
+
+/**
+ * `DecelerateInterpolator(factor = 1)` 的**精确**等价，而不是随手一个 `FastOutSlowIn`。
+ *
+ * Android 的减速插值器是 `y = 1 - (1 - t)²`，图形上是一条以 (0,0)、(0.5,1)、(1,1) 为控制点的
+ * 二次贝塞尔；Compose 只提供三次贝塞尔，把该二次曲线升阶一次即
+ * `CubicBezierEasing(1/3, 2/3, 2/3, 1)` —— 两条曲线在数学上完全重合，逐帧数值一致。
+ */
+private val HERO_BACKDROP_EASING = CubicBezierEasing(1f / 3f, 2f / 3f, 2f / 3f, 1f)
+
 private const val HERO_INFO_FADE_MS = 320
 /** 所有 Coil 请求的统一淡入时长：图片从透明淡到不透明，换图 / 首载都不会「啪」地硬切。 */
 private const val HERO_IMAGE_CROSSFADE_MS = 500
