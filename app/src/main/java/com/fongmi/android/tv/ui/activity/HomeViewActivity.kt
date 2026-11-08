@@ -124,14 +124,8 @@ class HomeViewActivity : AppCompatActivity() {
     // ------------------------------------------------------------------
     // 海报行长按（下键 / 确定键，1000ms）
     // ------------------------------------------------------------------
-    /** 按下中：定时器在跑，还没到 1000ms。 */
-    private var isLongPressing = false
-
-    /** 已触发：动作已经执行；之后的按下 / repeat / 抬起全部吞掉，直到松开。 */
+    /** 长按已触发：抬起之前吞掉所有按键（含 repeatCount > 0 的连发）。 */
     private var isLongPressTriggered = false
-
-    /** 正在长按的键：[KeyEvent.KEYCODE_DPAD_DOWN] = TMDB 手动匹配，确定键 = 换源弹窗。 */
-    private var longPressKeyCode = KeyEvent.KEYCODE_UNKNOWN
 
     /** 1000ms 定时器本体（对应 ref_docs 里的 `this.X` / `this.U`）。 */
     private var longPressRunnable: Runnable? = null
@@ -275,13 +269,25 @@ class HomeViewActivity : AppCompatActivity() {
         refreshHome("设置页返回")
     }
 
+    /**
+     * 【长按锁的解除兜底】弹窗（换源 / TMDB 手动匹配）都是**独立 Window**，抢到焦点后
+     * 本 Activity 的窗口就收不到按键了 —— 长按那把锁也就永远等不到 ACTION_UP。
+     * 窗口重新拿到焦点 = 弹窗已关闭 / 从后台回来，此时按键必然不处于按住状态，
+     * 无条件解锁，否则首页会一直吞按键（比"漏放一次短按"严重得多）。
+     */
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus) isLongPressTriggered = false
+    }
+
     override fun onDestroy() {
         pendingTabLoad?.let { handler.removeCallbacks(it) }
         pendingTabLoad = null
         pendingEmptyRetry?.let { handler.removeCallbacks(it) }
         pendingEmptyRetry = null
         // 长按定时器与 Compose 弹窗宿主都必须跟着 Activity 一起撤掉，否则回调会打到已销毁的 View。
-        resetPosterLongPress()
+        cancelLongPress()
+        isLongPressTriggered = false
         dismissTmdbMatchHost()
         // 在途 TMDB 请求 / 防抖一起作废：Activity 已经没了，回调绝不能再去碰 View。
         tmdbJob?.cancel()
@@ -883,33 +889,34 @@ class HomeViewActivity : AppCompatActivity() {
             tmdb != null -> if (tmdb.item.backdropUrl.isNullOrBlank()) "" else tmdb.highResBackdrop
             else -> item.backdropUrl
         }
-        if (backdrop.isNotBlank()) {
-            // 【冷启动防闪】横图地址一确定就先收竖图，**不等** `loadImage` 回调：
-            // 升级路径（`upgrade = true`，TMDB 详情刚到）以前会先画着竖图再等横图淡入，
-            // 首帧就会闪一张竖图。这里没有 `if (!upgrade)` 的前提 —— 有横图就先藏。
-            posterCard.visibility = View.GONE
-            HeroImageView.setSharedUrl(backdrop)
-            heroBg.visibility = View.VISIBLE
-            heroBg.loadImage(backdrop, position) {
-                if (focusedPosterKey != item.posterKey) return@loadImage
-                // 【落地判据】`lastUrl` 只在成功贴图后仍等于本地址（失败会被清成 null），
-                // 所以它能区分「这张新图真的上屏了」和「保持着上一张旧图 / 什么都没画」。
-                if (heroBg.lastUrl == backdrop && heroBg.drawable != null) {
-                    posterCard.visibility = View.GONE
-                } else if (!upgrade || heroBg.drawable == null) {
-                    // 横图彻底失败（403 / 404 / 解码失败）：把竖图放回来，绝不留一整屏黑。
-                    // `upgrade` 分支多看一眼 `heroBg.drawable`：升级失败且 Hero 区什么都没有时必须回填。
-                    posterCard.visibility = View.VISIBLE
-                    loadPosterCard(item.posterUrl)
-                }
-            }
+        // 【顺序照抄原版 E2(pos)】先判横图地址，再决定竖图与 heroBg —— 两者互斥，不共帧。
+        if (backdrop.isNullOrEmpty()) {
+            // 没有真横图：清空 heroBg，竖图只放在右上角 posterCard 里。
+            HeroImageView.setSharedUrl("")
+            heroBg.reset()
+            heroBg.visibility = View.GONE
+            posterCard.visibility = View.VISIBLE
+            loadPosterCard(item.posterUrl)
             return
         }
-        HeroImageView.setSharedUrl("")
-        heroBg.reset()
-        heroBg.visibility = View.GONE
-        posterCard.visibility = View.VISIBLE
-        loadPosterCard(item.posterUrl)
+        // 有横图：**先**收竖图、**再**发请求。绝不能等 loadImage 回调成功后才藏，
+        // 否则首帧（尤其是 upgrade = true 的 TMDB 升级那一拍）必闪一张竖图。
+        posterCard.visibility = View.GONE
+        HeroImageView.setSharedUrl(backdrop)
+        heroBg.visibility = View.VISIBLE
+        heroBg.loadImage(backdrop, position) {
+            if (focusedPosterKey != item.posterKey) return@loadImage
+            // 【落地判据】`lastUrl` 只在成功贴图后仍等于本地址（失败会被清成 null），
+            // 所以它能区分「这张新图真的上屏了」和「保持着上一张旧图 / 什么都没画」。
+            // 成功分支什么都不用做：竖图在发起请求之前就已经收掉了。
+            if (heroBg.lastUrl == backdrop && heroBg.drawable != null) return@loadImage
+            // 横图彻底失败（403 / 404 / 解码失败）：把竖图放回来，绝不留一整屏黑。
+            // `upgrade` 分支多看一眼 `heroBg.drawable`：升级失败且 Hero 区什么都没有时必须回填。
+            if (!upgrade || heroBg.drawable == null) {
+                posterCard.visibility = View.VISIBLE
+                loadPosterCard(item.posterUrl)
+            }
+        }
     }
 
     private fun loadPosterCard(url: String) {
@@ -1073,8 +1080,35 @@ class HomeViewActivity : AppCompatActivity() {
      * （海报行 ↑ 常常落到最右边的「设置」）。在分发口拦截是唯一能 100% 命中原版语义的位置。
      */
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
-        // 【长按】海报区的下键 / 确定键先过长按状态机；不命中就直接放行，其余按键路由完全不变。
-        if (onPosterLongPressKey(event)) return true
+        // ── 【长按锁】最开头：触发后到抬起之前，所有按键全部吞掉 ───────────────────
+        // 抬起这一下也吞掉：卡片收不到 UP 就不会走 onClick，长按不会被当成一次短按点进详情。
+        if (isLongPressTriggered) {
+            if (event.action == KeyEvent.ACTION_UP) {
+                isLongPressTriggered = false // 松开按键，解除锁定
+                return true
+            }
+            return true // 没松开之前，所有按下事件（包括 repeatCount > 0 的连发）全部拦截
+        }
+        // ── 【按下】第一次按下（repeatCount == 0）起 1000ms 定时器 ─────────────────
+        if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
+            val key = event.keyCode
+            // 只有海报区里的下键 / 确定键算长按；顶栏 / 分类栏的下键仍然走焦点路由。
+            val longPressKey = key == KeyEvent.KEYCODE_DPAD_DOWN ||
+                key == KeyEvent.KEYCODE_DPAD_CENTER ||
+                key == KeyEvent.KEYCODE_ENTER
+            if (longPressKey && recycler.findFocus() != null) {
+                cancelLongPress()
+                val runnable = Runnable { onPosterLongPressFired(key) }
+                longPressRunnable = runnable
+                handler.postDelayed(runnable, POSTER_LONG_PRESS_MS)
+                // 下键由本方法独占（海报行向下没有可聚焦目标）；确定键继续下发，短按靠 View 的 onClick。
+                if (key == KeyEvent.KEYCODE_DPAD_DOWN) return true
+            }
+        }
+        // ── 【抬起】没到 1 秒就松手：撤定时器，事件放行（原短按逻辑照旧）───────────
+        if (event.action == KeyEvent.ACTION_UP && longPressRunnable != null) {
+            cancelLongPress()
+        }
         if (event.action == KeyEvent.ACTION_DOWN) {
             when (event.keyCode) {
                 KeyEvent.KEYCODE_DPAD_UP -> if (onDpadUp()) return true
@@ -1085,74 +1119,26 @@ class HomeViewActivity : AppCompatActivity() {
     }
 
     /**
-     * 海报行长按状态机（对照 ref_docs/HomeActivityV2.dispatchKeyEvent 的
-     * `this.V / this.W` + `removeCallbacks` + `postDelayed(..., getLongPressTimeout())` 三段式）：
+     * 1000ms 到点：**先上锁**，再弹对应 Dialog —— 从这一刻起 [dispatchKeyEvent] 最开头的
+     * [isLongPressTriggered] 分支会把后续所有按下 / 连发 / 抬起全部吞掉，直到用户松手。
      *
-     * - **ACTION_DOWN + repeatCount == 0**：起 [POSTER_LONG_PRESS_MS] 定时器，记下是哪个键；
-     * - **定时器到点**：`isLongPressTriggered = true` → 下键 = TMDB 手动匹配，确定键 = 换源弹窗；
-     * - **ACTION_DOWN + repeatCount > 0**：已触发 → 直接吞；未触发 → 下键吞掉（行内向下没有可去的焦点）、
-     *   确定键继续下发（短按要靠它进详情）；
-     * - **ACTION_UP**：撤定时器并清状态；触发过就吞掉抬起事件。
-     *
-     * 「长按触发后打断按键输出直到松开」= 已触发时 ACTION_DOWN（含所有 repeat）和 ACTION_UP 全部 return true：
-     * 卡片收不到 UP 就不会走 onClick，长按绝不会被当成一次短按点进详情。
-     *
-     * @return true = 本次事件已被长按逻辑消费，调用方不要再往下发。
+     * 对照 ref_docs/HomeActivityV2.dispatchKeyEvent：`this.V / this.W` 两个状态位 +
+     * `removeCallbacks` / `postDelayed(..., getLongPressTimeout())`，抬起时统一清状态。
      */
-    private fun onPosterLongPressKey(event: KeyEvent): Boolean {
-        val key = event.keyCode
-        val isLongPressKey = key == KeyEvent.KEYCODE_DPAD_DOWN ||
-            key == KeyEvent.KEYCODE_DPAD_CENTER ||
-            key == KeyEvent.KEYCODE_ENTER
-        // 只在焦点已经落在海报行里时接管；顶栏 / 分类栏的下键仍然走原来的焦点路由。
-        if (!isLongPressKey || recycler.findFocus() == null) return false
-        when (event.action) {
-            KeyEvent.ACTION_DOWN -> {
-                // 长按已经触发：之后的每一次按下 / 系统 repeat 全部吞掉。
-                if (isLongPressTriggered) return true
-                if (event.repeatCount > 0) {
-                    // 还没到 1000ms 的系统重复：不重起定时器，也不再往下发。
-                    return key == KeyEvent.KEYCODE_DPAD_DOWN
-                }
-                isLongPressing = true
-                longPressKeyCode = key
-                longPressRunnable?.let { handler.removeCallbacks(it) }
-                val runnable = Runnable { onPosterLongPressFired() }
-                longPressRunnable = runnable
-                handler.postDelayed(runnable, POSTER_LONG_PRESS_MS)
-                // 下键由本方法独占（海报行向下没有可聚焦目标）；确定键必须继续下发，短按靠 View 的 onClick。
-                return key == KeyEvent.KEYCODE_DPAD_DOWN
-            }
-            KeyEvent.ACTION_UP -> {
-                val triggered = isLongPressTriggered
-                resetPosterLongPress()
-                // 触发过就吞掉抬起事件：卡片拿不到 UP 就不会触发短按点击。
-                return triggered
-            }
-        }
-        return false
-    }
-
-    /** 1000ms 到点：先落状态再执行动作（弹窗本身是异步的，不受这里 return 影响）。 */
-    private fun onPosterLongPressFired() {
+    private fun onPosterLongPressFired(key: Int) {
         longPressRunnable = null
-        if (!isLongPressing) return
-        isLongPressing = false
         isLongPressTriggered = true
         val item = items.getOrNull(focusedIndex) ?: return
-        when (longPressKeyCode) {
-            KeyEvent.KEYCODE_DPAD_DOWN -> showTmdbManualMatch(item)
-            KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> showChangeSource(item)
+        when (key) {
+            KeyEvent.KEYCODE_DPAD_DOWN -> showTmdbManualMatch(item)     // 下键 → TMDB 手动匹配
+            KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> showChangeSource(item) // 确定键 → 换源
         }
     }
 
-    /** 撤销定时器并把两个状态位复位（抬起 / 销毁 / 新一次按下前都走这里）。 */
-    private fun resetPosterLongPress() {
+    /** 撤掉还没到点的定时器（没触发就不上锁，按键继续按原逻辑走）。 */
+    private fun cancelLongPress() {
         longPressRunnable?.let { handler.removeCallbacks(it) }
         longPressRunnable = null
-        isLongPressing = false
-        isLongPressTriggered = false
-        longPressKeyCode = KeyEvent.KEYCODE_UNKNOWN
     }
 
     /**
