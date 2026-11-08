@@ -1,0 +1,369 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Hero 首页（View 体系）骨架，真值来源 ref_docs/activity_home_v2.xml：
+    节点顺序、id、尺寸、字号、颜色、阴影、margin/padding 全部照抄，只做了下面这些
+    「依赖层面无法避免」的替换（层级结构未改动）：
+
+    1. `androidx.leanback.widget.HorizontalGridView` → `androidx.recyclerview.widget.RecyclerView`
+       （navRecycler / typeRecycler / recycler 三处；main 源集没有 leanback，
+       所以原版的 `app:focusOutEnd` / `app:focusOutFront` 一并去掉，它们只作用于 leanback 的
+       BaseGridView，RecyclerView 没有这两个属性）。
+    2. `com.fongmi.android.tv.ui.custom.TypingDotsView` → `ProgressBar`
+       （项目里没有这个自定义 View，用不定圈圈占位，行为等下一步接数据时再换）。
+    3. `@drawable/bg_hero_mask_h` / `@drawable/bg_hero_mask_v` → HeroMaskLeftView / HeroMaskBottomView
+       （这两张 drawable 在 main 里本来就不存在，历史页旧布局 activity_hero_history.xml 也是用
+       这两个自绘 View 顶替的；它们的色标就是首页 Compose 遮罩的那一组，视觉 100% 一致）。
+    4. `@drawable/ic_history_ring` → `@drawable/ic_setting_history`
+       （原版图标未导出，项目里现有的同形「回环 + 时钟」白色图标）。
+    5. `@drawable/bg_v2_filter_fade` 为本步骤新增的 drawable（同尺寸、同色标渐隐）。
+    6. `@string/home_vod`、`@string/home_history` 为本步骤新增的字符串（仅 contentDescription）。
+
+    本文件只建骨架：没有任何业务逻辑、不绑 adapter、不接数据。
+-->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:clipChildren="false">
+
+    <!-- L6-12 heroBgUnder：旧背景垫底层，由 HeroImageView 在新图加载成功后回填 -->
+    <ImageView
+        android:id="@+id/heroBgUnder"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:contentDescription="@null"
+        android:scaleType="centerCrop"
+        android:visibility="gone" />
+
+    <!-- L13-18 heroBg：新图在这一层做 1.03→1.0 + alpha 0→1 的 450ms 淡入 -->
+    <com.fongmi.android.tv.ui.custom.HeroImageView
+        android:id="@+id/heroBg"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:contentDescription="@null"
+        android:scaleType="centerCrop" />
+
+    <!-- L19-23 maskLeft：左侧压暗，保证剧名/简介在浅色背景上仍可读 -->
+    <com.fongmi.android.tv.ui.activity.HeroMaskLeftView
+        android:id="@+id/maskLeft"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" />
+
+    <!-- L24-28 maskBottom：底部压暗，让海报行与背景分离 -->
+    <com.fongmi.android.tv.ui.activity.HeroMaskBottomView
+        android:id="@+id/maskBottom"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" />
+
+    <!-- L29-47 posterCard：右上角竖版海报，150×210、离顶 72dp、离右 80dp -->
+    <FrameLayout
+        android:id="@+id/posterCard"
+        android:layout_width="150dp"
+        android:layout_height="210dp"
+        android:layout_gravity="end|top"
+        android:layout_marginTop="72dp"
+        android:layout_marginEnd="80dp"
+        android:background="@drawable/shape_poster_card"
+        android:clipChildren="false"
+        android:clipToOutline="true"
+        android:padding="4dp"
+        android:visibility="gone">
+
+        <androidx.appcompat.widget.AppCompatImageView
+            android:id="@+id/posterCardImg"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:contentDescription="@null"
+            android:scaleType="centerCrop" />
+    </FrameLayout>
+
+    <!-- L48-193 progressLayout：内容区，loading / empty 态由 ProgressLayout 统一切换 -->
+    <com.fongmi.android.tv.ui.custom.ProgressLayout
+        android:id="@+id/progressLayout"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:clipChildren="false">
+
+        <!-- L53-192 bottomContent：贴底内容列（layout_alignParentBottom 由 ProgressLayout 的 RelativeLayout 提供） -->
+        <androidx.appcompat.widget.LinearLayoutCompat
+            android:id="@+id/bottomContent"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_alignParentBottom="true"
+            android:clipChildren="false"
+            android:clipToPadding="false"
+            android:orientation="vertical">
+
+            <!-- L61-127 heroInfo：左右 24dp、底 22dp -->
+            <androidx.appcompat.widget.LinearLayoutCompat
+                android:id="@+id/heroInfo"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="22dp"
+                android:clipChildren="false"
+                android:clipToPadding="false"
+                android:orientation="vertical"
+                android:paddingStart="24dp"
+                android:paddingEnd="24dp">
+
+                <!-- L71-83 heroNameText：32sp 粗体、高 36dp、贴底、阴影 #cc000000 2/2/12 -->
+                <com.google.android.material.textview.MaterialTextView
+                    android:id="@+id/heroNameText"
+                    android:layout_width="wrap_content"
+                    android:layout_height="36dp"
+                    android:gravity="bottom"
+                    android:shadowColor="#cc000000"
+                    android:shadowDx="2"
+                    android:shadowDy="2"
+                    android:shadowRadius="12"
+                    android:textColor="@color/white"
+                    android:textSize="32sp"
+                    android:textStyle="bold"
+                    android:visibility="invisible" />
+
+                <!-- L84-91 heroLogoImg：片名 logo 图，最高 72dp、最大宽 720dp -->
+                <ImageView
+                    android:id="@+id/heroLogoImg"
+                    android:layout_width="wrap_content"
+                    android:layout_height="72dp"
+                    android:adjustViewBounds="true"
+                    android:maxWidth="720dp"
+                    android:scaleType="fitStart"
+                    android:visibility="gone" />
+
+                <!-- L92-104 heroMetaText：14sp、#ccffffff、高 20dp、marginTop 2dp、阴影 #aa000000 1.5/1.5/8 -->
+                <com.google.android.material.textview.MaterialTextView
+                    android:id="@+id/heroMetaText"
+                    android:layout_width="wrap_content"
+                    android:layout_height="20dp"
+                    android:layout_marginTop="2dp"
+                    android:gravity="bottom"
+                    android:shadowColor="#aa000000"
+                    android:shadowDx="1.5"
+                    android:shadowDy="1.5"
+                    android:shadowRadius="8"
+                    android:textColor="#ccffffff"
+                    android:textSize="14sp"
+                    android:visibility="invisible" />
+
+                <!-- L105-126：weightSum=2 + 子项 weight=1 → 简介只占一半宽度 -->
+                <androidx.appcompat.widget.LinearLayoutCompat
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:orientation="horizontal"
+                    android:weightSum="2">
+
+                    <!-- L111-125 heroDescText：12sp、#bbffffff、高 40dp、2 行、行距 3dp、阴影 #aa000000 1.2/1.2/6 -->
+                    <com.google.android.material.textview.MaterialTextView
+                        android:id="@+id/heroDescText"
+                        android:layout_width="0dp"
+                        android:layout_height="40dp"
+                        android:layout_weight="1"
+                        android:ellipsize="end"
+                        android:lineSpacingExtra="3dp"
+                        android:maxLines="2"
+                        android:shadowColor="#aa000000"
+                        android:shadowDx="1.2"
+                        android:shadowDy="1.2"
+                        android:shadowRadius="6"
+                        android:textColor="#bbffffff"
+                        android:textSize="12sp"
+                        android:visibility="invisible" />
+                </androidx.appcompat.widget.LinearLayoutCompat>
+            </androidx.appcompat.widget.LinearLayoutCompat>
+
+            <!-- L128-141 typeRecycler：类型/分类行（原版 HorizontalGridView） -->
+            <androidx.recyclerview.widget.RecyclerView
+                android:id="@+id/typeRecycler"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="12dp"
+                android:clipChildren="false"
+                android:clipToPadding="false"
+                android:nextFocusUp="@+id/navRecycler"
+                android:paddingStart="24dp"
+                android:paddingEnd="24dp"
+                android:paddingBottom="2dp"
+                android:visibility="gone"
+                app:layoutManager="androidx.recyclerview.widget.LinearLayoutManager" />
+
+            <!-- L142-191 posterArea：整行 215dp，左右 24dp 内边距，卡片可以出血到边缘 -->
+            <FrameLayout
+                android:id="@+id/posterArea"
+                android:layout_width="match_parent"
+                android:layout_height="215dp"
+                android:clipChildren="false"
+                android:clipToPadding="false">
+
+                <!-- L148-160 recycler：海报行（原版 HorizontalGridView） -->
+                <androidx.recyclerview.widget.RecyclerView
+                    android:id="@+id/recycler"
+                    android:layout_width="match_parent"
+                    android:layout_height="215dp"
+                    android:clipChildren="false"
+                    android:clipToPadding="false"
+                    android:nextFocusUp="@+id/typeRecycler"
+                    android:paddingStart="24dp"
+                    android:paddingEnd="24dp"
+                    android:paddingTop="0dp"
+                    android:paddingBottom="0dp"
+                    app:layoutManager="androidx.recyclerview.widget.LinearLayoutManager" />
+
+                <!-- L161-167 posterProgress：原版 TypingDotsView，用不定圈圈占位 -->
+                <ProgressBar
+                    android:id="@+id/posterProgress"
+                    android:layout_width="32dp"
+                    android:layout_height="32dp"
+                    android:layout_gravity="center"
+                    android:layout_marginBottom="40dp"
+                    android:indeterminateTint="@color/white"
+                    android:visibility="gone" />
+
+                <!-- L168-190 posterEmpty：空态插画 + 文案 -->
+                <LinearLayout
+                    android:id="@+id/posterEmpty"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_gravity="center"
+                    android:layout_marginBottom="40dp"
+                    android:gravity="center"
+                    android:orientation="vertical"
+                    android:visibility="gone">
+
+                    <com.airbnb.lottie.LottieAnimationView
+                        android:layout_width="120dp"
+                        android:layout_height="120dp"
+                        app:lottie_autoPlay="true"
+                        app:lottie_loop="true"
+                        app:lottie_rawRes="@raw/empty" />
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="2dp"
+                        android:text="@string/error_empty"
+                        android:textColor="#ccffffff"
+                        android:textSize="14sp" />
+                </LinearLayout>
+            </FrameLayout>
+        </androidx.appcompat.widget.LinearLayoutCompat>
+    </com.fongmi.android.tv.ui.custom.ProgressLayout>
+
+    <!-- L194-198 historyPanelContainer：历史面板挂载点，由代码往里塞 View -->
+    <FrameLayout
+        android:id="@+id/historyPanelContainer"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:visibility="gone" />
+
+    <!-- L199-262 navBar：顶栏，高 64dp、左右 24dp -->
+    <androidx.appcompat.widget.LinearLayoutCompat
+        android:id="@+id/navBar"
+        android:layout_width="match_parent"
+        android:layout_height="64dp"
+        android:layout_gravity="top"
+        android:clipChildren="false"
+        android:clipToPadding="false"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingStart="24dp"
+        android:paddingEnd="24dp">
+
+        <!-- L210-222 homeBtn：左上角小房子，可聚焦，左右下都给了 nextFocus -->
+        <FrameLayout
+            android:id="@+id/homeBtn"
+            android:layout_width="28dp"
+            android:layout_height="28dp"
+            android:layout_gravity="center_vertical"
+            android:background="@drawable/selector_home_logo"
+            android:clickable="true"
+            android:defaultFocusHighlightEnabled="false"
+            android:focusable="true"
+            android:focusableInTouchMode="true"
+            android:nextFocusDown="@+id/typeRecycler"
+            android:nextFocusRight="@+id/navRecycler"
+            android:stateListAnimator="@null">
+
+            <!-- L223-229 homeBtnClip：24dp 圆形裁切容器，里面两枚图标靠 translationY 上下切换 -->
+            <FrameLayout
+                android:id="@+id/homeBtnClip"
+                android:layout_width="24dp"
+                android:layout_height="24dp"
+                android:layout_gravity="center"
+                android:background="@drawable/shape_oval_clip"
+                android:clipToOutline="true">
+
+                <androidx.appcompat.widget.AppCompatImageView
+                    android:id="@+id/homeBtnHome"
+                    android:layout_width="16dp"
+                    android:layout_height="16dp"
+                    android:layout_gravity="center"
+                    android:layout_marginBottom="1dp"
+                    android:contentDescription="@string/home_vod"
+                    android:src="@drawable/ic_home_logo" />
+
+                <androidx.appcompat.widget.AppCompatImageView
+                    android:id="@+id/homeBtnHistory"
+                    android:layout_width="16dp"
+                    android:layout_height="16dp"
+                    android:layout_gravity="center"
+                    android:layout_marginBottom="1dp"
+                    android:contentDescription="@string/home_history"
+                    android:src="@drawable/ic_setting_history"
+                    android:translationY="28dp" />
+            </FrameLayout>
+        </FrameLayout>
+
+        <!-- L249-261 navRecycler：顶栏导航（原版 HorizontalGridView） -->
+        <androidx.recyclerview.widget.RecyclerView
+            android:id="@+id/navRecycler"
+            android:layout_width="0dp"
+            android:layout_height="64dp"
+            android:layout_marginStart="20dp"
+            android:layout_weight="1"
+            android:background="@android:color/transparent"
+            android:clipChildren="false"
+            android:clipToPadding="false"
+            android:nextFocusDown="@+id/typeRecycler"
+            android:nextFocusLeft="@+id/homeBtn"
+            app:layoutManager="androidx.recyclerview.widget.LinearLayoutManager" />
+    </androidx.appcompat.widget.LinearLayoutCompat>
+
+    <!-- L263-292 filterPanel：筛选面板，顶部下拉 -->
+    <FrameLayout
+        android:id="@+id/filterPanel"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top"
+        android:clipChildren="false"
+        android:clipToPadding="false"
+        android:visibility="gone">
+
+        <androidx.appcompat.widget.LinearLayoutCompat
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:clipChildren="false"
+            android:clipToPadding="false"
+            android:orientation="vertical">
+
+            <!-- L277-286 filterRows：筛选项按行往里加，底色 #99000000 -->
+            <androidx.appcompat.widget.LinearLayoutCompat
+                android:id="@+id/filterRows"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:background="#99000000"
+                android:clipChildren="true"
+                android:clipToPadding="true"
+                android:orientation="vertical"
+                android:paddingTop="16dp"
+                android:paddingBottom="6dp" />
+
+            <!-- L287-290：面板底部的 100dp 渐隐 -->
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="100dp"
+                android:background="@drawable/bg_v2_filter_fade" />
+        </androidx.appcompat.widget.LinearLayoutCompat>
+    </FrameLayout>
+</FrameLayout>

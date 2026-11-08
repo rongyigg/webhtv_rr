@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Hero 首页 View 骨架专用的无障碍描述。
+    名字沿用 ref_docs/activity_home_v2.xml 里的 @string/home_vod、@string/home_history，
+    原版这两个字符串没有随材料导出，这里只补 contentDescription 需要的两条。
+-->
+<resources>
+    <string name="home_vod">Home</string>
+    <string name="home_history">History</string>
+</resources>

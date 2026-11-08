@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    ref_docs/activity_home_v2.xml L287-290：
+      <View android:background="@drawable/bg_v2_filter_fade"
+            android:layout_width="match_parent"
+            android:layout_height="100dp"/>
+
+    原版 drawable 未导出，按「filterRows(#99000000) 下方接 100dp 渐隐」的用法补一份：
+    顶部与 filterRows 同色，向下淡到全透明，让筛选面板不出现生硬的横切边。
+-->
+<shape xmlns:android="http://schemas.android.com/apk/res/android">
+    <gradient
+        android:angle="270"
+        android:endColor="#00000000"
+        android:startColor="#99000000"
+        android:type="linear" />
+    <size android:height="100dp" />
+</shape>
