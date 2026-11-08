@@ -407,24 +407,35 @@ class HomeViewActivity : AppCompatActivity() {
                 Notify.show(getString(R.string.play_change_empty))
                 return@setOnClickListener
             }
-            SourceSidebar.show(
+            // 拿到实例才能在回调里「先销毁再切源」：窗口一旦留在屏幕上，后面的 setHome + 重拉首页
+            // 会全部在它背后发生，用户看到的就是弹窗盖在新首页上。
+            var sidebar: SourceSidebar? = null
+            sidebar = SourceSidebar.show(
                 context = this,
                 entries = HeroSourceEntry.of(homeSites),
                 mode = SourceSidebarMode.Single,
                 currentSiteKey = VodConfig.get().getHome().key,
                 onSiteSelected = { site ->
+                    // 1.【绝对第一步】关闭并销毁窗口。`dismiss()` 是真正销毁（Dialog 窗口，不走
+                    //   addView，所以不需要 removeView），且幂等 —— 侧边栏自己在确定键时也先关一次，
+                    //   这里再兜一次，保证任何进入路径都不会留一层窗口盖在首页上。
+                    sidebar?.dismiss()
+                    sidebar = null
                     val current = VodConfig.get().getHome()
                     if (site.key == current.key) {
                         // 选中的就是当前源：不重复发请求，只给个反馈。
                         Notify.show(getString(R.string.source_sidebar_switched, site.displayName))
                     } else {
+                        // 2. 切换数据源。
                         Log.d(TAG, "小房子切换接口源: ${current.key} -> ${site.key}")
-                        // `setHome` 只写配置并 post `RefreshEvent.home()`，本页不订阅 EventBus，
-                        // 必须自己再拉一次，否则列表还是旧源的数据（与 Compose 首页同一个原因）。
                         VodConfig.get().setHome(site)
+                        // 3. 重新加载数据。`setHome` 只写配置并 post `RefreshEvent.home()`，
+                        //    本页不订阅 EventBus，必须自己再拉一次，否则列表还是旧源的数据。
                         refreshHome("小房子切换接口源 ${site.displayName}")
                         Notify.show(getString(R.string.source_sidebar_switched, site.displayName))
                     }
+                    // 4. 焦点归位：窗口已经销毁，焦点必须显式还给打开它的小房子。
+                    homeBtn.post { homeBtn.requestFocus() }
                 },
                 onClosed = {
                     // 侧边栏关闭后焦点不会自己回来：显式还给打开它的小房子。
@@ -952,6 +963,13 @@ class HomeViewActivity : AppCompatActivity() {
         }
 
         // 走完全部同步来源仍然没有横图 → 确认该显示竖图，这时才允许 posterCard 可见。
+        //
+        // 【逆向硬复刻】原版 `HomeActivityV2.E2` 的无横图分支只有一句 `a0.a()`，然后就把
+        // posterCard 显出来；它**从不**单独 `setVisibility(GONE)` 了事 —— 因为清屏的全部职责
+        // 都在 `a() → b() → d()` 里：先清底图 `heroBgUnder`，再取消淡入、取消在途请求、
+        // 最后 `setImageDrawable(null)` 清主图。这里同样只走 `reset()` 这一个入口，
+        // 顺序固定为「先掐掉所有在途/动画 → 底图 → 主图」，然后才把 heroBg 收起来和显示竖图。
+        // 少清底图那一步，上一部剧的整屏位图就会留在 heroBgUnder 上继续铺满首页大图区。
         HeroImageView.setSharedUrl("")
         heroBg.reset()
         heroBg.visibility = View.GONE

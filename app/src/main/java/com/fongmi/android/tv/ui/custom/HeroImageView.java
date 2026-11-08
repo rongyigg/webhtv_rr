@@ -197,25 +197,59 @@ public class HeroImageView extends ImageView {
     }
 
     /**
-     * 清空当前画面（原版 {@code a()}）：换源、无图可显示时调用。
+     * 清空当前画面（原版 {@code a()}），无横图 / 换源 / 空态时调用。
+     *
+     * <p><b>严格照抄逆向出来的调用链</b>（{@code ref_docs/HeroImageView.java}）：
+     * <pre>
+     * a()  this.h = null; this.i = false; this.j = false; b();
+     * b()  d();                       // ① 先清底图 heroBgUnder
+     *      this.m = null;
+     *      if (fadeIn.isRunning()) fadeIn.cancel();   // ② 取消淡入
+     *      Glide.clear(this);          // ③ 取消主图在途请求
+     *      setImageDrawable(null);     // ④ 清空主图
+     * d()  Glide.clear(heroBgUnder);
+     *      heroBgUnder.setImageDrawable(null);
+     *      heroBgUnder.setVisibility(8);              // ⑤ 隐藏底图
+     * </pre>
+     *
+     * <p>顺序本身也是逆向代码的一部分：**先清底图，再清主图**。只清主图、或者只把
+     * {@code heroBg} 设成 GONE 而不动 {@code heroBgUnder} 时，上一部剧的整屏位图会从垫底层
+     * 露出来 —— 这就是「没有横图却残留上一张图」的根因。
+     *
+     * <p>本类用 Coil，{@code Glide.clear(...)} 的等价物是 {@link #disposeRequest()}；
+     * 底图这一层从不发起 Coil 请求（旧图是直接 {@code setImageDrawable} 压下去的），
+     * 所以 {@link #clearUnderImage()} 只需要清 Drawable + 隐藏，没有请求可取消。
      */
     public void reset() {
+        // a()：三个状态位（这里的 requestPos / pendingEntrance 是 Coil 请求序号与入场动画的等价物）
         lastUrl = null;
         requestPos = 0;
         pendingEntrance = false;
         skipUnderImage = false;
-        cancelFadeIn();
-        disposeRequest();
+        // b()：① 先清底图（原版 d() 在 b() 的最前面）
         clearUnderImage();
+        // b()：② 取消淡入并把 alpha / scale 拉回正常值
+        cancelFadeIn();
+        // b()：③ 取消主图在途请求 + ④ 清空主图
+        disposeRequest();
         setImageDrawable(null);
     }
 
     /**
-     * 清掉垫底层（原版 {@code d()}）。原版只在隐藏 / 下次换图时释放，这里保持一致：
-     * 不主动 findViewById，只有真正用过垫底层才需要清理。
+     * 清掉垫底层（原版 {@code d()}）：清 Drawable → 隐藏。
+     *
+     * <p>与原版的唯一差别是**每次重新定位**底图：原版 {@code d()} 只读字段 {@code l}，
+     * 而 {@code l} 只在第一次成功铺底（原版 {@code f()}）时才被赋值。一旦遇到
+     * <ul>
+     *   <li>首次进首页就没有横图、</li>
+     *   <li>父容器当时还不是 {@code heroBgUnder} 的宿主（inflate 顺序 / 复用）、</li>
+     *   <li>View 被重新 inflate、旧引用已经脱离视图树</li>
+     * </ul>
+     * 字段就永远是 null，清理会被静默跳过，底图残留。
+     * {@link #findUnderView()} 内部仍然缓存结果，命中后重复调用没有查找开销。
      */
     public void clearUnderImage() {
-        ImageView under = underView;
+        ImageView under = findUnderView();
         if (under == null) return;
         under.setImageDrawable(null);
         under.setVisibility(INVISIBLE);
@@ -351,7 +385,10 @@ public class HeroImageView extends ImageView {
 
     /** 原版从父容器里找 {@code heroBgUnder}；父容器找不到时再退到根 View 找一次。 */
     private ImageView findUnderView() {
-        if (underView != null) return underView;
+        // 缓存命中也要确认它仍挂在视图树上：Activity 重建 / 重新 inflate 之后旧引用会脱离，
+        // 继续往那个已经不在屏幕上的旧 View 写「清空」，真正的底图就永远清不掉。
+        if (underView != null && underView.isAttachedToWindow()) return underView;
+        underView = null;
         View target = null;
         ViewParent parent = getParent();
         if (parent instanceof ViewGroup) target = ((ViewGroup) parent).findViewById(R.id.heroBgUnder);

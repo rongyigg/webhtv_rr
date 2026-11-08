@@ -158,14 +158,19 @@ internal class SourceSidebar private constructor(
         list.requestFocus()
     }
 
-    /** 确定键：单选 = 选站并关闭；多选 = 勾选 / 取消勾选。 */
+    /** 确定键：单选 = **先销毁窗口再选站**；多选 = 勾选 / 取消勾选。 */
     private fun onConfirm(position: Int) {
         if (position !in entries.indices) return
         if (isMulti) {
             toggle(position)
         } else {
-            onSiteSelected(entries[position].site)
+            // 【顺序红线】必须先把窗口销毁，再回调：
+            // 回调里会 `setHome` + 重拉首页（同步重绘 Hero / 列表 / 进度层），
+            // 只要窗口还在，它就会一直盖在新首页上面（dim + 全高面板 = 鸠占鹊巢）。
+            // `dismiss()` 是真正的窗口销毁（不走 addView，无需 removeView），并且会触发
+            // `setOnDismissListener → onClosed()`，焦点交还由调用方在 `onClosed` 里完成。
             dismiss()
+            onSiteSelected(entries[position].site)
         }
     }
 
