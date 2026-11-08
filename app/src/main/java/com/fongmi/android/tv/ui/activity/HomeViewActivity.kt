@@ -163,6 +163,20 @@ class HomeViewActivity : AppCompatActivity() {
     /** 已经自动加载过的「站点:分类」：分类结果本身也可能为空，用它挡掉死循环。 */
     private var autoCategoryKey: String? = null
 
+    /**
+     * 本地配置是否正在异步加载（[ensureVodConfigLoaded] 已发起、回调还没回来）。
+     *
+     * 为 true 时「当前接口源为空」只是冷启动的暂时状态：必须保持 loading 等回调，
+     * 绝不能用空 [Site] 发 `homeContent()`（那必然抛异常并被吞成空结果 → 页面被钉死在空态）。
+     */
+    private var configLoadPending: Boolean = false
+
+    /** 空结果的自动重试是否已经用掉：真实空源只重试一次，避免反复请求。 */
+    private var emptyRetryUsed: Boolean = false
+
+    /** 在途的「空结果自动重试」：Activity 销毁时必须移除，回调不能碰已销毁的 View。 */
+    private var pendingEmptyRetry: Runnable? = null
+
     /** 当前应显示的 Logo 地址：异步失败回调只在它没被下一次焦点覆盖时才回落文字。 */
     private var currentLogoUrl: String = ""
 
@@ -222,6 +236,8 @@ class HomeViewActivity : AppCompatActivity() {
     override fun onDestroy() {
         pendingTabLoad?.let { handler.removeCallbacks(it) }
         pendingTabLoad = null
+        pendingEmptyRetry?.let { handler.removeCallbacks(it) }
+        pendingEmptyRetry = null
         // 在途 TMDB 请求 / 防抖一起作废：Activity 已经没了，回调绝不能再去碰 View。
         tmdbJob?.cancel()
         tmdbScope.cancel()
@@ -403,6 +419,26 @@ class HomeViewActivity : AppCompatActivity() {
                     }
                 }
             }
+            // 【失败 ≠ 空源】list 和 types 同时为空时，99% 是 `SiteViewModel.execute` 的失败分支
+            // 派发的 `Result.empty()`（它没有 msg，回调里与「源站真的没有首页」完全同形）。
+            // 只做一次静默重试：网络抖动不再把页面永久钉在「这里什么都没有」，
+            // 真实空源最多多等 [EMPTY_RETRY_MS]，第二次仍为空才显示空态。
+            if (!categoryTabActive && list.isEmpty() && types.isEmpty() &&
+                !emptyRetryUsed && !site.key.isNullOrEmpty()
+            ) {
+                emptyRetryUsed = true
+                Log.w(TAG, "首页结果为空（可能是请求失败），${EMPTY_RETRY_MS}ms 后自动重试一次")
+                pendingEmptyRetry?.let { handler.removeCallbacks(it) }
+                val retry = Runnable {
+                    pendingEmptyRetry = null
+                    // 这 2.5 秒里用户可能已经切到分类 Tab：那次点击会重新请求分类，
+                    // 这次「推荐」的自动重试必须作废，否则会把用户刚看的分类整页换掉。
+                    if (!categoryTabActive) refreshHome("空结果自动重试", resetEmptyRetry = false)
+                }
+                pendingEmptyRetry = retry
+                handler.postDelayed(retry, EMPTY_RETRY_MS)
+                return@observe
+            }
             renderHome(list, site)
         }
     }
@@ -411,32 +447,55 @@ class HomeViewActivity : AppCompatActivity() {
      * 冷启动自愈：进程重启后 [VodConfig] 是空壳，先从本地已保存配置加载一次。
      *
      * 与 `HeroHomeActivity.ensureVodConfigLoaded` 同一逻辑：只在 `getHome().isEmpty()` 时触发，
-     * 失败只记日志，绝不弹窗。
+     * 失败只记日志、页面落到空态，绝不弹窗。
      */
     private fun ensureVodConfigLoaded() {
         if (!VodConfig.get().getHome().isEmpty()) return
         Log.w(TAG, "冷启动 VodConfig 为空，尝试从本地已保存配置加载")
+        // 【顺序契约】onCreate 里本方法先于 `refreshHome("onCreate")` 调用：
+        // 先把「配置在途」的标记立起来，`refreshHome` 看到它就不会用空 Site 发请求。
+        configLoadPending = true
         VodConfig.get().init().load(object : Callback() {
             override fun success() {
+                configLoadPending = false
                 Log.d(TAG, "本地配置加载完成: 站点数=${VodConfig.get().getSites().size}")
                 refreshHome("冷启动配置加载完成")
             }
 
             override fun error(msg: String) {
+                configLoadPending = false
                 Log.w(TAG, "本地配置加载失败: $msg")
+                // 真的没有可用源：明确显示空态，不能让用户对着转圈等。
+                if (items.isEmpty()) showEmpty()
             }
         })
     }
 
-    private fun refreshHome(reason: String) {
+    /**
+     * 真正发起一次首页请求。
+     *
+     * [resetEmptyRetry] = false 只用于 [observeHome] 那一次自动重试：重试回来的空结果
+     * 必须落到「空态」而不是再排一次重试（否则真实空源会无限请求）。
+     */
+    private fun refreshHome(reason: String, resetEmptyRetry: Boolean = true) {
+        // 新的一次请求已经发起：还没执行的重试作废，避免 2.5 秒后又多打一轮。
+        pendingEmptyRetry?.let { handler.removeCallbacks(it) }
+        pendingEmptyRetry = null
         val site = VodConfig.get().getHome()
         loadedHomeSiteKey = site.key.orEmpty()
         // 推荐 Tab 的「已加载」标识跟着源走：换源后必须重新请求。
         loadedTabKey = HOME_TAB_PREFIX + loadedHomeSiteKey
         categoryTabActive = false
+        if (resetEmptyRetry) emptyRetryUsed = false
         Log.d(TAG, "请求 homeContent（$reason）: key=${site.key} name=${site.displayName}")
         if (site.key.isNullOrEmpty()) {
-            Log.w(TAG, "当前接口源为空，homeContent 必然失败：请先在设置页添加接口源")
+            // 【冷启动硬伤】VodConfig 是纯内存单例，进程重启后「先空后满」。用空 Site 发
+            // `homeContent()` 必然在 SiteApi 里抛异常，SiteViewModel 又把异常吞成 `Result.empty()`，
+            // 页面就被钉死在「这里什么都没有」。所以：配置在途 → 保持 loading 等回调；
+            // 没有在途加载 → 用户确实没配源，直接空态。
+            Log.w(TAG, "当前接口源为空，暂不请求 homeContent：请先在设置页添加接口源")
+            if (!configLoadPending && items.isEmpty()) showEmpty()
+            return
         }
         siteViewModel.homeContent()
     }
@@ -476,8 +535,15 @@ class HomeViewActivity : AppCompatActivity() {
             showEmpty()
             return
         }
+        // 数据落地：作废还没执行的重试，并把「一次空结果」的重试额度还回去。
+        pendingEmptyRetry?.let { handler.removeCallbacks(it) }
+        pendingEmptyRetry = null
+        emptyRetryUsed = false
         focusedIndex = focusedIndex.coerceIn(0, next.lastIndex)
         posterAdapter.submit(next)
+        // 推荐流（homeContent）成功 = 第 0 个 Tab「推荐」的内容：选中态必须跟着回到 0。
+        // 否则从小房子 / onResume 重拉首页后，Tab 上还留着上一次分类的红框，与列表内容错位。
+        if (!categoryTabActive) tabAdapter.selectedIndex = 0
         recycler.visibility = View.VISIBLE
         posterEmpty.visibility = View.GONE
         posterProgress.visibility = View.GONE
@@ -943,7 +1009,13 @@ class HomeViewActivity : AppCompatActivity() {
             if (index < POSTER_SCROLL_ANCHOR) 0 else centeredOffset(),
         )
         recycler.post {
-            recycler.findViewHolderForAdapterPosition(index)?.itemView?.requestFocus()
+            val target = recycler.findViewHolderForAdapterPosition(index)?.itemView
+            if (target != null && target.requestFocus()) return@post
+            // 首屏数据刚落地的第一拍可能还没走完布局（holder 尚未挂上）：
+            // 再等一拍补抢一次，保证「数据回来后第一张卡一定拿到焦点、拉起大图」。
+            recycler.post {
+                recycler.findViewHolderForAdapterPosition(index)?.itemView?.requestFocus()
+            }
         }
     }
 
@@ -996,9 +1068,30 @@ class HomeViewActivity : AppCompatActivity() {
         /** 海报行「前 4 张不滚动」的分界：与原版 Leanback 的 `POSTER_SCROLL_ANCHOR` 一致。 */
         private const val POSTER_SCROLL_ANCHOR = 4
 
-        private const val POSTER_GAP_DP = 12
+        /**
+         * 海报行间距：`ref_docs/HomeActivityV2.java` L776 `L.setHorizontalSpacing(g2.b(16))`。
+         * 原版是 16dp（不是 Compose 版的 12dp）。
+         */
+        private const val POSTER_GAP_DP = 16
+
+        /** 分类 Tab 间距：同文件 L786 `K.setHorizontalSpacing(g2.b(12))`。 */
         private const val TAB_GAP_DP = 12
-        private const val TOP_BAR_ITEM_GAP_DP = 40
+
+        /**
+         * 顶栏文字间距：同文件 L780 `J.setHorizontalSpacing(g2.b(16))`。
+         *
+         * `ref_docs/home_ui.png` 实测（1920×1080 @2x，即 960×540dp）：相邻顶栏文字中心距 156px = 78dp，
+         * 减去文本 advance ≈30dp 与左右各 16dp 内边距，正好是 16dp。
+         */
+        private const val TOP_BAR_ITEM_GAP_DP = 16
+
+        /**
+         * 首页结果「list 和 types 都为空」时的自动重试延时。
+         *
+         * `SiteViewModel.execute` 的失败分支派发的是 `Result.empty()`（没有 msg），
+         * 与「源站确实没有首页」在回调里无法区分，所以只做一次静默重试，不无限轮询。
+         */
+        private const val EMPTY_RETRY_MS = 2500L
 
         private const val LOGO_CROSSFADE_MS = 150
 
@@ -1084,19 +1177,36 @@ private class HomeChipAdapter(
                 defaultFocusHighlightEnabled = false
             }
             stateListAnimator = null
-            layoutParams = RecyclerView.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-            )
             when (style) {
                 HomeChipStyle.NAV -> {
-                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
+                    // 【「顶栏靠上」的真正原因】原版顶栏是 Leanback `HorizontalGridView`
+                    // （`navRecycler` 在 ref_docs/activity_home_v2.xml 里高 64dp），
+                    // Leanback 会把每个 item 拉满整行高度；RecyclerView 不会 ——
+                    // 这里若仍写 wrap_content，TextView 只有一行字高，而 LinearLayoutManager
+                    // 不看 child 的 gravity，文字就贴在这一行的**顶部**。
+                    // 照抄原版：item 撑满 64dp 行 + gravity=CENTER。
+                    // 实测 ref_docs/home_ui.png（1920×1080 @2x，即 960×540dp）：
+                    // 文字墨迹纵向 49..77px，中心 63px ≈ 32dp，正好是 64dp 行高的一半。
+                    layoutParams = RecyclerView.LayoutParams(
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                    )
+                    gravity = Gravity.CENTER
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, NAV_TEXT_SP)
                     setTextColor(Color.WHITE)
+                    // 首个文字距 navRecycler 左沿 17dp（含字形 side bearing）→ 16dp 内边距。
+                    setPadding(dp(NAV_ITEM_PADDING_H_DP), 0, dp(NAV_ITEM_PADDING_H_DP), 0)
                 }
                 HomeChipStyle.TAB -> {
-                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
-                    minHeight = dp(26)
-                    setPadding(dp(12), 0, dp(12), 0)
+                    // ref_docs/adapter_type.xml：13sp、高 26dp、宽 wrap_content；
+                    // 水平内边距 12dp（ref_docs/tab_ui.png 实测），圆角 13dp = 完美胶囊。
+                    layoutParams = RecyclerView.LayoutParams(
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                    )
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, TAB_TEXT_SP)
+                    minHeight = dp(TAB_ITEM_HEIGHT_DP)
+                    setPadding(dp(TAB_ITEM_PADDING_H_DP), 0, dp(TAB_ITEM_PADDING_H_DP), 0)
                     setTextColor(Color.WHITE)
                 }
             }
@@ -1143,7 +1253,7 @@ private class HomeChipAdapter(
 
     /** 三态严格分离：焦点红底 → 选中红框 → 全透明（与 Compose `HeroTabChip` 同一套规则）。 */
     private fun tabBackground(focused: Boolean, selected: Boolean): Drawable = GradientDrawable().apply {
-        cornerRadius = dp(13).toFloat()
+        cornerRadius = dp(TAB_ITEM_RADIUS_DP).toFloat()
         when {
             focused -> setColor(accent)
             selected -> {
@@ -1159,6 +1269,27 @@ private class HomeChipAdapter(
     inner class Holder(val text: TextView) : RecyclerView.ViewHolder(text)
 
     private companion object {
+        /**
+         * 顶栏字号：ref_docs/home_ui.png 实测墨迹高 29px @2x ≈ 14.5dp，
+         * 16sp 的中文字形墨迹约 0.88em ≈ 14.1dp，两者吻合；也与 Compose 版 `TOP_BAR_SP = 16f` 一致。
+         */
+        private const val NAV_TEXT_SP = 16f
+
+        /** 顶栏 item 水平内边距：实测首个字形距 navRecycler 左沿 17dp（含 side bearing）。 */
+        private const val NAV_ITEM_PADDING_H_DP = 16
+
+        /** 分类 Tab 字号：ref_docs/adapter_type.xml `android:textSize="13sp"`。 */
+        private const val TAB_TEXT_SP = 13f
+
+        /** 分类 Tab 高度：同文件 `android:layout_height="26dp"`。 */
+        private const val TAB_ITEM_HEIGHT_DP = 26
+
+        /** 分类 Tab 水平内边距：ref_docs/tab_ui.png 实测 12dp（与 Compose `HERO_TAB_H_PADDING` 一致）。 */
+        private const val TAB_ITEM_PADDING_H_DP = 12
+
+        /** 分类 Tab 圆角 = 高度的一半（26 / 2）→ 完美胶囊。 */
+        private const val TAB_ITEM_RADIUS_DP = 13
+
         private const val TOP_BAR_FOCUS_SCALE = 1.1f
         private const val TOP_BAR_IDLE_ALPHA = 0.6f
         private const val TAB_IDLE_TEXT = 0x99FFFFFF.toInt()
