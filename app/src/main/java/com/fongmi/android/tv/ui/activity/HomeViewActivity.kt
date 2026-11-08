@@ -5,7 +5,6 @@ import android.content.Context
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.ColorDrawable
-import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
 import android.os.Handler
@@ -337,13 +336,10 @@ class HomeViewActivity : AppCompatActivity() {
             descendantFocusability = ViewGroup.FOCUS_AFTER_DESCENDANTS
         }
         recycler.addItemDecoration(HeroHorizontalGapDecoration(dp(POSTER_GAP_DP)))
-        // 行尾 padding 必须按当前宽度算：最后一张也能滚到屏幕正中。
-        recycler.addOnLayoutChangeListener { view, _, _, _, _, _, _, _, _ ->
-            val end = ((view.width - dp(HeroPosterCard.CARD_WIDTH_DP)) / 2).coerceAtLeast(dp(24))
-            if (view.paddingRight != end) {
-                view.setPadding(view.paddingLeft, view.paddingTop, end, view.paddingBottom)
-            }
-        }
+        // 【左右内边距】保持 XML 的 24dp / 24dp，**不再**按屏宽改写行尾 padding。
+        // 原版 `activity_home_v2.xml` L148-160 两端都是 24dp；把行尾改成 (宽-120dp)/2 会让
+        // 最后一张永远停在屏幕正中，「最后 4 张贴右不滚」就永远触发不了（那段会一直滚）。
+        // 现在的边界由 [scrollPostersTo] / [posterSnapOffset] 的三段式几何决定，padding 只认 XML。
 
         // 分类栏默认 GONE（XML 骨架就是这样）：没有分类时焦点链直接跳过它。
         typeRecycler.visibility = View.GONE
@@ -1068,25 +1064,49 @@ class HomeViewActivity : AppCompatActivity() {
     }
 
     private fun onDpadDown(): Boolean {
-        // 顶栏（小房子 / 文字项）↓：先回分类 Tab（原版 L1313 / L1362 同一分支）。
-        if (navBar.findFocus() != null) return focusLastTabOrPoster()
-        // 分类 Tab ↓：回到海报行当前卡（原版 `this.L.requestFocus()`）。
-        if (typeRecycler.findFocus() != null) return focusCurrentPoster()
+        // 顶栏（小房子 / 文字项）↓：有分类栏 → 上次停留的 Tab；没有 → 直接进海报行第 0 张
+        // （原版 L1313 `return this.K.getVisibility() == 0 ? t2() : this.L.requestFocus()`）。
+        if (navBar.findFocus() != null) {
+            return if (typeRecycler.visibility == View.VISIBLE) {
+                focusTab(lastFocusedTabIndex)
+            } else {
+                focusFirstPoster()
+            }
+        }
+        // 分类 Tab ↓：进入海报行，**焦点强制重置到第 0 张**（清单3，见 [focusFirstPoster]）。
+        if (typeRecycler.findFocus() != null) return focusFirstPoster()
         return false
     }
 
-    /** 海报行 ↑ / 顶栏 ↓ 的公共分支：有分类栏 → 上次停留的 Tab；没有 → 另一行。 */
+    /** 海报行 ↑ 的公共分支：有分类栏 → 上次停留的 Tab；没有 → 小房子。 */
     private fun focusLastTabOrHome(): Boolean =
         if (typeRecycler.visibility == View.VISIBLE) focusTab(lastFocusedTabIndex) else homeBtn.requestFocus()
 
-    private fun focusLastTabOrPoster(): Boolean =
-        if (typeRecycler.visibility == View.VISIBLE) focusTab(lastFocusedTabIndex) else focusCurrentPoster()
-
-    /** 回到海报行当前对应的那张卡（`focusedIndex` 与 Hero 区、Adapter 列表严格同下标）。 */
-    private fun focusCurrentPoster(): Boolean {
+    /**
+     * 【清单3】从顶栏 / 分类栏按 ↓ 进入海报行：焦点**强制**落到第 0 张，并清掉行内的焦点记忆。
+     *
+     * 原版 `HomeActivityV2` L1338 的分支是 `this.L.requestFocus()`：RecyclerView 会把焦点交给
+     * 行内上一次聚焦的那张卡。用户要求「进入列表或切了分类后必须从第一张开始」，
+     * 所以这里不用 `requestFocus()`，而是显式 `focusPoster(0)`：同时把 `focusedIndex` 归零，
+     * Hero 区、TMDB 请求、下一次 ↑ 的分支都以第 0 张为准。
+     */
+    private fun focusFirstPoster(): Boolean {
         if (items.isEmpty()) return false
-        focusPoster(focusedIndex)
+        focusedIndex = 0
+        focusPoster(0)
         return true
+    }
+
+    /**
+     * 【清单3】把海报行与 Hero 一起拉回第 0 张（切换分类 Tab 时调用）。
+     *
+     * 切回已经加载过的 Tab 时列表内容不会重载，Hero 必须在这里同步换到第 0 条；
+     * 会重载时这次 `applyHero(0)` 只是一帧过渡，随后的 `renderHome` 会用新数据覆盖同一张。
+     */
+    private fun resetPosterToStart() {
+        focusedIndex = 0
+        recycler.scrollToPosition(0)
+        if (items.isNotEmpty()) applyHero(0)
     }
 
     /** 把焦点交给第 [index] 个分类 Tab：holder 已挂上就直接抢，否则先定位、下一拍补抢（同 [focusPoster]）。 */
@@ -1162,6 +1182,10 @@ class HomeViewActivity : AppCompatActivity() {
         lastFocusedTabIndex = index
         tabAdapter.selectedIndex = index
         scrollTabToCenter(index)
+        // 【清单3】切换分类 = 清空海报行的焦点记忆：列表立刻回第 0 张，Hero 同步到第 0 条。
+        // 分类数据是异步回来的，`renderHome` 落地时读到的 `focusedIndex` 已经是 0，
+        // 所以「按 ↓ 进海报行」在切分类前后都一定从第一张开始，不会继承上一个分类的焦点位置。
+        resetPosterToStart()
         val site = VodConfig.get().getHome()
         val key = tabKeyOf(index)
         if (index <= 0) {
@@ -1187,20 +1211,31 @@ class HomeViewActivity : AppCompatActivity() {
     }
 
     /**
-     * 焦点卡滚动：
-     * - 前 4 张：整行回最左（已经在最左就完全不动）；
-     * - 第 5 张起：`smoothScrollToPosition` 把目标卡滚进视口。
+     * 焦点卡滚动：**三段式边界**（照抄原版 Leanback `L.setFocusScrollStrategy(0)` +
+     * `activity_home_v2.xml` 两端 24dp 内边距的实际表现）：
      *
-     * 「目标卡精确居中」需要自定义 `LinearLayoutManager` + `LinearSmoothScroller`；
-     * 本步按施工要求保留系统 `LinearLayoutManager`，居中吸附留到下一步再补。
+     * - 焦点在**前 4 张**：整行贴左 —— 第一张卡停在左侧 24dp 处，一张都不滚；
+     * - 焦点在**中间段**：焦点卡平滑滚到屏幕正中；
+     * - 焦点在**最后 4 张**：整行贴右 —— 焦点卡按「它到末卡还有几张」反推左沿，
+     *   等价于把整行搬到右端（末卡贴着 24dp 右内边距），所以这 4 张之间焦点再动也**不再滚**。
+     *
+     * 之前是「前 4 张回最左、第 5 张起 `smoothScrollToPosition(index)`」，系统只保证目标卡
+     * **进入视口**（贴左贴右都可能），所以从右往左走、左边只剩几张时会被突然拉过去。
+     * 现在 dx 由 [PosterSmoothScroller] 按 `targetPosition` 精算，行尾还会被 RecyclerView
+     * 自身的滚动边界夹住，不会越界回弹。
      */
     private fun scrollPostersTo(index: Int) {
         if (index !in items.indices) return
-        if (index < POSTER_SCROLL_ANCHOR) {
-            if (recycler.computeHorizontalScrollOffset() != 0) recycler.smoothScrollToPosition(0)
-            return
-        }
-        recycler.smoothScrollToPosition(index)
+        val manager = recycler.layoutManager as? LinearLayoutManager ?: return
+        manager.startSmoothScroll(
+            PosterSmoothScroller(
+                context = this,
+                position = index,
+                itemCount = items.size,
+                anchor = POSTER_SCROLL_ANCHOR,
+                gap = dp(POSTER_GAP_DP),
+            ).apply { targetPosition = index },
+        )
     }
 
     /** 把焦点交给第 [index] 张卡；目标还没布局出来就先瞬移定位，再在下一拍补抢。 */
@@ -1209,10 +1244,7 @@ class HomeViewActivity : AppCompatActivity() {
         val attached = recycler.findViewHolderForAdapterPosition(index)?.itemView
         if (attached != null && attached.isAttachedToWindow && attached.requestFocus()) return
         val manager = recycler.layoutManager as? LinearLayoutManager ?: return
-        manager.scrollToPositionWithOffset(
-            index,
-            if (index < POSTER_SCROLL_ANCHOR) 0 else centeredOffset(),
-        )
+        manager.scrollToPositionWithOffset(index, posterSnapOffset(index))
         recycler.post {
             val target = recycler.findViewHolderForAdapterPosition(index)?.itemView
             if (target != null && target.requestFocus()) return@post
@@ -1224,10 +1256,39 @@ class HomeViewActivity : AppCompatActivity() {
         }
     }
 
-    /** 卡片左边缘距 paddingStart 的距离：让卡片中心落在 RecyclerView 的几何中心。 */
-    private fun centeredOffset(): Int {
-        val offset = (recycler.width - dp(HeroPosterCard.CARD_WIDTH_DP)) / 2 - recycler.paddingLeft
-        return offset.coerceAtLeast(0)
+    /**
+     * `scrollToPositionWithOffset` 用的偏移量：让第 [index] 张卡落在
+     * [scrollPostersTo] 同一条三段式位置上（前 4 张贴左 / 中间居中 / 最后 4 张贴右）。
+     *
+     * 几何与 [PosterSmoothScroller.targetLeft] 是**同一份**，瞬移与动画不会打架。
+     * `offset` 是相对 RecyclerView **内容区左沿**（即 `paddingLeft`）的距离，所以
+     * 最终左沿 = `paddingLeft + offset`；贴左时 offset = 0。
+     *
+     * 这里把滚动量夹进 `[0, maxScroll]`：短列表时「贴右 / 居中」会算出越界值，
+     * 不夹的话 `scrollToPositionWithOffset` 会把整行推到左内边距之外，屏幕左边留一条空白。
+     */
+    private fun posterSnapOffset(index: Int): Int {
+        if (recycler.width == 0) return 0
+        val card = dp(HeroPosterCard.CARD_WIDTH_DP)
+        val gap = dp(POSTER_GAP_DP)
+        val step = card + gap
+        val start = recycler.paddingLeft
+        val end = recycler.width - recycler.paddingRight
+        val left = PosterSmoothScroller.targetLeft(
+            position = index,
+            itemCount = items.size,
+            anchor = POSTER_SCROLL_ANCHOR,
+            card = card,
+            gap = gap,
+            start = start,
+            end = end,
+        )
+        // 卡片在内容坐标系里的左沿（不含 paddingStart）。
+        val contentLeft = index * step
+        val contentWidth = start + items.size * card + (items.size - 1) * gap + recycler.paddingRight
+        val maxScroll = (contentWidth - recycler.width).coerceAtLeast(0)
+        val scroll = (contentLeft - (left - start)).coerceIn(0, maxScroll)
+        return contentLeft - scroll
     }
 
     /**
@@ -1472,17 +1533,24 @@ private class HomeChipAdapter(
         return Holder(root = column, text = text, underline = underline)
     }
 
-    /** 分类 Tab：ref_docs/adapter_type.xml —— 13sp、高 26dp、宽 wrap_content、圆角 13dp 胶囊。 */
+    /**
+     * 分类 Tab：逐项照抄 `ref_docs/adapter_type.xml` —— 13sp、`layout_height="26dp"`、
+     * 宽 wrap_content、背景 `@drawable/selector_item_round`（原版胶囊三态 selector）。
+     *
+     * 左右留白：先挂背景、再写 padding。`View.setBackground` 会把 drawable 自带的 padding
+     * 写进初始 padding，后设的 `setPadding` 覆盖它，所以最终水平留白恒为实测的 12dp，
+     * 不会变成「shape 6dp + View 12dp = 18dp」。
+     */
     private fun createTabHolder(parent: ViewGroup): Holder {
         val text = newTextView(parent.context).apply {
             layoutParams = RecyclerView.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT,
+                dp(TAB_ITEM_HEIGHT_DP),
             )
             setTextSize(TypedValue.COMPLEX_UNIT_SP, TAB_TEXT_SP)
-            minHeight = dp(TAB_ITEM_HEIGHT_DP)
+            setTextColor(TAB_IDLE_TEXT)
+            setBackgroundResource(R.drawable.selector_item_round)
             setPadding(dp(TAB_ITEM_PADDING_H_DP), 0, dp(TAB_ITEM_PADDING_H_DP), 0)
-            setTextColor(Color.WHITE)
         }
         return Holder(root = text, text = text, underline = null)
     }
@@ -1509,7 +1577,8 @@ private class HomeChipAdapter(
      * 焦点视觉（照抄 Compose 版 `HeroTopBarItem`，L1730-1816）：
      * - 顶栏：常态白 60% + Medium；焦点纯白 + SemiBold（系统 `sans-serif` BOLD）+ 下方红色短横线。
      *   缩放在焦点监听里做，只作用于绘制层，下划线不会跳动。
-     * - 分类 Tab：焦点红底 / 选中红框 / 常态全透明（与原版 `selector_item_round` 同一套三态）。
+     * - 分类 Tab：三态全部交给 `selector_item_round`（原版 `selector_item_round.xml` 的
+     *   `state_focused` / `state_selected` / normal），这里只同步 `isSelected` 与文字颜色。
      */
     private fun applyVisual(holder: Holder, focused: Boolean, position: Int) {
         val text = holder.text
@@ -1522,22 +1591,11 @@ private class HomeChipAdapter(
             }
             HomeChipStyle.TAB -> {
                 val selected = position == selectedIndex
+                // 未选中未聚焦 = 深色半透明底；选中未聚焦 = 红色描边；聚焦 = 红色实心。
+                // 三种底色都写在 selector 里，framework 按 state 自动切，不用每次 new 一个 Drawable。
+                text.isSelected = selected
                 text.setTextColor(if (focused || selected) Color.WHITE else TAB_IDLE_TEXT)
-                text.background = tabBackground(focused, selected)
             }
-        }
-    }
-
-    /** 三态严格分离：焦点红底 → 选中红框 → 全透明（与 Compose `HeroTabChip` 同一套规则）。 */
-    private fun tabBackground(focused: Boolean, selected: Boolean): Drawable = GradientDrawable().apply {
-        cornerRadius = dp(TAB_ITEM_RADIUS_DP).toFloat()
-        when {
-            focused -> setColor(accent)
-            selected -> {
-                setColor(Color.TRANSPARENT)
-                setStroke((1.5f * density).roundToInt().coerceAtLeast(1), accent)
-            }
-            else -> setColor(Color.TRANSPARENT)
         }
     }
 
@@ -1585,11 +1643,14 @@ private class HomeChipAdapter(
         /** 分类 Tab 高度：同文件 `android:layout_height="26dp"`。 */
         private const val TAB_ITEM_HEIGHT_DP = 26
 
-        /** 分类 Tab 水平内边距：ref_docs/tab_ui.png 实测 12dp（与 Compose `HERO_TAB_H_PADDING` 一致）。 */
+        /**
+         * 分类 Tab 水平内边距：12dp（`ref_docs/tab_ui.png` 实测，与 Compose `HERO_TAB_H_PADDING` 一致）。
+         *
+         * 原版这份留白一半来自 shape 的 padding（`ref_docs/shape_chip_round_*.xml` 6dp），
+         * 一半来自 `CustomTypeView` 自己；这里直接写总宽 12dp 并放在 setBackground 之后，
+         * 几何与原版一致、又不受 drawable padding 覆盖规则的影响。
+         */
         private const val TAB_ITEM_PADDING_H_DP = 12
-
-        /** 分类 Tab 圆角 = 高度的一半（26 / 2）→ 完美胶囊。 */
-        private const val TAB_ITEM_RADIUS_DP = 13
 
         private const val TOP_BAR_FOCUS_SCALE = 1.1f
 
@@ -1630,5 +1691,76 @@ private class CenterSmoothScroller(context: Context) : LinearSmoothScroller(cont
         // 目标项中心：只取布局后的左右边界，不含外边距 / ItemDecoration 间距。
         val targetCenter = (view.left + view.right) / 2
         return viewportCenter - targetCenter
+    }
+}
+
+/**
+ * 海报行的三段式滚动器（清单2 的核心）：**先按 `targetPosition` 判边界，再决定 dx**。
+ *
+ * 原版 Leanback `setFocusScrollStrategy(0)` 的表现（对照两张 1920×1080 参照截图）：
+ * - `targetPosition < anchor`（前 4 张）：整行贴左，第一张停在 `paddingLeft`（24dp）处，不动；
+ * - `targetPosition > itemCount - 1 - anchor`（最后 4 张）：整行贴右 —— 由「目标到末卡还差几张」
+ *   反推左沿，等价于让末卡贴在 `width - paddingRight` 上；这 4 张共享同一个滚动终点，
+ *   所以焦点在它们之间移动时**完全不动**（越界部分由 RecyclerView 自身的边界夹住）；
+ * - 其余（中间段）：焦点卡中心对齐视口中心。
+ *
+ * 之前直接 `smoothScrollToPosition(index)` 只保证目标卡「进入视口」，系统会按最省距离滚，
+ * 于是从右往左走时左边只剩几张也会被突然拉过去 —— 那就是用户说的拉扯感。
+ *
+ * 符号约定与 [CenterSmoothScroller] 一致：这里返回的是「目标左沿 - 当前左沿」，
+ * `LinearSmoothScroller.onTargetFound` 内部按 `-dx` 滚动，所以不能反。
+ */
+private class PosterSmoothScroller(
+    context: Context,
+    private val position: Int,
+    private val itemCount: Int,
+    private val anchor: Int,
+    private val gap: Int,
+) : LinearSmoothScroller(context) {
+
+    override fun getVerticalSnapPreference(): Int = LinearSmoothScroller.SNAP_TO_START
+
+    override fun calculateDyToMakeVisible(view: View, snapPreference: Int): Int = 0
+
+    override fun calculateDxToMakeVisible(view: View, snapPreference: Int): Int {
+        val manager = layoutManager ?: return 0
+        // view.width 就是卡片实测宽度（Adapter 显式下发 120dp，卡片 onMeasure 再用 EXACTLY 兜底）。
+        val wantedLeft = targetLeft(
+            position = position,
+            itemCount = itemCount,
+            anchor = anchor,
+            card = view.width,
+            gap = gap,
+            start = manager.paddingLeft,
+            end = manager.width - manager.paddingRight,
+        )
+        return wantedLeft - view.left
+    }
+
+    companion object {
+        /**
+         * 第 [position] 张卡的理想左沿（px，RecyclerView 坐标系，含左内边距）。
+         *
+         * - 贴左：`start`（第一张卡停在 24dp）；
+         * - 贴右：`end - card - (末卡下标 - position) * (card + gap)`，
+         *   即「末卡贴右内边距」反推出来的整行位置 —— 最后 4 张共用同一条终点，所以不再滚动；
+         * - 居中：`(start + end - card) / 2`。
+         *
+         * [scrollPostersTo] 的平滑滚动与 [focusPoster] 的瞬移定位都走这一个函数，避免两套几何漂移。
+         */
+        fun targetLeft(
+            position: Int,
+            itemCount: Int,
+            anchor: Int,
+            card: Int,
+            gap: Int,
+            start: Int,
+            end: Int,
+        ): Int = when {
+            position < anchor -> start
+            position > itemCount - 1 - anchor ->
+                end - card - (itemCount - 1 - position) * (card + gap)
+            else -> (start + end - card) / 2
+        }
     }
 }

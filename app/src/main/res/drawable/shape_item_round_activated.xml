@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  分类 Tab「选中未聚焦」态：深色半透明胶囊底 + 红色描边（红框）。
+  几何照抄 ref_docs/shape_chip_round_activated.xml（radius 28dp + 左右 padding 6dp），
+  描边宽度 / 颜色照抄工程内同族 drawable shape_source_site_chip_selected.xml（2dp / @color/red）；
+  底色与常态一致（清空焦点后胶囊不能变成空心 / 透明，参照 ref_docs 与逆向截图里
+  「选中但焦点在海报行」时胶囊仍然是实心深色块）。
+-->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <solid android:color="#33000000" />
+    <stroke
+        android:width="2dp"
+        android:color="@color/red" />
+    <corners android:radius="28dp" />
+    <padding
+        android:left="6dp"
+        android:right="6dp" />
+</shape>
