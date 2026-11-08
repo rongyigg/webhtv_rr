@@ -338,8 +338,8 @@ class HomeViewActivity : AppCompatActivity() {
         recycler.addItemDecoration(HeroHorizontalGapDecoration(dp(POSTER_GAP_DP)))
         // 【左右内边距】保持 XML 的 24dp / 24dp，**不再**按屏宽改写行尾 padding。
         // 原版 `activity_home_v2.xml` L148-160 两端都是 24dp；把行尾改成 (宽-120dp)/2 会让
-        // 最后一张永远停在屏幕正中，「最后 4 张贴右不滚」就永远触发不了（那段会一直滚）。
-        // 现在的边界由 [scrollPostersTo] / [posterSnapOffset] 的三段式几何决定，padding 只认 XML。
+        // 最后一张永远停在屏幕正中，行尾就永远滚不到头。
+        // 滚动位置全部交给 [scrollPostersTo] 的系统 API，padding 只认 XML。
 
         // 分类栏默认 GONE（XML 骨架就是这样）：没有分类时焦点链直接跳过它。
         typeRecycler.visibility = View.GONE
@@ -1211,31 +1211,19 @@ class HomeViewActivity : AppCompatActivity() {
     }
 
     /**
-     * 焦点卡滚动：**三段式边界**（照抄原版 Leanback `L.setFocusScrollStrategy(0)` +
-     * `activity_home_v2.xml` 两端 24dp 内边距的实际表现）：
+     * 焦点卡滚动：**只用系统 API** [RecyclerView.smoothScrollToPosition]。
      *
-     * - 焦点在**前 4 张**：整行贴左 —— 第一张卡停在左侧 24dp 处，一张都不滚；
-     * - 焦点在**中间段**：焦点卡平滑滚到屏幕正中；
-     * - 焦点在**最后 4 张**：整行贴右 —— 焦点卡按「它到末卡还有几张」反推左沿，
-     *   等价于把整行搬到右端（末卡贴着 24dp 右内边距），所以这 4 张之间焦点再动也**不再滚**。
+     * 边界全部交给标准 `LinearLayoutManager` + `LinearSmoothScroller` 的默认行为 + RecyclerView
+     * 自身的滚动夹取：目标卡只在「看不见」时才滚，滚到首尾自然停住 —— 前几张贴左、最后几张贴右，
+     * 不会为了把某张卡摆到屏幕正中而把整行拽过去。
      *
-     * 之前是「前 4 张回最左、第 5 张起 `smoothScrollToPosition(index)`」，系统只保证目标卡
-     * **进入视口**（贴左贴右都可能），所以从右往左走、左边只剩几张时会被突然拉过去。
-     * 现在 dx 由 [PosterSmoothScroller] 按 `targetPosition` 精算，行尾还会被 RecyclerView
-     * 自身的滚动边界夹住，不会越界回弹。
+     * 上一版在这里用 PosterSmoothScroller 按 `targetPosition` 手算「贴左 / 居中 / 贴右」三段式
+     * 位置，列表一短、或焦点从右往左回走，算出来的终点就与系统滚动边界打架 —— 那就是拉扯感。
+     * 现在没有任何手算偏移。
      */
     private fun scrollPostersTo(index: Int) {
         if (index !in items.indices) return
-        val manager = recycler.layoutManager as? LinearLayoutManager ?: return
-        manager.startSmoothScroll(
-            PosterSmoothScroller(
-                context = this,
-                position = index,
-                itemCount = items.size,
-                anchor = POSTER_SCROLL_ANCHOR,
-                gap = dp(POSTER_GAP_DP),
-            ).apply { targetPosition = index },
-        )
+        recycler.smoothScrollToPosition(index)
     }
 
     /** 把焦点交给第 [index] 张卡；目标还没布局出来就先瞬移定位，再在下一拍补抢。 */
@@ -1243,8 +1231,7 @@ class HomeViewActivity : AppCompatActivity() {
         if (index !in items.indices) return
         val attached = recycler.findViewHolderForAdapterPosition(index)?.itemView
         if (attached != null && attached.isAttachedToWindow && attached.requestFocus()) return
-        val manager = recycler.layoutManager as? LinearLayoutManager ?: return
-        manager.scrollToPositionWithOffset(index, posterSnapOffset(index))
+        recycler.scrollToPosition(index)
         recycler.post {
             val target = recycler.findViewHolderForAdapterPosition(index)?.itemView
             if (target != null && target.requestFocus()) return@post
@@ -1257,45 +1244,8 @@ class HomeViewActivity : AppCompatActivity() {
     }
 
     /**
-     * `scrollToPositionWithOffset` 用的偏移量：让第 [index] 张卡落在
-     * [scrollPostersTo] 同一条三段式位置上（前 4 张贴左 / 中间居中 / 最后 4 张贴右）。
-     *
-     * 几何与 [PosterSmoothScroller.targetLeft] 是**同一份**，瞬移与动画不会打架。
-     * `offset` 是相对 RecyclerView **内容区左沿**（即 `paddingLeft`）的距离，所以
-     * 最终左沿 = `paddingLeft + offset`；贴左时 offset = 0。
-     *
-     * 这里把滚动量夹进 `[0, maxScroll]`：短列表时「贴右 / 居中」会算出越界值，
-     * 不夹的话 `scrollToPositionWithOffset` 会把整行推到左内边距之外，屏幕左边留一条空白。
-     */
-    private fun posterSnapOffset(index: Int): Int {
-        if (recycler.width == 0) return 0
-        val card = dp(HeroPosterCard.CARD_WIDTH_DP)
-        val gap = dp(POSTER_GAP_DP)
-        val step = card + gap
-        val start = recycler.paddingLeft
-        val end = recycler.width - recycler.paddingRight
-        val left = PosterSmoothScroller.targetLeft(
-            position = index,
-            itemCount = items.size,
-            anchor = POSTER_SCROLL_ANCHOR,
-            card = card,
-            gap = gap,
-            start = start,
-            end = end,
-        )
-        // 卡片在内容坐标系里的左沿（不含 paddingStart）。
-        val contentLeft = index * step
-        val contentWidth = start + items.size * card + (items.size - 1) * gap + recycler.paddingRight
-        val maxScroll = (contentWidth - recycler.width).coerceAtLeast(0)
-        val scroll = (contentLeft - (left - start)).coerceIn(0, maxScroll)
-        return contentLeft - scroll
-    }
-
-    /**
-     * 把第 [index] 个分类 Tab 平滑滚到**屏幕正中**（与海报行同一套几何）。
-     *
-     * 与海报行「前 4 张不动」不同：Tab 行一共只有几个到十几个，始终让选中项居中更好认，
-     * 首尾两端由 RecyclerView 自己夹住（滚到头就停），不会把行滚出边界。
+     * 把第 [index] 个分类 Tab 平滑滚到可见处（Tab 行项少，系统默认行为已经够用；
+     * 首尾两端由 RecyclerView 自己夹住，滚到头就停）。
      */
     private fun scrollTabToCenter(index: Int) {
         if (index !in 0 until tabAdapter.itemCount) return
@@ -1352,9 +1302,6 @@ class HomeViewActivity : AppCompatActivity() {
          * 方向键滑过一排时焦点每 ~50ms 换一张，停手 300ms 才发请求 —— 滑过不发。
          */
         private const val TMDB_FOCUS_DEBOUNCE_MS = 300L
-
-        /** 海报行「前 4 张不滚动」的分界：与原版 Leanback 的 `POSTER_SCROLL_ANCHOR` 一致。 */
-        private const val POSTER_SCROLL_ANCHOR = 4
 
         /**
          * 海报行间距：`ref_docs/HomeActivityV2.java` L776 `L.setHorizontalSpacing(g2.b(16))`。
@@ -1434,6 +1381,18 @@ private class HomeChipAdapter(
     private val items = ArrayList<String>()
     private val density = context.resources.displayMetrics.density
     private val accent = ContextCompat.getColor(context, R.color.hero_accent)
+
+    /**
+     * 分类 Tab 三态颜色：**全部**来自 `colors.xml` 的 `home_tab_*`（每个值的取色来源都写在那里的注释里），
+     * 代码里不再出现任何十六进制字面量。
+     */
+    private val tabFocusGradient = intArrayOf(
+        ContextCompat.getColor(context, R.color.home_tab_focus_start),
+        ContextCompat.getColor(context, R.color.home_tab_focus_end),
+    )
+    private val tabStrokeColor = ContextCompat.getColor(context, R.color.home_tab_stroke)
+    private val tabIdleSurface = ContextCompat.getColor(context, R.color.home_tab_idle_surface)
+    private val tabIdleText = ContextCompat.getColor(context, R.color.home_tab_idle_text)
 
     /** 选中下标：Tab 用它画「失焦仍选中」的红色描边；-1 = 未选中。 */
     var selectedIndex: Int = -1
@@ -1534,12 +1493,13 @@ private class HomeChipAdapter(
     }
 
     /**
-     * 分类 Tab：逐项照抄 `ref_docs/adapter_type.xml` —— 13sp、`layout_height="26dp"`、
-     * 宽 wrap_content、背景 `@drawable/selector_item_round`（原版胶囊三态 selector）。
+     * 分类 Tab：逐项照抄 `ref_docs/adapter_type.xml` —— 13sp、`layout_height="26dp"`、宽 wrap_content。
      *
-     * 左右留白：先挂背景、再写 padding。`View.setBackground` 会把 drawable 自带的 padding
-     * 写进初始 padding，后设的 `setPadding` 覆盖它，所以最终水平留白恒为实测的 12dp，
-     * 不会变成「shape 6dp + View 12dp = 18dp」。
+     * 三态底色（原版 `selector_item_round.xml` 的 focused / selected / normal）在 Kotlin 侧由
+     * [tabBackground] 生成，见该方法与 `colors.xml` 的 `home_tab_*`；这里只做首帧的常态底。
+     *
+     * 左右留白：`setBackground` 会把 drawable 自带的 padding 写进 View，但这里用的
+     * `GradientDrawable` 没有自带 padding，所以水平留白恒为实测的 12dp。
      */
     private fun createTabHolder(parent: ViewGroup): Holder {
         val text = newTextView(parent.context).apply {
@@ -1548,8 +1508,8 @@ private class HomeChipAdapter(
                 dp(TAB_ITEM_HEIGHT_DP),
             )
             setTextSize(TypedValue.COMPLEX_UNIT_SP, TAB_TEXT_SP)
-            setTextColor(TAB_IDLE_TEXT)
-            setBackgroundResource(R.drawable.selector_item_round)
+            setTextColor(tabIdleText)
+            background = tabBackground(focused = false, selected = false)
             setPadding(dp(TAB_ITEM_PADDING_H_DP), 0, dp(TAB_ITEM_PADDING_H_DP), 0)
         }
         return Holder(root = text, text = text, underline = null)
@@ -1577,8 +1537,8 @@ private class HomeChipAdapter(
      * 焦点视觉（照抄 Compose 版 `HeroTopBarItem`，L1730-1816）：
      * - 顶栏：常态白 60% + Medium；焦点纯白 + SemiBold（系统 `sans-serif` BOLD）+ 下方红色短横线。
      *   缩放在焦点监听里做，只作用于绘制层，下划线不会跳动。
-     * - 分类 Tab：三态全部交给 `selector_item_round`（原版 `selector_item_round.xml` 的
-     *   `state_focused` / `state_selected` / normal），这里只同步 `isSelected` 与文字颜色。
+     * - 分类 Tab：严格三态 —— 聚焦 = 焦点实心红（横向渐变）；选中未聚焦 = 透明底 + 红框；
+     *   其余 = 深色半透明胶囊底。三种底色都由 [tabBackground] 生成。
      */
     private fun applyVisual(holder: Holder, focused: Boolean, position: Int) {
         val text = holder.text
@@ -1590,12 +1550,38 @@ private class HomeChipAdapter(
                 holder.underline?.alpha = if (focused) 1f else 0f
             }
             HomeChipStyle.TAB -> {
-                val selected = position == selectedIndex
-                // 未选中未聚焦 = 深色半透明底；选中未聚焦 = 红色描边；聚焦 = 红色实心。
-                // 三种底色都写在 selector 里，framework 按 state 自动切，不用每次 new 一个 Drawable。
+                // position 可能是 NO_POSITION(-1)，必须排除，否则会把 -1 当成「已选中」。
+                val selected = position >= 0 && position == selectedIndex
+                // 三态严格判断，顺序不能换：
+                //   1. hasFocus            → 焦点实心红（横向渐变），白字
+                //   2. 未聚焦 && 已选中     → 透明底 + 红框描边，白字
+                //   3. 其余                → 深色半透明胶囊底，暗白字
                 text.isSelected = selected
-                text.setTextColor(if (focused || selected) Color.WHITE else TAB_IDLE_TEXT)
+                text.background = tabBackground(focused, selected)
+                text.setTextColor(if (focused || selected) Color.WHITE else tabIdleText)
             }
+        }
+    }
+
+    /**
+     * 分类 Tab 胶囊背景 —— 三态唯一的生成入口，颜色全部取自 `colors.xml` 的 `home_tab_*`：
+     * - [focused]：焦点实心红，**横向 2 段渐变** `home_tab_focus_start → home_tab_focus_end`
+     *   （ref_docs/tab_ui.png 实测，禁止用纯色或 3 段近似）；
+     * - 选中未聚焦：**透明底** + [TAB_STROKE_DP] 描边 `home_tab_stroke`；
+     * - 其余：`home_tab_idle_surface` 深色半透明胶囊底。
+     * 圆角照抄 `ref_docs/shape_chip_round_normal.xml` 的 28dp（26dp 高的胶囊被夹成半圆端）。
+     */
+    private fun tabBackground(focused: Boolean, selected: Boolean): GradientDrawable {
+        val radius = dp(TAB_PILL_RADIUS_DP).toFloat()
+        if (focused) {
+            return GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT, tabFocusGradient).apply {
+                cornerRadius = radius
+            }
+        }
+        return GradientDrawable().apply {
+            cornerRadius = radius
+            setColor(if (selected) Color.TRANSPARENT else tabIdleSurface)
+            if (selected) setStroke(dp(TAB_STROKE_DP), tabStrokeColor)
         }
     }
 
@@ -1661,7 +1647,12 @@ private class HomeChipAdapter(
         private val NAV_IDLE_TYPEFACE: Typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
         private val NAV_FOCUS_TYPEFACE: Typeface = Typeface.create("sans-serif", Typeface.BOLD)
 
-        private const val TAB_IDLE_TEXT = 0x99FFFFFF.toInt()
+        /** 分类 Tab 胶囊圆角：`ref_docs/shape_chip_round_normal.xml` `corners radius=28dp`。 */
+        private const val TAB_PILL_RADIUS_DP = 28
+
+        /** 分类 Tab 选中描边宽度：工程内同族 `shape_source_site_chip_selected.xml` 2dp。 */
+        private const val TAB_STROKE_DP = 2
+
         private const val FOCUS_ANIM_MS = 150L
     }
 }
@@ -1669,8 +1660,8 @@ private class HomeChipAdapter(
 /**
  * 让目标项停在视口正中的平滑滚动器（分类 Tab 行专用）。
  *
- * 海报行用的是「前 4 张不动、第 5 张起才滚」的 Leanback 规则，Tab 行项少且每一格都要认，
- * 所以这里始终居中。只重写水平方向：
+ * 海报行现在直接用系统 [RecyclerView.smoothScrollToPosition]，不再有自定义滚动器。
+ * Tab 行项少且每一格都要认，所以这里始终居中。只重写水平方向：
  * `dx = 视口中心 - 目标项中心`（`onTargetFound` 内部按 `-dx` 滚动，所以这个符号不能反，
  * 与 `HeroHomeActivity.HeroPosterSmoothScroller` 同一套约定）；
  * 垂直方向固定 `SNAP_TO_START` 且 dy 恒为 0（整行高度就是 wrap_content，没有垂直滚动空间）。
@@ -1694,73 +1685,3 @@ private class CenterSmoothScroller(context: Context) : LinearSmoothScroller(cont
     }
 }
 
-/**
- * 海报行的三段式滚动器（清单2 的核心）：**先按 `targetPosition` 判边界，再决定 dx**。
- *
- * 原版 Leanback `setFocusScrollStrategy(0)` 的表现（对照两张 1920×1080 参照截图）：
- * - `targetPosition < anchor`（前 4 张）：整行贴左，第一张停在 `paddingLeft`（24dp）处，不动；
- * - `targetPosition > itemCount - 1 - anchor`（最后 4 张）：整行贴右 —— 由「目标到末卡还差几张」
- *   反推左沿，等价于让末卡贴在 `width - paddingRight` 上；这 4 张共享同一个滚动终点，
- *   所以焦点在它们之间移动时**完全不动**（越界部分由 RecyclerView 自身的边界夹住）；
- * - 其余（中间段）：焦点卡中心对齐视口中心。
- *
- * 之前直接 `smoothScrollToPosition(index)` 只保证目标卡「进入视口」，系统会按最省距离滚，
- * 于是从右往左走时左边只剩几张也会被突然拉过去 —— 那就是用户说的拉扯感。
- *
- * 符号约定与 [CenterSmoothScroller] 一致：这里返回的是「目标左沿 - 当前左沿」，
- * `LinearSmoothScroller.onTargetFound` 内部按 `-dx` 滚动，所以不能反。
- */
-private class PosterSmoothScroller(
-    context: Context,
-    private val position: Int,
-    private val itemCount: Int,
-    private val anchor: Int,
-    private val gap: Int,
-) : LinearSmoothScroller(context) {
-
-    override fun getVerticalSnapPreference(): Int = LinearSmoothScroller.SNAP_TO_START
-
-    override fun calculateDyToMakeVisible(view: View, snapPreference: Int): Int = 0
-
-    override fun calculateDxToMakeVisible(view: View, snapPreference: Int): Int {
-        val manager = layoutManager ?: return 0
-        // view.width 就是卡片实测宽度（Adapter 显式下发 120dp，卡片 onMeasure 再用 EXACTLY 兜底）。
-        val wantedLeft = targetLeft(
-            position = position,
-            itemCount = itemCount,
-            anchor = anchor,
-            card = view.width,
-            gap = gap,
-            start = manager.paddingLeft,
-            end = manager.width - manager.paddingRight,
-        )
-        return wantedLeft - view.left
-    }
-
-    companion object {
-        /**
-         * 第 [position] 张卡的理想左沿（px，RecyclerView 坐标系，含左内边距）。
-         *
-         * - 贴左：`start`（第一张卡停在 24dp）；
-         * - 贴右：`end - card - (末卡下标 - position) * (card + gap)`，
-         *   即「末卡贴右内边距」反推出来的整行位置 —— 最后 4 张共用同一条终点，所以不再滚动；
-         * - 居中：`(start + end - card) / 2`。
-         *
-         * [scrollPostersTo] 的平滑滚动与 [focusPoster] 的瞬移定位都走这一个函数，避免两套几何漂移。
-         */
-        fun targetLeft(
-            position: Int,
-            itemCount: Int,
-            anchor: Int,
-            card: Int,
-            gap: Int,
-            start: Int,
-            end: Int,
-        ): Int = when {
-            position < anchor -> start
-            position > itemCount - 1 - anchor ->
-                end - card - (itemCount - 1 - position) * (card + gap)
-            else -> (start + end - card) / 2
-        }
-    }
-}

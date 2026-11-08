@@ -62,4 +62,22 @@
         Hero 页面若再加新的焦点控件，一律引用本资源，不得新造第二种高亮色。
     -->
     <color name="hero_accent">#FFFF0000</color>
+
+    <!--
+        首页分类 Tab 三态取色（唯一真值；代码里禁止再写十六进制）：
+        - 焦点实心 = 横向线性渐变 #E50914 → #FF7A85，2 段，不是 3 段。
+          来源：ref_docs/tab_ui.png 焦点胶囊沿 x 扫描（胶囊 x=29..135、y=33）：
+          x=41 #E81621 → x=119 #F96870，两端各外推 12px 正好落在 #E50914 / #FF7A85；
+          中段实测 #F1424B 与 2 段中点 #F2424C 吻合，说明中心色不是 #F44336。
+        - 选中描边 = #E50914，即 @color/red（ref_docs/shape_red_bar.xml / shape_tmdb_badge.xml 原值），
+          宽度 2dp 照抄工程内同族 shape_source_site_chip_selected.xml。
+        - 未选中胶囊底 = @color/black_20（#33000000）：ref_docs/tab_ui.png 胶囊内/外明暗比
+          实测 0.79~0.80 → 20% 黑。
+        - 未选中文字 = #99FFFFFF（ref_docs/dialog_source.xml 原值，等于 Compose `White.copy(alpha=0.6f)`）。
+    -->
+    <color name="home_tab_focus_start">@color/red</color>
+    <color name="home_tab_focus_end">#FF7A85</color>
+    <color name="home_tab_stroke">@color/red</color>
+    <color name="home_tab_idle_surface">@color/black_20</color>
+    <color name="home_tab_idle_text">#99FFFFFF</color>
 </resources>
