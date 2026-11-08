@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  首页 homeBtn「聚焦」底：实心红圆。
+
+  颜色只用真值：@color/red = #E50914（ref_docs/shape_red_bar.xml / shape_tmdb_badge.xml 原值），
+  与 ref_docs/selector_home_logo_source.xml 指向的 shape_home_logo_source_focused 同色。
+  形状 oval、无描边、无渐变 —— 与 ref_docs/shape_home_logo_normal_white.xml 的结构一一对应
+  （那个文件是常态，这里是它缺的那一档聚焦态）。
+-->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="oval">
+    <solid android:color="@color/red" />
+</shape>

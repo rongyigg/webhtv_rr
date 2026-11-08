@@ -4,15 +4,17 @@
       android:id="@+id/homeBtn"
       android:background="@drawable/selector_home_logo"
 
-  与已有的 selector_home_logo_source 指向同两个 shape（换源弹窗的站点小房子继续用后者），
-  这样两个入口的小房子配色永远一致：
-    - focused → shape_home_logo_source_focused（@color/red #E50914 椭圆）
-    - 默认    → shape_home_logo_normal_white（@color/white_10 #1AFFFFFF 椭圆）
+  两档：
+    - focused  → shape_home_logo_focused：实心红圆（@color/red #E50914）
+    - 默认      → shape_home_logo_normal ：细红边框 + 透明填充（1dp @color/red）
+
+  与换源弹窗的 `selector_home_logo_source` 分开：那边底是浅灰面板，常态用 @color/white_10 圆；
+  首页顶栏是纯黑底，按原版截图 ref_docs/home_ui.png 不铺圆底，只留细红边框。
   原版没有放大、没有白描边，这里也不加。
 -->
 <selector xmlns:android="http://schemas.android.com/apk/res/android">
     <item
         android:state_focused="true"
-        android:drawable="@drawable/shape_home_logo_source_focused" />
-    <item android:drawable="@drawable/shape_home_logo_normal_white" />
+        android:drawable="@drawable/shape_home_logo_focused" />
+    <item android:drawable="@drawable/shape_home_logo_normal" />
 </selector>

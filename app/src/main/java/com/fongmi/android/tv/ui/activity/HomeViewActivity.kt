@@ -1211,19 +1211,18 @@ class HomeViewActivity : AppCompatActivity() {
     }
 
     /**
-     * 焦点卡滚动：**只用系统 API** [RecyclerView.smoothScrollToPosition]。
+     * 焦点卡滚动：标准 [LinearSmoothScroller] 子类 + `SNAP_TO_CENTER`。
      *
-     * 边界全部交给标准 `LinearLayoutManager` + `LinearSmoothScroller` 的默认行为 + RecyclerView
-     * 自身的滚动夹取：目标卡只在「看不见」时才滚，滚到首尾自然停住 —— 前几张贴左、最后几张贴右，
-     * 不会为了把某张卡摆到屏幕正中而把整行拽过去。
-     *
-     * 上一版在这里用 PosterSmoothScroller 按 `targetPosition` 手算「贴左 / 居中 / 贴右」三段式
-     * 位置，列表一短、或焦点从右往左回走，算出来的终点就与系统滚动边界打架 —— 那就是拉扯感。
-     * 现在没有任何手算偏移。
+     * 不再有任何手算边界：`dx` 只由「视口中心 - 目标项中心」决定，滚动量由 RecyclerView 自己
+     * 夹到 `[0, maxScroll]`。行首因为左边有 24dp 内边距（`clipToPadding="false"`），
+     * 前几张的目标中心本来就在视口中心左侧/附近，算出来的 dx ≤ 0，滚动量被夹成 0，自然贴边不滚；
+     * 行尾同理贴右。中间段自然居中。
      */
     private fun scrollPostersTo(index: Int) {
         if (index !in items.indices) return
-        recycler.smoothScrollToPosition(index)
+        val smoothScroller = CenterSmoothScroller(this)
+        smoothScroller.targetPosition = index
+        (recycler.layoutManager as LinearLayoutManager).startSmoothScroll(smoothScroller)
     }
 
     /** 把焦点交给第 [index] 张卡；目标还没布局出来就先瞬移定位，再在下一拍补抢。 */
@@ -1244,13 +1243,13 @@ class HomeViewActivity : AppCompatActivity() {
     }
 
     /**
-     * 把第 [index] 个分类 Tab 平滑滚到可见处（Tab 行项少，系统默认行为已经够用；
-     * 首尾两端由 RecyclerView 自己夹住，滚到头就停）。
+     * 把第 [index] 个分类 Tab 平滑滚到视口正中（同一套 [CenterSmoothScroller]，首尾由 RecyclerView 夹住）。
      */
     private fun scrollTabToCenter(index: Int) {
         if (index !in 0 until tabAdapter.itemCount) return
-        val manager = typeRecycler.layoutManager as? LinearLayoutManager ?: return
-        manager.startSmoothScroll(CenterSmoothScroller(this).apply { targetPosition = index })
+        val smoothScroller = CenterSmoothScroller(this)
+        smoothScroller.targetPosition = index
+        (typeRecycler.layoutManager as LinearLayoutManager).startSmoothScroll(smoothScroller)
     }
 
     // ==================================================================
@@ -1658,28 +1657,19 @@ private class HomeChipAdapter(
 }
 
 /**
- * 让目标项停在视口正中的平滑滚动器（分类 Tab 行专用）。
+ * 居中平滑滚动器：海报行与分类 Tab 行共用。
  *
- * 海报行现在直接用系统 [RecyclerView.smoothScrollToPosition]，不再有自定义滚动器。
- * Tab 行项少且每一格都要认，所以这里始终居中。只重写水平方向：
- * `dx = 视口中心 - 目标项中心`（`onTargetFound` 内部按 `-dx` 滚动，所以这个符号不能反，
- * 与 `HeroHomeActivity.HeroPosterSmoothScroller` 同一套约定）；
- * 垂直方向固定 `SNAP_TO_START` 且 dy 恒为 0（整行高度就是 wrap_content，没有垂直滚动空间）。
- *
- * 目标靠近首尾时，RecyclerView 自己会把滚动夹到边界，不会把整行滚出屏幕。
+ * 逻辑与作业给定代码逐字一致 —— `SNAP_TO_CENTER` + 「视口中心 - 目标项中心」，
+ * 不含任何 `position < N` / `itemCount - N` 之类的边界计算。首尾贴边完全由
+ * RecyclerView 自身的滚动夹取与 `clipToPadding="false"` 的 24dp 内边距决定。
  */
-private class CenterSmoothScroller(context: Context) : LinearSmoothScroller(context) {
-
-    override fun getVerticalSnapPreference(): Int = LinearSmoothScroller.SNAP_TO_START
-
-    override fun calculateDyToMakeVisible(view: View, snapPreference: Int): Int = 0
+class CenterSmoothScroller(context: Context) : LinearSmoothScroller(context) {
+    override fun getHorizontalSnapPreference(): Int = SNAP_TO_CENTER
+    override fun getVerticalSnapPreference(): Int = SNAP_TO_START
 
     override fun calculateDxToMakeVisible(view: View, snapPreference: Int): Int {
         val manager = layoutManager ?: return 0
-        // 视口内容区中心（减掉左右 padding，typeRecycler 是 24dp 对称内边距 → 正好屏幕中心）。
-        val viewportCenter = manager.paddingLeft +
-            (manager.width - manager.paddingLeft - manager.paddingRight) / 2
-        // 目标项中心：只取布局后的左右边界，不含外边距 / ItemDecoration 间距。
+        val viewportCenter = manager.paddingLeft + (manager.width - manager.paddingLeft - manager.paddingRight) / 2
         val targetCenter = (view.left + view.right) / 2
         return viewportCenter - targetCenter
     }
