@@ -50,6 +50,7 @@ import com.fongmi.android.tv.impl.Callback
 import com.fongmi.android.tv.model.SiteViewModel
 import com.fongmi.android.tv.service.TmdbService
 import com.fongmi.android.tv.setting.Setting
+import com.fongmi.android.tv.setting.SiteBlockSetting
 import com.fongmi.android.tv.setting.TmdbSitePolicy
 import com.fongmi.android.tv.ui.custom.HeroImageView
 import com.fongmi.android.tv.ui.custom.ProgressLayout
@@ -59,7 +60,10 @@ import com.fongmi.android.tv.ui.hero.HeroHorizontalGapDecoration
 import com.fongmi.android.tv.ui.hero.HeroImageLoader
 import com.fongmi.android.tv.ui.hero.HeroPosterAdapter
 import com.fongmi.android.tv.ui.hero.HeroPosterCard
+import com.fongmi.android.tv.ui.hero.HeroSourceEntry
 import com.fongmi.android.tv.ui.hero.HomePosterItem
+import com.fongmi.android.tv.ui.hero.SourceSidebar
+import com.fongmi.android.tv.ui.hero.SourceSidebarMode
 import com.fongmi.android.tv.ui.hero.TmdbMatchDialog
 import com.fongmi.android.tv.ui.hero.openHeroDetailOrFolder
 import com.fongmi.android.tv.utils.Notify
@@ -394,10 +398,39 @@ class HomeViewActivity : AppCompatActivity() {
     }
 
     private fun setupActions() {
-        // 原版「小房子」是换源弹窗；换源弹窗还没迁到 View 版，本步先让它重拉当前源。
+        // 小房子 = 全局接口源侧边栏（与 Compose 首页 `HeroTopBar.onHomeConfirm` 同一套实现）：
+        // 列出全部可用源（隐藏源 / 用户屏蔽源由 `SiteBlockSetting.filter(…, false)` 过滤），单选模式，
+        // 当前首页源保持选中态并作为默认焦点；`SourceSidebar` 是独立 Dialog 窗口，会自己抢焦点。
         homeBtn.setOnClickListener {
-            Log.d(TAG, "顶栏小房子：重新请求首页")
-            refreshHome("顶栏小房子")
+            val homeSites = SiteBlockSetting.filter(VodConfig.get().getSites(), false)
+            if (homeSites.isEmpty()) {
+                Notify.show(getString(R.string.play_change_empty))
+                return@setOnClickListener
+            }
+            SourceSidebar.show(
+                context = this,
+                entries = HeroSourceEntry.of(homeSites),
+                mode = SourceSidebarMode.Single,
+                currentSiteKey = VodConfig.get().getHome().key,
+                onSiteSelected = { site ->
+                    val current = VodConfig.get().getHome()
+                    if (site.key == current.key) {
+                        // 选中的就是当前源：不重复发请求，只给个反馈。
+                        Notify.show(getString(R.string.source_sidebar_switched, site.displayName))
+                    } else {
+                        Log.d(TAG, "小房子切换接口源: ${current.key} -> ${site.key}")
+                        // `setHome` 只写配置并 post `RefreshEvent.home()`，本页不订阅 EventBus，
+                        // 必须自己再拉一次，否则列表还是旧源的数据（与 Compose 首页同一个原因）。
+                        VodConfig.get().setHome(site)
+                        refreshHome("小房子切换接口源 ${site.displayName}")
+                        Notify.show(getString(R.string.source_sidebar_switched, site.displayName))
+                    }
+                },
+                onClosed = {
+                    // 侧边栏关闭后焦点不会自己回来：显式还给打开它的小房子。
+                    homeBtn.post { homeBtn.requestFocus() }
+                },
+            )
         }
     }
 
@@ -788,9 +821,10 @@ class HomeViewActivity : AppCompatActivity() {
             } else {
                 vod.name.orEmpty()
             }
-            // 【红线】卡片海报只认接口源 `vod.pic`：不查 TMDB 匹配缓存、不做任何横竖图转换。
-            // 源站没图就显示占位，绝不用别的源凑一张，避免出现「图片和标题不是同一部」的错图。
-            val posterUrl = vod.pic.orEmpty()
+            // 【竖图优先级】手动匹配优先：手动匹配过的条目，用户选中的 TMDB 海报已经落盘
+            // （`putManual` + `putTmdbMatchCache`），冷启动首帧就直接用它，不再等异步结果。
+            // 自动匹配**不覆盖**源站图（红线）：没手动过就仍只认 `vod.pic`，没图显示占位。
+            val posterUrl = manual?.posterUrl?.takeIf { it.isNotBlank() } ?: vod.pic.orEmpty()
             HomePosterItem(
                 posterKey = key,
                 title = title.ifBlank { "未命名" },
@@ -1336,10 +1370,9 @@ class HomeViewActivity : AppCompatActivity() {
                 initialKeyword = item.title,
                 vod = item.vod,
                 onConfirm = { tmdbItem ->
+                    // 内存覆盖 → 磁盘落盘 → 卡片竖图 + Hero 重绘，全部由这一个函数一次做完。
                     applyManualTmdbMatch(item, tmdbItem)
                     dismissTmdbMatchHost()
-                    // 新条目立刻生效：标题 / 简介 / 横图 / 艺术字一次换齐。
-                    applyHero(focusedIndex)
                 },
                 onDismiss = {
                     dismissTmdbMatchHost()
@@ -1361,9 +1394,20 @@ class HomeViewActivity : AppCompatActivity() {
     /**
      * 手动匹配结果落地：与 Compose 首页 `onConfirm` 同一套规则 ——
      * 同一条目保留简介 / Logo，换了条目整体作废；并写回 `TmdbMatchCache`（重启不丢）。
+     *
+     * 三段职责，顺序不能换：
+     * 1. **内存**：`tmdbOverrides` 换上新条目（换了条目先作废旧预取，避免旧横图 / 艺术字继续盖着）；
+     * 2. **磁盘**：`putManual` + `putTmdbMatchCache`，冷启动 `buildPosterItems` 直接读回这份 posterUrl；
+     * 3. **界面**：原地改写 [HomePosterItem.posterUrl] → 刷这一格卡片 + 重绘 Hero 大图。
      */
     private fun applyManualTmdbMatch(item: HomePosterItem, tmdbItem: TmdbItem) {
         val prev = tmdbOverrides[item.posterKey]?.takeIf { it.item.tmdbId == tmdbItem.tmdbId }
+        // 换了条目：进程内预取里那条旧数据（横图 / 艺术字 / 简介）必须显式作废，
+        // 否则下一轮 `buildPosterItems` / `readBackdropFromCaches` 还会优先命中它。
+        if (prev == null) {
+            HeroTmdbPrefetchCache.remove(item.posterKey)
+            syncBackdrops.remove(item.posterKey)
+        }
         tmdbOverrides[item.posterKey] = HeroTmdbData(
             item = tmdbItem,
             detail = prev?.detail,
@@ -1386,6 +1430,18 @@ class HomeViewActivity : AppCompatActivity() {
                 Setting.putTmdbMatchCache(cache)
             }
         }.onFailure { Log.w(TAG, "手动匹配落盘失败: ${item.title} | ${it.message}") }
+        // 【即时生效】竖图换成用户选中的 TMDB 海报；没有海报（都没图）才回落源站图。
+        val nextPosterUrl = tmdbItem.posterUrl.orEmpty().ifBlank { item.vod.pic.orEmpty() }
+        val posterChanged = nextPosterUrl != item.posterUrl
+        item.posterUrl = nextPosterUrl
+        // 用条目自己的下标而不是 focusedIndex：长按判定与回调之间焦点可能已经移走。
+        val index = items.indexOfFirst { it.posterKey == item.posterKey }.takeIf { it >= 0 } ?: focusedIndex
+        if (posterChanged && index in items.indices) {
+            // 卡片会被 `onBindViewHolder` 重新绑定并重新 load 这张图（Adapter 内部按 url 变化才重载）。
+            posterAdapter.notifyItemChanged(index)
+        }
+        // 标题 / 评分 / 简介 / 横图 / 艺术字一起重画（大图在右侧 posterCard 时也换成新竖图）。
+        applyHero(index)
     }
 
     /**

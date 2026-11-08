@@ -29,8 +29,12 @@ data class HomePosterItem(
     val title: String,
     val meta: String,
     val synopsis: String,
-    /** 竖版海报：**只取接口源 `vod.pic`**，不查 TMDB、不做任何转换。空串 = 没有图，显示占位。 */
-    val posterUrl: String,
+    /**
+     * 竖版海报：默认只取接口源 `vod.pic`；**手动匹配过的条目可以被用户选中的 TMDB 海报覆盖**
+     * （[com.fongmi.android.tv.ui.activity.HomeViewActivity.applyManualTmdbMatch] 原地改写 + `notifyItemChanged`）。
+     * 空串 = 没有图，显示占位。
+     */
+    var posterUrl: String,
     /**
      * **只装真横图**（TMDB `backdropUrl` 非空时提档到 w1920）。
      *
