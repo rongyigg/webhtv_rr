@@ -1,5 +1,6 @@
 package com.fongmi.android.tv.ui.activity
 
+import android.app.Activity
 import android.content.Context
 import android.graphics.Color
 import android.graphics.drawable.ColorDrawable
@@ -54,6 +55,7 @@ import com.fongmi.android.tv.ui.hero.HeroPosterAdapter
 import com.fongmi.android.tv.ui.hero.HeroPosterCard
 import com.fongmi.android.tv.ui.hero.HomePosterItem
 import com.fongmi.android.tv.ui.hero.openHeroDetailOrFolder
+import com.fongmi.android.tv.utils.Notify
 import com.fongmi.android.tv.utils.Util
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -177,6 +179,14 @@ class HomeViewActivity : AppCompatActivity() {
     /** 在途的「空结果自动重试」：Activity 销毁时必须移除，回调不能碰已销毁的 View。 */
     private var pendingEmptyRetry: Runnable? = null
 
+    /**
+     * 「请先在设置中配置接口」这条提示是否已经弹过。
+     *
+     * 空源状态会被 `onResume` / 配置加载回调 / 重试反复走到，不去重就会连弹好几次 Toast。
+     * 一旦配好源（`refreshHome` 里 key 非空）就复位，用户后来把源删掉时还能再被提醒一次。
+     */
+    private var noSourceHintShown: Boolean = false
+
     /** 当前应显示的 Logo 地址：异步失败回调只在它没被下一次焦点覆盖时才回落文字。 */
     private var currentLogoUrl: String = ""
 
@@ -275,12 +285,12 @@ class HomeViewActivity : AppCompatActivity() {
         typeRecycler.layoutManager = LinearLayoutManager(this, LinearLayoutManager.HORIZONTAL, false)
         recycler.layoutManager = LinearLayoutManager(this, LinearLayoutManager.HORIZONTAL, false)
 
-        // 顶栏：目前只有「小房子」有动作，其余项先占位（后续步骤接各自页面）。
+        // 顶栏：【本步已完成】七项全部接上真实页面，见 [onNavSelected]。
         navAdapter = HomeChipAdapter(
             context = this,
             style = HomeChipStyle.NAV,
             onFocused = { },
-            onSelected = { },
+            onSelected = ::onNavSelected,
         )
         navRecycler.adapter = navAdapter
         navAdapter.submit(NAV_LABELS)
@@ -337,7 +347,121 @@ class HomeViewActivity : AppCompatActivity() {
         }
     }
 
+    // ==================================================================
+    // 顶栏路由（七项）
+    // ==================================================================
+
+    /**
+     * 顶栏点击 / 确定键的统一入口（D-pad 确定键与触屏点击都走 item 的 `setOnClickListener`）。
+     *
+     * **按文案分派，不按硬编码下标**：[NAV_LABELS] 是这份菜单的唯一顺序来源，
+     * 以后增删一项也不会把「设置」指到别的页面。
+     *
+     * 目标页分两类：
+     * - 在 `main` 源集里（搜索 / 历史）：本类可以直接引用，且与已验收的 Compose 首页同一条路由
+     *   （`HeroSearchActivity` / `HeroHistoryActivity`），不退回 leanback 的旧页面；
+     * - 只在某个 flavor 里（直播 / 收藏 / 推送 / 设置）：见 [openFlavorActivity]。
+     */
+    private fun onNavSelected(position: Int) {
+        val label = navAdapter.labelAt(position) ?: return
+        Log.d(TAG, "顶栏点击: $label")
+        when (label) {
+            NAV_HOME -> focusHomePoster()
+            NAV_LIVE -> openFlavorActivity(LIVE_ACTIVITY_CLASS, Context::class.java, label)
+            NAV_SEARCH -> HeroSearchActivity.start(this, currentSearchBackdrop())
+            NAV_HISTORY -> HeroHistoryActivity.start(this)
+            NAV_KEEP -> openFlavorActivity(KEEP_ACTIVITY_CLASS, Activity::class.java, label)
+            NAV_PUSH -> openFlavorActivity(PUSH_ACTIVITY_CLASS, Activity::class.java, label)
+            NAV_SETTINGS -> openFlavorActivity(SETTING_ACTIVITY_CLASS, Activity::class.java, label)
+        }
+    }
+
+    /**
+     * 打开**只存在于某个 flavor** 的页面（直播 / 收藏 / 推送 / 设置）。
+     *
+     * 本类在 `main` 源集、两个变体都要编译，而 `PushActivity` / `SettingActivity` 只在
+     * `app/src/leanback/`（mobile 清单里没有声明），直接写类名会让 mobile 变体编译失败。
+     * 因此沿用全项目已有做法（`HeroHomeActivity.openSettings`）：`Class.forName` + 反射调
+     * `start(...)`；失败不崩，只提示。
+     *
+     * [paramType] 必须与目标类 `start` 的形参**完全一致**：
+     * `LiveActivity.start(Context)`，`KeepActivity` / `PushActivity` / `SettingActivity` 都是 `start(Activity)`。
+     */
+    private fun openFlavorActivity(className: String, paramType: Class<*>, label: String) {
+        runCatching {
+            Class.forName(className).getMethod("start", paramType).invoke(null, this)
+        }.onFailure { e ->
+            Log.w(TAG, "顶栏「$label」打不开: $className | ${e.message}")
+            Notify.show("当前版本没有${label}页")
+        }
+    }
+
+    /** 顶栏「首页」：不留页面，只把焦点送回第一张海报（没有海报时保持原位）。 */
+    private fun focusHomePoster() {
+        if (items.isEmpty()) {
+            // 没有海报可落焦：只有真的没配源时才提示「去设置」，空态本身已经说明「没内容」。
+            if (VodConfig.get().getHome().key.isNullOrEmpty()) showNoSourceHint()
+            return
+        }
+        focusedIndex = 0
+        scrollPostersTo(0)
+        focusPoster(0)
+    }
+
+    /** 搜索页的磨砂大图：把当前 Hero 正在显示的横图带过去（与 Compose 首页同一个来源）。 */
+    private fun currentSearchBackdrop(): String {
+        val item = items.getOrNull(focusedIndex) ?: return ""
+        return tmdbOverrides[item.posterKey]?.highResBackdrop ?: item.backdropUrl.orEmpty()
+    }
+
+    /**
+     * 没配接口源时的「救命」提示：Toast 一句 + 把焦点直接送到顶栏「设置」。
+     *
+     * 调用前顶栏必须可见（[showEmpty] 已经 `navBar.visibility = VISIBLE`），否则焦点送不过去。
+     * [noSourceHintShown] 保证只提示一次，配置好源之后复位。
+     */
+    private fun showNoSourceHint() {
+        if (noSourceHintShown) return
+        noSourceHintShown = true
+        Log.w(TAG, "没有可用接口源，提示用户去设置页配置")
+        Notify.show(NO_SOURCE_HINT)
+        navBar.post { focusNavItem(NAV_LABELS.indexOf(NAV_SETTINGS)) }
+    }
+
+    /** 把焦点交给顶栏第 [index] 项：holder 还没挂上就先定位，再在下一拍补抢（与 [focusPoster] 同一套）。 */
+    private fun focusNavItem(index: Int) {
+        if (index !in 0 until navAdapter.itemCount) return
+        val attached = navRecycler.findViewHolderForAdapterPosition(index)?.itemView
+        if (attached != null && attached.isAttachedToWindow && attached.requestFocus()) return
+        navRecycler.scrollToPosition(index)
+        navRecycler.post {
+            navRecycler.findViewHolderForAdapterPosition(index)?.itemView?.requestFocus()
+        }
+    }
+
+    /**
+     * 焦点链：顶栏 →（分类栏）→ 海报行，再原路返回。
+     *
+     * **顶栏 / 分类栏必须先「让位」**：两者都是 `RecyclerView`，而 `RecyclerView` 构造函数里
+     * 调了 `setFocusableInTouchMode(true)` —— 它自己就是一个可聚焦节点。方向键跨行搜索时，
+     * 框架会把这个整行容器本身当成候选（它的矩形正好盖住全部子项），焦点被它吞掉：
+     * 屏幕上看不到任何高亮，再按方向键也动不了。
+     *
+     * 海报行早就按这条规则处理过（`setupRecyclerViews` 里 `recycler.isFocusable = false`），
+     * 这里把另外两行补上：容器永远不接焦点，只允许子项接。让位之后，跨行方向键由系统的
+     * 几何焦点搜索接管（向上落到正上方的那个顶栏项 / 选中 Tab，不会跳最右边的「设置」）。
+     */
     private fun wireFocusChain(hasTabs: Boolean) {
+        navRecycler.apply {
+            isFocusable = false
+            isFocusableInTouchMode = false
+            descendantFocusability = ViewGroup.FOCUS_AFTER_DESCENDANTS
+        }
+        typeRecycler.apply {
+            isFocusable = false
+            isFocusableInTouchMode = false
+            descendantFocusability = ViewGroup.FOCUS_AFTER_DESCENDANTS
+        }
         if (hasTabs) {
             homeBtn.nextFocusDownId = R.id.typeRecycler
             navRecycler.nextFocusDownId = R.id.typeRecycler
@@ -466,7 +590,11 @@ class HomeViewActivity : AppCompatActivity() {
                 configLoadPending = false
                 Log.w(TAG, "本地配置加载失败: $msg")
                 // 真的没有可用源：明确显示空态，不能让用户对着转圈等。
-                if (items.isEmpty()) showEmpty()
+                if (items.isEmpty()) {
+                    showEmpty()
+                    // 空态 + 一句「请先在设置中配置接口」+ 焦点送到顶栏「设置」。
+                    showNoSourceHint()
+                }
             }
         })
     }
@@ -494,9 +622,15 @@ class HomeViewActivity : AppCompatActivity() {
             // 页面就被钉死在「这里什么都没有」。所以：配置在途 → 保持 loading 等回调；
             // 没有在途加载 → 用户确实没配源，直接空态。
             Log.w(TAG, "当前接口源为空，暂不请求 homeContent：请先在设置页添加接口源")
-            if (!configLoadPending && items.isEmpty()) showEmpty()
+            if (!configLoadPending && items.isEmpty()) {
+                showEmpty()
+                // 顶栏在 `showEmpty()` 里才恢复可见，提示必须放在它后面（否则焦点送不过去）。
+                showNoSourceHint()
+            }
             return
         }
+        // 源已经配好：允许下一次「没源」再提示一次。
+        noSourceHintShown = false
         siteViewModel.homeContent()
     }
 
@@ -1048,7 +1182,28 @@ class HomeViewActivity : AppCompatActivity() {
         private const val TAG = "HomeView"
 
         // 顶栏顺序（对照 ref_docs/home_ui.png / Compose 版 TOP_BAR_LABELS）。
-        private val NAV_LABELS = listOf("首页", "直播", "搜索", "历史", "收藏", "推送", "设置")
+        // 点击分派用这几条文案常量，不写裸串、不写下标。
+        private const val NAV_HOME = "首页"
+        private const val NAV_LIVE = "直播"
+        private const val NAV_SEARCH = "搜索"
+        private const val NAV_HISTORY = "历史"
+        private const val NAV_KEEP = "收藏"
+        private const val NAV_PUSH = "推送"
+        private const val NAV_SETTINGS = "设置"
+
+        private val NAV_LABELS = listOf(
+            NAV_HOME, NAV_LIVE, NAV_SEARCH, NAV_HISTORY, NAV_KEEP, NAV_PUSH, NAV_SETTINGS,
+        )
+
+        // 顶栏目标页只写类名、不引用类：`PushActivity` / `SettingActivity` 只存在于 leanback，
+        // 本类在 `main` 源集里必须对 mobile 变体也能编译（详见 `openFlavorActivity`）。
+        private const val LIVE_ACTIVITY_CLASS = "com.fongmi.android.tv.ui.activity.LiveActivity"
+        private const val KEEP_ACTIVITY_CLASS = "com.fongmi.android.tv.ui.activity.KeepActivity"
+        private const val PUSH_ACTIVITY_CLASS = "com.fongmi.android.tv.ui.activity.PushActivity"
+        private const val SETTING_ACTIVITY_CLASS = "com.fongmi.android.tv.ui.activity.SettingActivity"
+
+        /** 没有任何接口源时的引导文案。 */
+        private const val NO_SOURCE_HINT = "请先在设置中配置接口"
 
         private const val TAB_RECOMMEND = "推荐"
 
@@ -1165,6 +1320,9 @@ private class HomeChipAdapter(
     }
 
     override fun getItemCount(): Int = items.size
+
+    /** 该下标的文案：点击 / 确定键按文案分派，不硬编码下标。 */
+    fun labelAt(position: Int): String? = items.getOrNull(position)
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): Holder {
         val text = TextView(parent.context).apply {
