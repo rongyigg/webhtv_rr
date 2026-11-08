@@ -79,12 +79,14 @@
             android:exported="false"
             android:launchMode="singleTop" />
 
-        <!-- HeroUI（Compose）重写阶段的临时测试入口，正式首页就绪后整块移除。 -->
+        <!-- HeroUI（View 体系）首页：**当前启动页**。
+             主题用 Theme.App（NoActionBar + 沉浸式，代码里再 hideSystemUI），
+             与 Compose 版同一套 configChanges / 横屏策略，避免旋转重建。 -->
         <activity
-            android:name=".ui.activity.HeroHomeActivity"
+            android:name=".ui.activity.HomeViewActivity"
             android:configChanges="screenSize|smallestScreenSize|screenLayout|orientation"
             android:exported="true"
-            android:label="Hero UI"
+            android:label="@string/app_name"
             android:screenOrientation="sensorLandscape"
             android:theme="@style/Theme.App">
             <intent-filter>
@@ -93,6 +95,16 @@
                 <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- HeroUI（Compose）首页：启动入口已交给 HomeViewActivity，这里**保留类与清单条目**以便回滚
+             （回滚 = 把上面的 intent-filter 整块移回本节点）。不声明 exported，桌面不会出现第二个图标。 -->
+        <activity
+            android:name=".ui.activity.HeroHomeActivity"
+            android:configChanges="screenSize|smallestScreenSize|screenLayout|orientation"
+            android:exported="false"
+            android:label="Hero UI"
+            android:screenOrientation="sensorLandscape"
+            android:theme="@style/Theme.App" />
 
         <!-- HeroUI（Compose）详情页骨架：假数据阶段，仅用于验证结构与焦点流转。 -->
         <activity
