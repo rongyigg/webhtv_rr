@@ -8,7 +8,6 @@ import coil3.dispose
 import coil3.load
 import coil3.request.crossfade
 import coil3.request.error
-import coil3.request.placeholder
 import com.fongmi.android.tv.R
 import com.fongmi.android.tv.bean.Site
 import com.fongmi.android.tv.bean.Vod
@@ -30,7 +29,7 @@ data class HomePosterItem(
     val title: String,
     val meta: String,
     val synopsis: String,
-    /** 竖版海报（源站 `vod.pic`；手动匹配且源站没图时回落 TMDB 竖图）。 */
+    /** 竖版海报：**只取接口源 `vod.pic`**，不查 TMDB、不做任何转换。空串 = 没有图，显示占位。 */
     val posterUrl: String,
     /**
      * **只装真横图**（TMDB `backdropUrl` 非空时提档到 w1920）。
@@ -155,9 +154,12 @@ class HeroPosterAdapter(
         }
         if (posterUrl.isNotBlank()) {
             posterView.load(posterUrl) {
-                crossfade(POSTER_CARD_CROSSFADE_MS)
-                // 403 防盗链 / 404 / 解码失败时回灰底占位卡，淡入期间也不会出现空白帧。
-                placeholder(R.drawable.shape_source_poster_placeholder)
+                // 【防闪】接口源竖图（`vod.pic`）关闭淡入：crossfade 以「View 当前 drawable」为起点，
+                // 冷启动 / 复用 holder 时就是「先出色块再变海报」的中间态。
+                crossfade(false)
+                // 【防闪】不设 placeholder：有内存/磁盘缓存时 Coil 第一帧直接画真图，
+                // 没有的那一帧宁可留卡片底色，也不要先铺一层灰底占位再被盖掉。
+                // 只有真失败才回灰底，避免 403 / 404 / 解码失败时露出一块空白。
                 error(R.drawable.shape_source_poster_placeholder)
             }
         }
@@ -188,9 +190,6 @@ class HeroPosterAdapter(
     private companion object {
         /** 首页剧名 13sp（`ref_docs/adapter_vod_rect.xml` L46）。 */
         private const val POSTER_TITLE_SP = 13f
-
-        /** 卡片图片淡入 300ms（首页其它大图仍用 450ms）。 */
-        private const val POSTER_CARD_CROSSFADE_MS = 300
 
         /** 焦点卡放大倍数（只影响绘制，不影响布局）。 */
         private const val POSTER_FOCUS_SCALE = 1.1f

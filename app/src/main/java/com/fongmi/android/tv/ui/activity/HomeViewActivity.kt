@@ -798,12 +798,9 @@ class HomeViewActivity : AppCompatActivity() {
             } else {
                 vod.name.orEmpty()
             }
-            val posterUrl = if (manual != null) {
-                // 手动匹配是用户明确选定的条目，源站图可能为空 / 403，这时换 TMDB 竖图。
-                manual.posterUrl.orEmpty().ifBlank { vod.pic.orEmpty() }
-            } else {
-                vod.pic.orEmpty().ifBlank { matched?.posterUrl.orEmpty() }
-            }
+            // 【红线】卡片海报只认接口源 `vod.pic`：不查 TMDB 匹配缓存、不做任何横竖图转换。
+            // 源站没图就显示占位，绝不用别的源凑一张，避免出现「图片和标题不是同一部」的错图。
+            val posterUrl = vod.pic.orEmpty()
             HomePosterItem(
                 posterKey = key,
                 title = title.ifBlank { "未命名" },
@@ -1151,6 +1148,14 @@ class HomeViewActivity : AppCompatActivity() {
      * **短按只给确定键**：`KEYCODE_DPAD_DOWN` 的短按只吞事件，绝不跳详情。
      */
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        // 【强制日志】定位「长按没反应 / 按键被拦」的唯一手段：每一条按键都必须能在这里看到。
+        // 若长按无日志 → 事件根本没进 Activity（被更外层 / 焦点窗口吞了）；
+        // 有日志但 focus=false → 焦点不在海报行，长按分支不会启动。
+        Log.d(
+            "KeyTest",
+            "dispatchKeyEvent: action=${event.action} key=${event.keyCode} " +
+                "repeat=${event.repeatCount} focus=${::recycler.isInitialized && recycler.hasFocus()}",
+        )
         val key = event.keyCode
         // 海报行只接管「下键 / 确定键」。
         val isPosterKey = key == KeyEvent.KEYCODE_DPAD_DOWN ||
@@ -1176,7 +1181,9 @@ class HomeViewActivity : AppCompatActivity() {
         if (event.action == KeyEvent.ACTION_DOWN) {
             // 长按已触发：连发事件全部吃掉，一个都不准漏。
             if (isLongPressTriggered && event.repeatCount > 0) return true
-            if (isPosterKey && recycler.findFocus() != null) {
+            // 【焦点判定】只认海报行：`hasFocus()` 对 RecyclerView 自身或其后代（卡片）聚焦都成立，
+            // 比 `findFocus() != null` 更贴合「焦点在不在这一行」的语义，且不会被别的 View 误命中。
+            if (isPosterKey && recycler.hasFocus()) {
                 // 未触发的连发：同样吃掉，避免重复起定时器 / 漏键。
                 if (event.repeatCount != 0) return true
                 isKeyDown = true
