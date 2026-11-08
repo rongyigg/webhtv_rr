@@ -1153,8 +1153,6 @@ private fun HeroHomeScreen(
         try {
             ChangeSourceDialog.show(
                 context = context,
-                // 必须复用 Activity 作用域的 ViewModel：它自带两个单线程 executor，不能按弹窗 new。
-                viewModel = siteViewModel,
                 sites = candidates,
                 keyword = keyword,
                 // 全局并发搜索：先按 quick = false 跑，把不支持 quick 的源也搜一遍。
@@ -1169,7 +1167,8 @@ private fun HeroHomeScreen(
                 },
                 onClosed = {
                     showSourceDialog = false
-                    // 弹窗打开期间 `result` 通道归弹窗，本页结果被忽略；关窗后按当前 Tab 重拉一次。
+                    // 【架构已修】弹窗现在独占 SiteViewModel（见 ChangeSourceDialog 的
+                    // ViewModelStoreOwner 实现），`result` 不再串回本页；这里只做一次兜底同步。
                     refreshCurrentHome()
                 },
             )

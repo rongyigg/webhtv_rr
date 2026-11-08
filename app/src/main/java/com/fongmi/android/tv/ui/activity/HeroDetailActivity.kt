@@ -1418,7 +1418,6 @@ private fun HeroDetailScreen(
                                 try {
                                     ChangeSourceDialog.show(
                                         context = context,
-                                        viewModel = siteViewModel,
                                         sites = candidates,
                                         // 详情页的剧名现在是真实值（来自首页 / 上一次换源），直接用它检索。
                                         keyword = page.title,

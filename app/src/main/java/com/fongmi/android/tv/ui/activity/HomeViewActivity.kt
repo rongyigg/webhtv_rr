@@ -1453,7 +1453,6 @@ class HomeViewActivity : AppCompatActivity() {
         }
         ChangeSourceDialog.show(
             context = this,
-            viewModel = siteViewModel,
             sites = candidates,
             keyword = keyword,
             quick = false,

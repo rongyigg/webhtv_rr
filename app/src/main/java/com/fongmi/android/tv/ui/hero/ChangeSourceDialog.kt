@@ -20,6 +20,9 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.ViewCompositionStrategy
 import androidx.lifecycle.Observer
+import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.ViewModelStore
+import androidx.lifecycle.ViewModelStoreOwner
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.fongmi.android.tv.R
@@ -74,13 +77,15 @@ import kotlin.math.roundToInt
  *   所以确定键回传的 `(vod, site)` 是同一来源，不需要再按剧名二次搜索。
  *
  * ## 生命周期
- * `SiteViewModel` 由 Activity 作用域持有（构造函数里就建了两个单线程 executor，绝不能按弹窗 new）。
+ * 弹窗**独占**一个 `SiteViewModel`（自己实现 [ViewModelStoreOwner]，`ViewModelProvider(this)`），
+ * 与宿主 Activity 的 `homeContent()` 通道彻底分开：`categoryContent()` / `detailContent()`
+ * 的回包只会回到弹窗自己的 `result`，首页的 `observeHome` 永远收不到。
  * 弹窗只在 [onStart] 挂 `observeForever`、[onStop] 摘掉并 [SiteViewModel.stopSearch]，
- * 关闭即取消在途请求。
+ * 最后 `clear()` 掉自己的仓库 —— `SiteViewModel.onCleared()` 会 cancel 全部 Future 并
+ * shutdown 两个单线程 executor，关闭即彻底结束，不泄漏线程也不在后台偷偷收数据。
  */
 internal class ChangeSourceDialog private constructor(
     context: Context,
-    private val viewModel: SiteViewModel,
     /** 候选源（已过滤 + 已按健康度排序）：既是站点栏，也是侧边栏的全量条目。 */
     private val sites: List<Site>,
     private val keyword: String,
@@ -89,7 +94,34 @@ internal class ChangeSourceDialog private constructor(
     private val initialResults: List<Vod>,
     private val onSourceSelected: (Vod, Site) -> Unit,
     private val onClosed: () -> Unit,
-) : Dialog(context, R.style.SourceDialogTheme) {
+) : Dialog(context, R.style.SourceDialogTheme), ViewModelStoreOwner {
+
+    /**
+     * 【架构隔离】换源弹窗**独占**的 ViewModel 仓库：宿主 Activity 的仓库一个字节都不碰。
+     *
+     * 弹窗会发 `categoryContent()` / `detailContent()`，这两个请求和首页的 `homeContent()`
+     * 共用 `SiteViewModel.result` 这一条通道。共用宿主的 ViewModel 实例时，目录 / 详情回包
+     * 会同时打进首页的 `observeHome`，首页就被换源卡片铺满 —— 这不是 UI 层能挡住的事情，
+     * 因为数据已经写进了同一条 LiveData。这里把通道从**所有权**上分开：弹窗一个仓库、
+     * 一个 `SiteViewModel` 实例，`result` 只属于弹窗。
+     */
+    private val ownViewModelStore = ViewModelStore()
+
+    override val viewModelStore: ViewModelStore get() = ownViewModelStore
+
+    /**
+     * 弹窗私有的 [SiteViewModel]：生命周期 = 本次弹窗（[onStop] 里 `clear()` 掉）。
+     *
+     * 与宿主 `ViewModelProvider(activity)` 拿到的实例**不是同一个对象**，所以
+     * `search` / `searchProgress` / `result` 三条 LiveData 各自独立：
+     * 弹窗发起的目录 / 详情回包只会回到弹窗自己的 [onResult]，永远进不了首页。
+     *
+     * 用 `lazy` 而不是构造参数：`ViewModelProvider` 只能在窗口真正建起来之后取，
+     * 且必须让本弹窗实现 [ViewModelStoreOwner] 才能拿到**独立**仓库（`Dialog` 不是 owner）。
+     */
+    private val viewModel: SiteViewModel by lazy {
+        ViewModelProvider(this)[SiteViewModel::class.java]
+    }
 
     /** 当前站点栏下标（[tabSites] 的下标；Tab 是动态的，只有出过结果的源才会在里面）。 */
     private var selectedSite: Int = 0
@@ -318,6 +350,11 @@ internal class ChangeSourceDialog private constructor(
         ignoreReplay = false
         // 关闭弹窗就取消在途检索：蜘蛛实现可能忽略中断，stopSearch 至少让旧一轮结果不再回到 UI。
         viewModel.stopSearch()
+        // 【架构隔离 · 收尾】窗口已经移除（[onStop] 由 `dismissDialog()` 调用），
+        // 这个仓库从此没有任何消费者：`clear()` 触发 `SiteViewModel.onCleared()`，
+        // cancel 全部 Future 并 shutdown 两个单线程 executor。
+        // 不做这一步，每开一次换源弹窗就留下一个 ViewModel + 两个线程。
+        ownViewModelStore.clear()
         super.onStop()
     }
 
@@ -1113,7 +1150,9 @@ internal class ChangeSourceDialog private constructor(
         /**
          * 打开换源弹窗。
          *
-         * @param viewModel Activity 作用域的 [SiteViewModel]（**必须复用**，不能在这里 new）。
+         * 弹窗**自己持有** [SiteViewModel]（见类声明处的 [ViewModelStoreOwner] 实现），
+         * 调用方不再传入宿主的实例：这是 `result` 通道污染首页的根因，必须从所有权上分开。
+         *
          * @param sites 候选源，直接用 [candidates] 的返回值；为空时自动退回「所有可搜索源」。
          * @param keyword 检索关键词（首页当前这张卡的剧名）。
          * @param quick 是否只搜 quick 源。换源默认 `false`：`quick=true` 时 `SearchTask` 会跳过
@@ -1126,7 +1165,6 @@ internal class ChangeSourceDialog private constructor(
          */
         fun show(
             context: Context,
-            viewModel: SiteViewModel,
             sites: List<Site>,
             keyword: String,
             quick: Boolean = false,
@@ -1148,7 +1186,7 @@ internal class ChangeSourceDialog private constructor(
                     "预搜索结果=${initialResults.size}",
             )
             val dialog = ChangeSourceDialog(
-                context, viewModel, searchSites, keyword, quick, initialResults,
+                context, searchSites, keyword, quick, initialResults,
                 onSourceSelected, onClosed,
             )
             dialog.show()
