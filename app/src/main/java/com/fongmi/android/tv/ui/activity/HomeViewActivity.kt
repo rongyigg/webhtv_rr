@@ -25,6 +25,7 @@ import androidx.compose.ui.platform.ViewCompositionStrategy
 import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.LinearSmoothScroller
 import androidx.recyclerview.widget.RecyclerView
@@ -64,12 +65,8 @@ import com.fongmi.android.tv.ui.hero.openHeroDetailOrFolder
 import com.fongmi.android.tv.utils.Notify
 import com.fongmi.android.tv.utils.Util
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancel
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.Locale
@@ -95,8 +92,8 @@ import kotlin.math.roundToInt
  * - 横图 / 评分 / 年份 / 手动词名：`Setting.getTmdbMatchCache()`（磁盘匹配缓存，整页只读一次）；
  * - 艺术字 Logo：进程内 `HeroTmdbPrefetchCache` → 磁盘 `hero_logo_cache`（与 `HeroLogoCache` 同一份 prefs）；
  * - 简介：进程内详情缓存里的译文优先，否则用源站 `Vod.content`；
- * - **焦点驱动的 TMDB 详情**（第三步）：缓存里没有横图 / 艺术字时，停住 300ms 后异步请求一次详情，
- *   结果经 `posterKey` 校验才落地，详见 [requestTmdbDetail] / [onTmdbDetailReady]。
+ * - **焦点驱动的 TMDB 详情**（第三步）：焦点一变就掐旧发新，并预取 `i-2 … i+2` 的滑动窗口，
+ *   结果经 `posterKey` 校验才落地，详见 [requestFocusedTmdbDetail] / [onTmdbDetailReady]。
  *
  * 与 `HeroHomeActivity` 的差异（本步范围）：
  * - 不复用 `BaseActivity`：它只存在于 `leanback` / `mobile` 两个 flavor 源集，`main` 源集在编译期看不到它；
@@ -256,9 +253,14 @@ class HomeViewActivity : AppCompatActivity() {
      */
     private var focusedPosterKey: String = ""
 
-    /** TMDB 异步任务域：Activity 销毁时整域取消；单条请求由 [tmdbJob] 单独取消。 */
-    private val tmdbScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
-    private var tmdbJob: Job? = null
+    /**
+     * 焦点请求 Job：每次焦点落到新卡片都「先掐断上一条、再发这一条」（原版 `getAndSet` 语义）。
+     * 没有延时、没有排队：上一条在 `cancel()` 的瞬间就结束，永远不会堆在后台。
+     */
+    private var tmdbRequestJob: Job? = null
+
+    /** 滑动窗口 `i-2 … i+2`：下标 → 该位置的预取 Job，出窗即取消。 */
+    private val tmdbWindowJobs = mutableMapOf<Int, Job>()
 
     override fun attachBaseContext(newBase: Context) {
         // 与全站其它页面共用同一套「设计画布」（同 HeroHomeActivity）。
@@ -302,9 +304,10 @@ class HomeViewActivity : AppCompatActivity() {
         isKeyDown = false
         isLongPressTriggered = false
         dismissTmdbMatchHost()
-        // 在途 TMDB 请求 / 防抖一起作废：Activity 已经没了，回调绝不能再去碰 View。
-        tmdbJob?.cancel()
-        tmdbScope.cancel()
+        // 在途 TMDB 请求（焦点那条 + 整个滑动窗口）一起作废：Activity 已经没了，回调绝不能再去碰 View。
+        tmdbRequestJob?.cancel()
+        tmdbWindowJobs.values.forEach { it.cancel() }
+        tmdbWindowJobs.clear()
         // 取消两个长生命周期 ImageView 上的在途请求（回收站里的是 Adapter 自己的职责）。
         heroLogoImg.dispose()
         posterCardImg.dispose()
@@ -709,6 +712,9 @@ class HomeViewActivity : AppCompatActivity() {
         items = next
         // 换了一整页数据：上一页解析出来的横图地址全部作废（换源 / 换 Tab 后 key 可能撞上旧值）。
         syncBackdrops.clear()
+        // 上一页的窗口预取同样作废：下标已经指向另一批条目，整批取消后由 [updateTmdbWindow] 重建。
+        tmdbWindowJobs.values.forEach { it.cancel() }
+        tmdbWindowJobs.clear()
         navBar.visibility = View.VISIBLE
         if (next.isEmpty()) {
             showEmpty()
@@ -730,8 +736,8 @@ class HomeViewActivity : AppCompatActivity() {
         applyHero(focusedIndex)
         progressLayout.showContent()
         // 首屏也要走一次 TMDB：只靠焦点驱动的话，用户不按键第一屏就永远只有竖图。
-        // 请求带 300ms 防抖 + 可取消，快速切分类不会堆积。
-        items.getOrNull(focusedIndex)?.let(::requestTmdbDetail)
+        // 与焦点切换同一个入口：掐旧发新 + i-2 … i+2 滑动窗口，没有任何延时。
+        requestFocusedTmdbDetail()
         // 首屏 / 切分类后数据落地时，如果整个窗口还没有焦点，落到第一张卡。
         if (window.decorView.findFocus() == null) {
             recycler.post { focusPoster(focusedIndex) }
@@ -981,19 +987,34 @@ class HomeViewActivity : AppCompatActivity() {
     // ==================================================================
 
     /**
-     * 焦点条目的 TMDB 详情请求：**本步唯一新增的网络入口**。
+     * 焦点 TMDB 请求入口（原版 `getAndSet`）：**先掐断上一条，再发当前这一条**，没有任何延时。
      *
-     * 四条约定，缺一条就会出现「图片对不上剧名」：
-     * 1. **可取消**：每次先 `cancel()` 上一条，滑过一排时旧请求立刻作废，不占连接也不回写；
-     * 2. **防抖**：方向键滑过时焦点每几十毫秒换一张，停手 [TMDB_FOCUS_DEBOUNCE_MS] 才发；
-     * 3. **单一落地口**：结果只由 [onTmdbDetailReady] 校验后写入 [tmdbOverrides] 并重绘；
-     * 4. **身份判据是 `posterKey`**（站点 key + 条目 id），不是下标 —— 切分类 / 换源后下标会漂移。
+     * 1. `tmdbRequestJob?.cancel()` 立刻作废旧请求（不占连接、不回写、不重绘）；
+     * 2. 起当前焦点这一条；
+     * 3. 铺开 `i-2 … i+2` 的滑动窗口，左右各两张提前备好。
+     *
+     * 结果只有 [onTmdbDetailReady] 一个落地口，且以 `posterKey` 判身份（下标会漂移）。
      */
-    private fun requestTmdbDetail(item: HomePosterItem) {
-        tmdbJob?.cancel()
-        tmdbJob = null
-        // 已经有完整详情（刚停过这张 / 手动匹配拉过）：不重复请求，只补写跨页缓存
-        // （缓存条目可能已被别的 Tab 挤掉，但内存 overrides 还在）。
+    private fun requestFocusedTmdbDetail() {
+        // 1. 立刻掐断上一个请求
+        tmdbRequestJob?.cancel()
+        tmdbRequestJob = lifecycleScope.launch(Dispatchers.IO) {
+            // 2. 发起当前新请求
+            fetchTmdbDetailForPosition(focusedIndex)
+        }
+        // 3. 滑动窗口 i-2 … i+2
+        updateTmdbWindow(focusedIndex)
+    }
+
+    /**
+     * 单条 TMDB 详情拉取（**只在 IO 线程调用**，与旧实现同一条链路）：
+     * 手动缓存 → 自动缓存 → 在线搜索 → 详情 → 演员 / 译文简介 / 艺术字 Logo。
+     *
+     * 结果统一交给主线程的 [onTmdbDetailReady]：非焦点条目只写缓存、不重绘。
+     */
+    private suspend fun fetchTmdbDetailForPosition(position: Int) {
+        val item = items.getOrNull(position) ?: return
+        // 已经有完整详情（刚停过这张 / 手动匹配拉过）：不重复请求，只补写跨页缓存。
         val existing = tmdbOverrides[item.posterKey]
         if (existing != null && existing.detail != null) {
             HeroTmdbPrefetchCache.put(item.posterKey, existing)
@@ -1003,14 +1024,49 @@ class HomeViewActivity : AppCompatActivity() {
         val config = TmdbConfig.effectiveCurrent()
         if (!config.isReady() || item.vod.name.orEmpty().isBlank()) return
         if (!TmdbSitePolicy.isEnabled(config, item.site.key, item.vod.id)) return
-        // 发起时就固定身份：回调里只认这一个 key，之后焦点再动都与本次请求无关。
-        val key = item.posterKey
-        tmdbJob = tmdbScope.launch {
-            delay(TMDB_FOCUS_DEBOUNCE_MS)
-            // 阻塞式 OkHttp 只能在 IO 线程跑；协程被取消后 withContext 的结果直接丢弃。
-            val data = withContext(Dispatchers.IO) { loadTmdbDetail(item, config) } ?: return@launch
-            onTmdbDetailReady(key, data)
+        val data = loadTmdbDetail(item, config) ?: return
+        withContext(Dispatchers.Main) { onTmdbDetailReady(item.posterKey, data) }
+    }
+
+    /**
+     * 原版滑动窗口 `i-2 … i+2`：出窗的 Job 立刻取消并移除，入窗且没缓存的位置起一条新 Job。
+     *
+     * 只有「做减法」的淘汰和「做加法」的预取，没有任何排队 / 信号量 / 延时。
+     * 中心位置由 [tmdbRequestJob] 负责，这里跳过，避免同一条并发两次。
+     */
+    private fun updateTmdbWindow(centerIndex: Int) {
+        val start = (centerIndex - 2).coerceAtLeast(0)
+        val end = (centerIndex + 2).coerceAtMost(items.size - 1)
+
+        // 1. 淘汰：遍历 map，对于 index < start 或 > end 的 job，直接 cancel 并从 map 移除
+        val iterator = tmdbWindowJobs.iterator()
+        while (iterator.hasNext()) {
+            val entry = iterator.next()
+            if (entry.key < start || entry.key > end) {
+                entry.value.cancel()
+                iterator.remove()
+            }
         }
+
+        // 2. 预取：遍历 start..end，没有缓存且 map 里没有正在跑的 job，就起一条
+        for (i in start..end) {
+            if (i == centerIndex) continue
+            if (!hasTmdbCache(i) && !tmdbWindowJobs.containsKey(i)) {
+                val job = lifecycleScope.launch(Dispatchers.IO) {
+                    fetchTmdbDetailForPosition(i)
+                    // 成功后从 map 移除
+                    withContext(Dispatchers.Main) { tmdbWindowJobs.remove(i) }
+                }
+                tmdbWindowJobs[i] = job
+            }
+        }
+    }
+
+    /** 该位置是否已经有 TMDB 详情（内存覆盖表 / 进程内预取缓存任一命中即算有）。 */
+    private fun hasTmdbCache(position: Int): Boolean {
+        val item = items.getOrNull(position) ?: return true
+        if (tmdbOverrides[item.posterKey]?.detail != null) return true
+        return HeroTmdbPrefetchCache.peek(item.posterKey) != null
     }
 
     /**
@@ -1430,8 +1486,8 @@ class HomeViewActivity : AppCompatActivity() {
         if (BuildConfig.DEBUG) Log.d(TAG, "海报焦点 position=$position vod=${vod.name}")
         applyHero(position)
         scrollPostersTo(position)
-        // 焦点停住就去拉这条的 TMDB 详情（防抖 + 可取消），回来时再校验 posterKey。
-        items.getOrNull(position)?.let(::requestTmdbDetail)
+        // 焦点一变：立刻掐断上一条请求、发起这一条，并重铺 i-2 … i+2 的预取窗口。
+        requestFocusedTmdbDetail()
     }
 
     /**
@@ -1592,13 +1648,6 @@ class HomeViewActivity : AppCompatActivity() {
 
         /** 分类 Tab 焦点切换的请求防抖：与 Compose 版同一个 220ms。 */
         private const val TAB_SWITCH_DEBOUNCE_MS = 220L
-
-        /**
-         * TMDB 焦点详情防抖：与 Compose 首页 `HERO_TMDB_FOCUS_DEBOUNCE_MS` 同一个 300ms。
-         *
-         * 方向键滑过一排时焦点每 ~50ms 换一张，停手 300ms 才发请求 —— 滑过不发。
-         */
-        private const val TMDB_FOCUS_DEBOUNCE_MS = 300L
 
         /**
          * 海报行间距：`ref_docs/HomeActivityV2.java` L776 `L.setHorizontalSpacing(g2.b(16))`。

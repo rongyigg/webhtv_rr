@@ -37,6 +37,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 
 import okhttp3.HttpUrl;
+import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import okhttp3.Response;
 
@@ -52,6 +53,26 @@ public class TmdbService {
     private static final long CN_ON_AIR_SEASON_CACHE_TTL = DAY;
     private static final long AUTH_FAILURE_COOLDOWN = TimeUnit.MINUTES.toMillis(5);
     private static final Map<String, Long> AUTH_FAILURE_BLOCKS = new ConcurrentHashMap<>();
+
+    /**
+     * TMDB 专用 OkHttp 客户端：沿用全局 client（连接池 / 拦截器 / 超时全部一致），
+     * 只把 DNS 换成 [com.fongmi.android.tv.net.HeroHttpDns]（`*.tmdb.org` 走多路 DoH 防污染）。
+     */
+    private static volatile OkHttpClient tmdbClient;
+
+    private static OkHttpClient tmdbClient() {
+        if (tmdbClient == null) {
+            synchronized (TmdbService.class) {
+                if (tmdbClient == null) {
+                    tmdbClient = com.github.catvod.net.OkHttp.client()
+                            .newBuilder()
+                            .dns(com.fongmi.android.tv.net.HeroHttpDns.INSTANCE)
+                            .build();
+                }
+            }
+        }
+        return tmdbClient;
+    }
 
     public static final class AuthException extends IllegalStateException {
 
@@ -664,7 +685,7 @@ public class TmdbService {
         Request.Builder builder = new Request.Builder().url(url);
         if (!TextUtils.isEmpty(config.getAccessToken())) builder.header("Authorization", "Bearer " + config.getAccessToken());
         try {
-            return com.github.catvod.net.OkHttp.client().newCall(builder.build()).execute();
+            return tmdbClient().newCall(builder.build()).execute();
         } catch (Exception e) {
             throw new IOException(redactMessage(e.getMessage()));
         }
