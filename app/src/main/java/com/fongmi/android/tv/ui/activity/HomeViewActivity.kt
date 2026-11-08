@@ -1265,6 +1265,26 @@ class HomeViewActivity : AppCompatActivity() {
             key == KeyEvent.KEYCODE_DPAD_CENTER ||
             key == KeyEvent.KEYCODE_ENTER
 
+        // ── 海报行最左端按 ←：原地不动 ─────────────────────────────────────────
+        // 原版（Leanback 的横向列表）走到行首之后 ← 只会在行内「无处可去」，绝不会把焦点
+        // 交给上面的分类 Tab / 小房子。这里的 RecyclerView 没有行首边界，行首再按 ← 会被
+        // 默认的 `FocusFinder` 往上跳、落到顶栏 —— 必须在 Activity 层直接吃掉。
+        // 条件：← 键 + 焦点在海报行 + 当前就是第 0 张（原版 `HomeActivityV2` 的同一语义）。
+        // DOWN 与 UP 一起吞：只吞 DOWN 会让抬手事件漏给默认焦点搜索，形成「半截按键」。
+        if (key == KeyEvent.KEYCODE_DPAD_LEFT && posterFocused) {
+            // 下标以**真正持有焦点的那个 View** 为准：`findContainingViewHolder` 会向上找到
+            // 它所属的卡片（焦点通常落在卡片内部的子 View 上）。焦点落在 RecyclerView 自己
+            // 身上时退回 `focusedIndex`（它在 `applyHero()` 里与焦点同步更新）。
+            val position = recycler.findFocus()
+                ?.let { recycler.findContainingViewHolder(it)?.absoluteAdapterPosition }
+                ?: focusedIndex
+            // 只拦第 0 张：NO_POSITION(-1) / 其它下标一律放行，行内左右移动保持原样。
+            if (position == 0) {
+                Log.d("KeyTest", "poster-left at head: swallow action=${event.action}")
+                return true
+            }
+        }
+
         // ── ACTION_UP：真正的抬手，长按状态只在这里复位 ─────────────────────────
         if (event.action == KeyEvent.ACTION_UP && isPosterKey && (isKeyDown || isLongPressTriggered)) {
             recycler.removeCallbacks(longPressDownRunnable)
@@ -1570,6 +1590,23 @@ class HomeViewActivity : AppCompatActivity() {
      * 与 Compose 首页（`HeroHomeScreen.onClick` → `openHeroDetailOrFolder`）同一条路由：
      * folder 壳（网盘聚类的 `atvp_detail:`）交给分类页展开，其余进 Hero 详情页。
      * 已经把当前画面上的横图 / 艺术字 / TMDB 简介一起带过去，详情页首帧不再等第二轮网络。
+     *
+     * <p>【逆向硬复刻】原版 `HomeActivityV2.f()`（L1529-1630）的判断顺序是：
+     * <pre>
+     * if (vod.isAction())  { ...; return; }                 // 插件动作项：不跳页
+     * if (!vod.isFolder()) { DetailActivity.q2(...); return; }  // 正片：详情页
+     * // vod.isFolder() → 分类 / 目录壳
+     * c1.push(u31(...));                                    // ① 压入下探栈
+     * B0.clear(); L.setSelectedPosition(0); ...             // ② 清空首页列表
+     * H.c(f2().getKey(), vod.getId(), "1", new HashMap());  // ③ 用分类接口展开目录
+     * </pre>
+     * 原版把分类结果继续灌回**同一张海报列表**（`B0`），那正是「点击分类壳之后首页被满屏
+     * 同质化卡片占满」的机制。WebHTV 的首页列表只承载 `homeContent()` 的结果，所以 folder
+     * 一律交给独立分类页（`HeroFolderLauncher` → `VodActivity` / `FolderActivity` +
+     * `Result.folder(vod)`，与原版 `CollectActivity.onItemClick` 同一个落点），
+     * **绝不**把 `categoryContent()` 返回的列表塞回 [HeroPosterAdapter]。
+     * folder 判定（`vod.isFolder()` 与 `atvp_detail:` 前缀）只保留在 [openHeroDetailOrFolder]
+     * 一处，首页 / 搜索结果 / 换源结果共用，避免两处判断漂移。
      */
     private fun onPosterClicked(item: HomePosterItem) {
         val tmdb = tmdbOverrides[item.posterKey]
