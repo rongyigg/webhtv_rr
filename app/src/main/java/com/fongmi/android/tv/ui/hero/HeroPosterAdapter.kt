@@ -12,6 +12,7 @@ import coil3.request.placeholder
 import com.fongmi.android.tv.R
 import com.fongmi.android.tv.bean.Site
 import com.fongmi.android.tv.bean.Vod
+import kotlin.math.roundToInt
 
 /**
  * 首页一张海报卡的展示数据（纯 View 体系）。
@@ -91,14 +92,21 @@ class HeroPosterAdapter(
     override fun getItemCount(): Int = items.size
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): ViewHolder {
+        // 【尺寸锁定】卡片固定 120dp × 214dp（竖图 180 + 标题 34），由 Adapter 显式下发
+        // RecyclerView.LayoutParams：卡片自身的 onMeasure 再用 EXACTLY 二次兜底，
+        // 任何 wrap_content / match_parent / 父容器测量都不会把它压扁或拉宽。
+        val density = parent.resources.displayMetrics.density
         val card = HeroPosterCard(parent.context).apply {
+            layoutParams = RecyclerView.LayoutParams(
+                (HeroPosterCard.CARD_WIDTH_DP * density).roundToInt(),
+                (HeroPosterCard.CARD_HEIGHT_DP * density).roundToInt(),
+            )
             // 首页剧名 13sp（adapter_vod_rect L46）；宽高 / 圆角 / 焦点红框全部写死在卡片里。
             titleTextSizeSp = POSTER_TITLE_SP
             // 图片交给 Coil：卡片自己不再发 Glide 请求，也不会画「剧名首字」盖住海报。
             externalImageLoading = true
         }
         val holder = ViewHolder(card)
-        val density = card.resources.displayMetrics.density
         card.setOnClickListener {
             getItem(holder.bindingAdapterPosition)?.let(onClick)
         }

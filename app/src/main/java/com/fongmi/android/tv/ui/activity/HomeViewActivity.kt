@@ -3,6 +3,7 @@ package com.fongmi.android.tv.ui.activity
 import android.app.Activity
 import android.content.Context
 import android.graphics.Color
+import android.graphics.Typeface
 import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
@@ -12,10 +13,12 @@ import android.os.Looper
 import android.util.Log
 import android.util.TypedValue
 import android.view.Gravity
+import android.view.KeyEvent
 import android.view.View
 import android.view.ViewGroup
 import android.widget.FrameLayout
 import android.widget.ImageView
+import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
@@ -161,6 +164,14 @@ class HomeViewActivity : AppCompatActivity() {
 
     /** 用户是否明确停在分类 Tab 上（首页列表为空时不能悄悄改成第一个分类）。 */
     private var categoryTabActive: Boolean = false
+
+    /**
+     * 上一次停留的分类 Tab 下标（原版 `K.getSelectedPosition()` 的替身）。
+     *
+     * 海报区按 ↑ 时回到这里，而不是永远回第 0 个「推荐」：
+     * 用户在第 3 个分类看片，往下一格再往上，必须回到第 3 个 Tab（原版 HomeActivityV2 L1313 `t2()`）。
+     */
+    private var lastFocusedTabIndex = 0
 
     /** 已经自动加载过的「站点:分类」：分类结果本身也可能为空，用它挡掉死循环。 */
     private var autoCategoryKey: String? = null
@@ -361,12 +372,14 @@ class HomeViewActivity : AppCompatActivity() {
      * - 在 `main` 源集里（搜索 / 历史）：本类可以直接引用，且与已验收的 Compose 首页同一条路由
      *   （`HeroSearchActivity` / `HeroHistoryActivity`），不退回 leanback 的旧页面；
      * - 只在某个 flavor 里（直播 / 收藏 / 推送 / 设置）：见 [openFlavorActivity]。
+     *
+     * 顶栏第一项是「小房子」图标（`homeBtn`），文字项里**没有「首页」**：
+     * 原版 navRecycler 只放 直播 / 搜索 / 历史 / 收藏 / 推送 / 设置。
      */
     private fun onNavSelected(position: Int) {
         val label = navAdapter.labelAt(position) ?: return
         Log.d(TAG, "顶栏点击: $label")
         when (label) {
-            NAV_HOME -> focusHomePoster()
             NAV_LIVE -> openFlavorActivity(LIVE_ACTIVITY_CLASS, Context::class.java, label)
             NAV_SEARCH -> HeroSearchActivity.start(this, currentSearchBackdrop())
             NAV_HISTORY -> HeroHistoryActivity.start(this)
@@ -394,18 +407,6 @@ class HomeViewActivity : AppCompatActivity() {
             Log.w(TAG, "顶栏「$label」打不开: $className | ${e.message}")
             Notify.show("当前版本没有${label}页")
         }
-    }
-
-    /** 顶栏「首页」：不留页面，只把焦点送回第一张海报（没有海报时保持原位）。 */
-    private fun focusHomePoster() {
-        if (items.isEmpty()) {
-            // 没有海报可落焦：只有真的没配源时才提示「去设置」，空态本身已经说明「没内容」。
-            if (VodConfig.get().getHome().key.isNullOrEmpty()) showNoSourceHint()
-            return
-        }
-        focusedIndex = 0
-        scrollPostersTo(0)
-        focusPoster(0)
     }
 
     /** 搜索页的磨砂大图：把当前 Hero 正在显示的横图带过去（与 Compose 首页同一个来源）。 */
@@ -652,6 +653,8 @@ class HomeViewActivity : AppCompatActivity() {
         typeRecycler.visibility = if (hasTabs) View.VISIBLE else View.GONE
         wireFocusChain(hasTabs)
         if (tabAdapter.selectedIndex > labels.lastIndex) tabAdapter.selectedIndex = 0
+        // 停留位置也要夹回合法范围：换源后分类数量会变少。
+        if (lastFocusedTabIndex > labels.lastIndex) lastFocusedTabIndex = 0
     }
 
     /**
@@ -1035,6 +1038,71 @@ class HomeViewActivity : AppCompatActivity() {
     // ==================================================================
 
     /**
+     * 方向键焦点回跳（逐条照抄 ref_docs/HomeActivityV2.java L1301-1384）：
+     *
+     * - 海报行 `L` ↑ → 分类栏 `K` 可见则 `t2()`（回到 `K` 上次停留的 Tab），否则回顶栏；
+     * - 分类栏 `K` ↑ → 小房子 `b0`；
+     * - 小房子 `b0` / 顶栏 `J` ↓ → 分类栏可见则回上次停留的 Tab，否则回海报行；
+     * - 分类栏 `K` ↓ → 海报行 `L.requestFocus()`（回到行内上一次聚焦的卡）。
+     *
+     * **为什么放在 Activity 级**：`nextFocusUpId/DownId` 只在「被聚焦的 View 自己」上生效，
+     * 焦点落在 Adapter 代码创建的子项上时容器属性不起作用，FocusFinder 会按几何去猜
+     * （海报行 ↑ 常常落到最右边的「设置」）。在分发口拦截是唯一能 100% 命中原版语义的位置。
+     */
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (event.action == KeyEvent.ACTION_DOWN) {
+            when (event.keyCode) {
+                KeyEvent.KEYCODE_DPAD_UP -> if (onDpadUp()) return true
+                KeyEvent.KEYCODE_DPAD_DOWN -> if (onDpadDown()) return true
+            }
+        }
+        return super.dispatchKeyEvent(event)
+    }
+
+    private fun onDpadUp(): Boolean {
+        // 海报行 ↑：回到上次停留的分类 Tab（原版 `return this.K.getVisibility() == 0 ? t2() : this.J.requestFocus()`）。
+        if (recycler.findFocus() != null) return focusLastTabOrHome()
+        // 分类 Tab ↑：交给小房子（原版 `this.b0.requestFocus()`）。
+        if (typeRecycler.findFocus() != null) return homeBtn.requestFocus()
+        return false
+    }
+
+    private fun onDpadDown(): Boolean {
+        // 顶栏（小房子 / 文字项）↓：先回分类 Tab（原版 L1313 / L1362 同一分支）。
+        if (navBar.findFocus() != null) return focusLastTabOrPoster()
+        // 分类 Tab ↓：回到海报行当前卡（原版 `this.L.requestFocus()`）。
+        if (typeRecycler.findFocus() != null) return focusCurrentPoster()
+        return false
+    }
+
+    /** 海报行 ↑ / 顶栏 ↓ 的公共分支：有分类栏 → 上次停留的 Tab；没有 → 另一行。 */
+    private fun focusLastTabOrHome(): Boolean =
+        if (typeRecycler.visibility == View.VISIBLE) focusTab(lastFocusedTabIndex) else homeBtn.requestFocus()
+
+    private fun focusLastTabOrPoster(): Boolean =
+        if (typeRecycler.visibility == View.VISIBLE) focusTab(lastFocusedTabIndex) else focusCurrentPoster()
+
+    /** 回到海报行当前对应的那张卡（`focusedIndex` 与 Hero 区、Adapter 列表严格同下标）。 */
+    private fun focusCurrentPoster(): Boolean {
+        if (items.isEmpty()) return false
+        focusPoster(focusedIndex)
+        return true
+    }
+
+    /** 把焦点交给第 [index] 个分类 Tab：holder 已挂上就直接抢，否则先定位、下一拍补抢（同 [focusPoster]）。 */
+    private fun focusTab(index: Int): Boolean {
+        if (tabAdapter.itemCount == 0) return false
+        val safe = index.coerceIn(0, tabAdapter.itemCount - 1)
+        val attached = typeRecycler.findViewHolderForAdapterPosition(safe)?.itemView
+        if (attached != null && attached.isAttachedToWindow && attached.requestFocus()) return true
+        typeRecycler.scrollToPosition(safe)
+        typeRecycler.post {
+            typeRecycler.findViewHolderForAdapterPosition(safe)?.itemView?.requestFocus()
+        }
+        return true
+    }
+
+    /**
      * 海报行焦点变化：Adapter 把这一张的 [Vod] 传进来，这里按 position 取同一条展示数据。
      *
      * 用 position 取而不是直接用 Adapter 传的对象：Adapter 与 Activity 各自持有一份 list，
@@ -1069,6 +1137,8 @@ class HomeViewActivity : AppCompatActivity() {
     }
 
     private fun onTabFocused(index: Int) {
+        // 记住停留位置：海报行 ↑ / 小房子 ↓ 都要回到这一个是第几个 Tab。
+        lastFocusedTabIndex = index
         // 【居中】焦点一动就先把选中的 Tab 平滑滚到屏幕正中（与海报行同一套几何），
         // 即使下面因为「同一个 Tab」提前 return，视觉也已经跟上了。
         scrollTabToCenter(index)
@@ -1089,6 +1159,7 @@ class HomeViewActivity : AppCompatActivity() {
     private fun selectTab(index: Int) {
         pendingTabLoad?.let { handler.removeCallbacks(it) }
         pendingTabLoad = null
+        lastFocusedTabIndex = index
         tabAdapter.selectedIndex = index
         scrollTabToCenter(index)
         val site = VodConfig.get().getHome()
@@ -1181,9 +1252,10 @@ class HomeViewActivity : AppCompatActivity() {
 
         private const val TAG = "HomeView"
 
-        // 顶栏顺序（对照 ref_docs/home_ui.png / Compose 版 TOP_BAR_LABELS）。
+        // 顶栏顺序（对照 ref_docs/activity_home_v2.xml 的 navRecycler + 逆向截图图2）。
+        // 第一项是「小房子」图标（homeBtn），文字项里**没有「首页」**：
+        // 原版只有 直播 / 搜索 / 历史 / 收藏 / 推送 / 设置 六项。
         // 点击分派用这几条文案常量，不写裸串、不写下标。
-        private const val NAV_HOME = "首页"
         private const val NAV_LIVE = "直播"
         private const val NAV_SEARCH = "搜索"
         private const val NAV_HISTORY = "历史"
@@ -1192,7 +1264,7 @@ class HomeViewActivity : AppCompatActivity() {
         private const val NAV_SETTINGS = "设置"
 
         private val NAV_LABELS = listOf(
-            NAV_HOME, NAV_LIVE, NAV_SEARCH, NAV_HISTORY, NAV_KEEP, NAV_PUSH, NAV_SETTINGS,
+            NAV_LIVE, NAV_SEARCH, NAV_HISTORY, NAV_KEEP, NAV_PUSH, NAV_SETTINGS,
         )
 
         // 顶栏目标页只写类名、不引用类：`PushActivity` / `SettingActivity` 只存在于 leanback，
@@ -1286,8 +1358,8 @@ class HomeViewActivity : AppCompatActivity() {
 /**
  * 顶栏 / 分类 Tab 的通用文字项（纯 View）。
  *
- * 不新建 item XML：两项都只是一个 TextView + 焦点态背景，代码创建可以少两份布局文件，
- * 也避免与全局海报卡的尺寸规则混在一起。
+ * 不新建 item XML：两项都是用代码创建的 TextView（顶栏再包一层竖列放焦点红色短横线），
+ * 少两份布局文件，也避免与全局海报卡的尺寸规则混在一起。
  */
 private enum class HomeChipStyle { NAV, TAB }
 
@@ -1324,82 +1396,129 @@ private class HomeChipAdapter(
     /** 该下标的文案：点击 / 确定键按文案分派，不硬编码下标。 */
     fun labelAt(position: Int): String? = items.getOrNull(position)
 
-    override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): Holder {
-        val text = TextView(parent.context).apply {
+    override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): Holder =
+        when (style) {
+            HomeChipStyle.NAV -> createNavHolder(parent)
+            HomeChipStyle.TAB -> createTabHolder(parent)
+        }.also { holder ->
+            holder.text.setOnClickListener {
+                val position = holder.bindingAdapterPosition
+                if (position != RecyclerView.NO_POSITION) onSelected(position)
+            }
+            holder.text.setOnFocusChangeListener { _, hasFocus ->
+                val position = holder.bindingAdapterPosition
+                if (hasFocus && position != RecyclerView.NO_POSITION) onFocused(position)
+                applyVisual(holder, hasFocus, position)
+                if (style == HomeChipStyle.NAV) {
+                    // 顶栏焦点态整体平滑放大 1.1 倍（只走绘制层，不动布局）。
+                    // 缩放对象是「文字 + 下划线」整列，下划线与文字始终同心。
+                    holder.root.animate()
+                        .scaleX(if (hasFocus) TOP_BAR_FOCUS_SCALE else 1f)
+                        .scaleY(if (hasFocus) TOP_BAR_FOCUS_SCALE else 1f)
+                        .setDuration(FOCUS_ANIM_MS)
+                        .start()
+                }
+            }
+        }
+
+    /**
+     * 顶栏文字项：竖列 = [24dp 文字区] + 6dp 间距 + [26×2dp 红色短横线]，
+     * 顶部再预留 8dp（= 间距 + 横线高），使 24dp 文字区的中心正好落在 64dp 行高的中线上
+     * （与 Compose 版 `TOP_BAR_UNDERLINE_RESERVE / TEXT_BOX / GAP / HEIGHT` 逐值一致）。
+     *
+     * 横线常驻布局、只切透明度：焦点切换时文字宽度变化不会把横线顶跑，也不会顶动整行。
+     */
+    private fun createNavHolder(parent: ViewGroup): Holder {
+        val context = parent.context
+        val column = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            // 竖列里 gravity=CENTER 同时负责「整块垂直居中」与「子项水平居中」。
             gravity = Gravity.CENTER
-            includeFontPadding = false
-            isFocusable = true
-            isFocusableInTouchMode = true
-            // API 26 才有的方法，minSdk 24 必须判版本。
-            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
-                defaultFocusHighlightEnabled = false
+            clipChildren = false
+            clipToPadding = false
+            setPadding(0, dp(TOP_BAR_UNDERLINE_RESERVE_DP), 0, 0)
+            layoutParams = RecyclerView.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.MATCH_PARENT,
+            )
+        }
+        val text = newTextView(context).apply {
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                dp(TOP_BAR_TEXT_BOX_DP),
+            )
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, NAV_TEXT_SP)
+            setTextColor(TOP_BAR_IDLE_TEXT)
+            typeface = NAV_IDLE_TYPEFACE
+            // 首个文字距 navRecycler 左沿 17dp（含字形 side bearing）→ 16dp 内边距。
+            setPadding(dp(NAV_ITEM_PADDING_H_DP), 0, dp(NAV_ITEM_PADDING_H_DP), 0)
+        }
+        val underline = View(context).apply {
+            background = GradientDrawable().apply {
+                cornerRadius = dp(TOP_BAR_UNDERLINE_RADIUS_DP).toFloat()
+                setColor(accent)
             }
-            stateListAnimator = null
-            when (style) {
-                HomeChipStyle.NAV -> {
-                    // 【「顶栏靠上」的真正原因】原版顶栏是 Leanback `HorizontalGridView`
-                    // （`navRecycler` 在 ref_docs/activity_home_v2.xml 里高 64dp），
-                    // Leanback 会把每个 item 拉满整行高度；RecyclerView 不会 ——
-                    // 这里若仍写 wrap_content，TextView 只有一行字高，而 LinearLayoutManager
-                    // 不看 child 的 gravity，文字就贴在这一行的**顶部**。
-                    // 照抄原版：item 撑满 64dp 行 + gravity=CENTER。
-                    // 实测 ref_docs/home_ui.png（1920×1080 @2x，即 960×540dp）：
-                    // 文字墨迹纵向 49..77px，中心 63px ≈ 32dp，正好是 64dp 行高的一半。
-                    layoutParams = RecyclerView.LayoutParams(
-                        ViewGroup.LayoutParams.WRAP_CONTENT,
-                        ViewGroup.LayoutParams.MATCH_PARENT,
-                    )
-                    gravity = Gravity.CENTER
-                    setTextSize(TypedValue.COMPLEX_UNIT_SP, NAV_TEXT_SP)
-                    setTextColor(Color.WHITE)
-                    // 首个文字距 navRecycler 左沿 17dp（含字形 side bearing）→ 16dp 内边距。
-                    setPadding(dp(NAV_ITEM_PADDING_H_DP), 0, dp(NAV_ITEM_PADDING_H_DP), 0)
-                }
-                HomeChipStyle.TAB -> {
-                    // ref_docs/adapter_type.xml：13sp、高 26dp、宽 wrap_content；
-                    // 水平内边距 12dp（ref_docs/tab_ui.png 实测），圆角 13dp = 完美胶囊。
-                    layoutParams = RecyclerView.LayoutParams(
-                        ViewGroup.LayoutParams.WRAP_CONTENT,
-                        ViewGroup.LayoutParams.WRAP_CONTENT,
-                    )
-                    setTextSize(TypedValue.COMPLEX_UNIT_SP, TAB_TEXT_SP)
-                    minHeight = dp(TAB_ITEM_HEIGHT_DP)
-                    setPadding(dp(TAB_ITEM_PADDING_H_DP), 0, dp(TAB_ITEM_PADDING_H_DP), 0)
-                    setTextColor(Color.WHITE)
-                }
+            // 常驻布局，焦点态只改透明度（原版 150ms 淡入淡出）。
+            alpha = 0f
+            layoutParams = LinearLayout.LayoutParams(
+                dp(TOP_BAR_UNDERLINE_WIDTH_DP),
+                dp(TOP_BAR_UNDERLINE_HEIGHT_DP),
+            ).apply {
+                topMargin = dp(TOP_BAR_UNDERLINE_GAP_DP)
             }
         }
-        val holder = Holder(text)
-        text.setOnClickListener {
-            val position = holder.bindingAdapterPosition
-            if (position != RecyclerView.NO_POSITION) onSelected(position)
+        column.addView(text)
+        column.addView(underline)
+        return Holder(root = column, text = text, underline = underline)
+    }
+
+    /** 分类 Tab：ref_docs/adapter_type.xml —— 13sp、高 26dp、宽 wrap_content、圆角 13dp 胶囊。 */
+    private fun createTabHolder(parent: ViewGroup): Holder {
+        val text = newTextView(parent.context).apply {
+            layoutParams = RecyclerView.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+            )
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, TAB_TEXT_SP)
+            minHeight = dp(TAB_ITEM_HEIGHT_DP)
+            setPadding(dp(TAB_ITEM_PADDING_H_DP), 0, dp(TAB_ITEM_PADDING_H_DP), 0)
+            setTextColor(Color.WHITE)
         }
-        text.setOnFocusChangeListener { view, hasFocus ->
-            val position = holder.bindingAdapterPosition
-            if (hasFocus && position != RecyclerView.NO_POSITION) onFocused(position)
-            applyVisual(view as TextView, hasFocus, position)
-            if (style == HomeChipStyle.NAV) {
-                // 顶栏焦点态整体平滑放大 1.1 倍（只走绘制层，不动布局）。
-                view.animate()
-                    .scaleX(if (hasFocus) TOP_BAR_FOCUS_SCALE else 1f)
-                    .scaleY(if (hasFocus) TOP_BAR_FOCUS_SCALE else 1f)
-                    .setDuration(FOCUS_ANIM_MS)
-                    .start()
-            }
+        return Holder(root = text, text = text, underline = null)
+    }
+
+    /** 两种 item 共用的文本基座：可聚焦、去掉系统焦点高亮、无状态动画。 */
+    private fun newTextView(context: Context): TextView = TextView(context).apply {
+        gravity = Gravity.CENTER
+        includeFontPadding = false
+        isFocusable = true
+        isFocusableInTouchMode = true
+        // API 26 才有的方法，minSdk 24 必须判版本。
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+            defaultFocusHighlightEnabled = false
         }
-        return holder
+        stateListAnimator = null
     }
 
     override fun onBindViewHolder(holder: Holder, position: Int) {
         holder.text.text = items[position]
-        applyVisual(holder.text, holder.text.isFocused, position)
+        applyVisual(holder, holder.text.isFocused, position)
     }
 
-    private fun applyVisual(text: TextView, focused: Boolean, position: Int) {
+    /**
+     * 焦点视觉（照抄 Compose 版 `HeroTopBarItem`，L1730-1816）：
+     * - 顶栏：常态白 60% + Medium；焦点纯白 + SemiBold（系统 `sans-serif` BOLD）+ 下方红色短横线。
+     *   缩放在焦点监听里做，只作用于绘制层，下划线不会跳动。
+     * - 分类 Tab：焦点红底 / 选中红框 / 常态全透明（与原版 `selector_item_round` 同一套三态）。
+     */
+    private fun applyVisual(holder: Holder, focused: Boolean, position: Int) {
+        val text = holder.text
         when (style) {
             HomeChipStyle.NAV -> {
-                text.alpha = if (focused) 1f else TOP_BAR_IDLE_ALPHA
-                text.setTypeface(null, if (focused) android.graphics.Typeface.BOLD else android.graphics.Typeface.NORMAL)
+                text.setTextColor(if (focused) Color.WHITE else TOP_BAR_IDLE_TEXT)
+                text.typeface = if (focused) NAV_FOCUS_TYPEFACE else NAV_IDLE_TYPEFACE
+                // 横线始终占位（2dp + 6dp 间距），这里只切透明度：文字宽度变化不会顶动它。
+                holder.underline?.alpha = if (focused) 1f else 0f
             }
             HomeChipStyle.TAB -> {
                 val selected = position == selectedIndex
@@ -1424,7 +1543,15 @@ private class HomeChipAdapter(
 
     private fun dp(value: Int): Int = (value * density).roundToInt()
 
-    inner class Holder(val text: TextView) : RecyclerView.ViewHolder(text)
+    /**
+     * 两种 item 的统一 holder：[root] 是缩放 / 焦点态的作用对象，
+     * [underline] 只有顶栏有（分类 Tab 为 null）。
+     */
+    inner class Holder(
+        val root: View,
+        val text: TextView,
+        val underline: View?,
+    ) : RecyclerView.ViewHolder(root)
 
     private companion object {
         /**
@@ -1435,6 +1562,22 @@ private class HomeChipAdapter(
 
         /** 顶栏 item 水平内边距：实测首个字形距 navRecycler 左沿 17dp（含 side bearing）。 */
         private const val NAV_ITEM_PADDING_H_DP = 16
+
+        /** 顶栏文字区固定高度：Compose `TOP_BAR_TEXT_BOX = 24dp`（16sp 字形的上沿高度）。 */
+        private const val TOP_BAR_TEXT_BOX_DP = 24
+
+        /** 焦点红色短横线：Compose `TOP_BAR_UNDERLINE_WIDTH/HEIGHT` = 26dp × 2dp。 */
+        private const val TOP_BAR_UNDERLINE_WIDTH_DP = 26
+        private const val TOP_BAR_UNDERLINE_HEIGHT_DP = 2
+
+        /** 文字与短横线之间的间距：Compose `TOP_BAR_UNDERLINE_GAP = 6dp`。 */
+        private const val TOP_BAR_UNDERLINE_GAP_DP = 6
+
+        /** 短横线端部圆角：ref_docs/shape_red_bar.xml `corners radius=2dp`。 */
+        private const val TOP_BAR_UNDERLINE_RADIUS_DP = 2
+
+        /** 顶部预留 = 间距 + 横线高（Compose `TOP_BAR_UNDERLINE_RESERVE`）：保证文字区与 64dp 行同心。 */
+        private const val TOP_BAR_UNDERLINE_RESERVE_DP = TOP_BAR_UNDERLINE_GAP_DP + TOP_BAR_UNDERLINE_HEIGHT_DP
 
         /** 分类 Tab 字号：ref_docs/adapter_type.xml `android:textSize="13sp"`。 */
         private const val TAB_TEXT_SP = 13f
@@ -1449,7 +1592,14 @@ private class HomeChipAdapter(
         private const val TAB_ITEM_RADIUS_DP = 13
 
         private const val TOP_BAR_FOCUS_SCALE = 1.1f
-        private const val TOP_BAR_IDLE_ALPHA = 0.6f
+
+        /** 顶栏常态文字：纯白 60%（Compose `TOP_BAR_IDLE_ALPHA = 0.6f` → alpha 0x99）。 */
+        private const val TOP_BAR_IDLE_TEXT = 0x99FFFFFF.toInt()
+
+        /** 常态字重 Medium（500）；焦点 SemiBold 用系统粗体近似（Compose `FontWeight.Medium / SemiBold`）。 */
+        private val NAV_IDLE_TYPEFACE: Typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+        private val NAV_FOCUS_TYPEFACE: Typeface = Typeface.create("sans-serif", Typeface.BOLD)
+
         private const val TAB_IDLE_TEXT = 0x99FFFFFF.toInt()
         private const val FOCUS_ANIM_MS = 150L
     }

@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    首页左侧遮罩：逐字节照抄 ref_docs/bg_hero_mask_h.xml（原版 APK 反编译资源）。
+    左边缘 #ff000000 → 中心 50% 全透明 → 右半屏全透明。
+    只压左侧托住剧名 / 简介，右半屏（海报区）不再被灰掉。
+-->
+<shape xmlns:android="http://schemas.android.com/apk/res/android">
+    <gradient
+        android:startColor="#ff000000"
+        android:endColor="#00000000"
+        android:angle="0"
+        android:centerX="0.5"
+        android:centerColor="#00000000"/>
+</shape>
