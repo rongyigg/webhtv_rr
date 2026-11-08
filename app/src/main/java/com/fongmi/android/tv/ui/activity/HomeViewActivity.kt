@@ -14,6 +14,7 @@ import android.util.TypedValue
 import android.view.Gravity
 import android.view.KeyEvent
 import android.view.View
+import android.view.ViewConfiguration
 import android.view.ViewGroup
 import android.widget.FrameLayout
 import android.widget.ImageView
@@ -122,13 +123,23 @@ class HomeViewActivity : AppCompatActivity() {
     private var pendingTabLoad: Runnable? = null
 
     // ------------------------------------------------------------------
-    // 海报行长按（下键 / 确定键，1000ms）
+    // 海报行长按状态机（逐字对应 ref_docs/HomeActivityV2.java L231-232 / L1236-1249 / L1344-1360）
+    //   V = isKeyDown            按下中、还没抬起
+    //   W = isLongPressTriggered  长按已经触发
+    //   U = longPressCenterRunnable  长按确定键 → 换源
+    //   X = longPressDownRunnable    长按下键   → TMDB 手动匹配
     // ------------------------------------------------------------------
-    /** 长按已触发：抬起之前吞掉所有按键（含 repeatCount > 0 的连发）。 */
+    /** 原版 `V`：按下中（`repeatCount == 0` 时置 true，抬起时清掉）。 */
+    private var isKeyDown = false
+
+    /** 原版 `W`：长按已触发（Runnable 到点置 true，抬起时清掉）。 */
     private var isLongPressTriggered = false
 
-    /** 1000ms 定时器本体（对应 ref_docs 里的 `this.X` / `this.U`）。 */
-    private var longPressRunnable: Runnable? = null
+    /** 原版 `U`：长按确定键 → 换源弹窗。 */
+    private val longPressCenterRunnable = Runnable { onPosterLongPressFired(KeyEvent.KEYCODE_DPAD_CENTER) }
+
+    /** 原版 `X`：长按下键 → TMDB 手动匹配弹窗。 */
+    private val longPressDownRunnable = Runnable { onPosterLongPressFired(KeyEvent.KEYCODE_DPAD_DOWN) }
 
     /** TMDB 手动匹配弹窗的 Compose 宿主（0×0，只承载组合；窗口由弹窗自己开）。 */
     private var tmdbMatchHost: ComposeView? = null
@@ -269,24 +280,15 @@ class HomeViewActivity : AppCompatActivity() {
         refreshHome("设置页返回")
     }
 
-    /**
-     * 【长按锁的解除兜底】弹窗（换源 / TMDB 手动匹配）都是**独立 Window**，抢到焦点后
-     * 本 Activity 的窗口就收不到按键了 —— 长按那把锁也就永远等不到 ACTION_UP。
-     * 窗口重新拿到焦点 = 弹窗已关闭 / 从后台回来，此时按键必然不处于按住状态，
-     * 无条件解锁，否则首页会一直吞按键（比"漏放一次短按"严重得多）。
-     */
-    override fun onWindowFocusChanged(hasFocus: Boolean) {
-        super.onWindowFocusChanged(hasFocus)
-        if (hasFocus) isLongPressTriggered = false
-    }
-
     override fun onDestroy() {
         pendingTabLoad?.let { handler.removeCallbacks(it) }
         pendingTabLoad = null
         pendingEmptyRetry?.let { handler.removeCallbacks(it) }
         pendingEmptyRetry = null
-        // 长按定时器与 Compose 弹窗宿主都必须跟着 Activity 一起撤掉，否则回调会打到已销毁的 View。
-        cancelLongPress()
+        // 长按的两个定时器与 Compose 弹窗宿主都必须跟着 Activity 一起撤掉，否则回调会打到已销毁的 View。
+        recycler.removeCallbacks(longPressDownRunnable)
+        recycler.removeCallbacks(longPressCenterRunnable)
+        isKeyDown = false
         isLongPressTriggered = false
         dismissTmdbMatchHost()
         // 在途 TMDB 请求 / 防抖一起作废：Activity 已经没了，回调绝不能再去碰 View。
@@ -813,11 +815,10 @@ class HomeViewActivity : AppCompatActivity() {
      * 文本永远先写：即使大图还要解码，观众看到的也是「这张卡的标题 + 逐渐淡入的横图」，
      * 而不是上一部剧的标题配下一部剧的图。
      *
-     * [upgrade] = true 表示这是**异步 TMDB 结果**触发的重绘（缓存里原本没有横图）：
-     * 此时右上角竖图先顶着，等大图真正落地再收，避免「竖图消失 → 黑屏 → 大图淡入」的中间态。
-     * 正常焦点切换仍走 `upgrade = false`，保持原版 `E2(pos)` 的「有横图就立刻收竖图」。
+     * 无论冷启动、焦点切换还是异步 TMDB 结果触发的重绘，都只有一条规则（原版 `E2(pos)`）：
+     * **有横图 → 先收 posterCard 再发起加载**，没有横图 → 才让 posterCard 显示竖图。
      */
-    private fun applyHero(index: Int, upgrade: Boolean = false) {
+    private fun applyHero(index: Int) {
         val item = items.getOrNull(index) ?: return
         focusedIndex = index
         focusedPosterKey = item.posterKey
@@ -831,7 +832,7 @@ class HomeViewActivity : AppCompatActivity() {
         heroDescText.text = tmdb?.overview?.takeIf { it.isNotBlank() } ?: item.synopsis
         heroDescText.visibility = View.VISIBLE
         bindLogo(item, tmdb)
-        bindBackdrop(item, tmdb, index, upgrade)
+        bindBackdrop(item, tmdb, index)
     }
 
     /** 元数据行：没有 TMDB 覆盖时用同步缓存拼好的那行；有覆盖时用详情里的年份 / 评分重拼。 */
@@ -883,13 +884,14 @@ class HomeViewActivity : AppCompatActivity() {
      * 横图**只认真横图**：`HeroTmdbData.highResBackdrop` 在没横图时会退回竖图，
      * 所以这里必须先看 `tmdb.item.backdropUrl`，否则又会把竖图拉满全屏。
      */
-    private fun bindBackdrop(item: HomePosterItem, tmdb: HeroTmdbData?, position: Int, upgrade: Boolean) {
+    private fun bindBackdrop(item: HomePosterItem, tmdb: HeroTmdbData?, position: Int) {
         val backdrop = when {
             // 详情已经回来：以详情为准（没有真横图就用竖图，哪怕缓存里曾匹配到别的条目）。
             tmdb != null -> if (tmdb.item.backdropUrl.isNullOrBlank()) "" else tmdb.highResBackdrop
             else -> item.backdropUrl
         }
-        // 【顺序照抄原版 E2(pos)】先判横图地址，再决定竖图与 heroBg —— 两者互斥，不共帧。
+        // 【铁律】先判横图地址，再决定竖图与 heroBg —— 两者互斥，不共帧。
+        // 只要 `backdrop` 非空，`posterCard` 就**只能** GONE；全文件不存在第二处可见入口。
         if (backdrop.isNullOrEmpty()) {
             // 没有真横图：清空 heroBg，竖图只放在右上角 posterCard 里。
             HeroImageView.setSharedUrl("")
@@ -899,24 +901,13 @@ class HomeViewActivity : AppCompatActivity() {
             loadPosterCard(item.posterUrl)
             return
         }
-        // 有横图：**先**收竖图、**再**发请求。绝不能等 loadImage 回调成功后才藏，
-        // 否则首帧（尤其是 upgrade = true 的 TMDB 升级那一拍）必闪一张竖图。
+        // 有横图：**先**收竖图、**再**发请求。绝不把 GONE 放进 `loadImage` 回调，
+        // 否则首帧（冷启动 / 焦点切换 / TMDB 结果异步到达任意一拍）必闪一张竖图。
         posterCard.visibility = View.GONE
         HeroImageView.setSharedUrl(backdrop)
         heroBg.visibility = View.VISIBLE
-        heroBg.loadImage(backdrop, position) {
-            if (focusedPosterKey != item.posterKey) return@loadImage
-            // 【落地判据】`lastUrl` 只在成功贴图后仍等于本地址（失败会被清成 null），
-            // 所以它能区分「这张新图真的上屏了」和「保持着上一张旧图 / 什么都没画」。
-            // 成功分支什么都不用做：竖图在发起请求之前就已经收掉了。
-            if (heroBg.lastUrl == backdrop && heroBg.drawable != null) return@loadImage
-            // 横图彻底失败（403 / 404 / 解码失败）：把竖图放回来，绝不留一整屏黑。
-            // `upgrade` 分支多看一眼 `heroBg.drawable`：升级失败且 Hero 区什么都没有时必须回填。
-            if (!upgrade || heroBg.drawable == null) {
-                posterCard.visibility = View.VISIBLE
-                loadPosterCard(item.posterUrl)
-            }
-        }
+        // 不传回调：竖图在这一行之前就已经收掉了，成功 / 失败都不需要再动 `posterCard`。
+        heroBg.loadImage(backdrop, position, null)
     }
 
     private fun loadPosterCard(url: String) {
@@ -1042,7 +1033,7 @@ class HomeViewActivity : AppCompatActivity() {
         if (items.getOrNull(index)?.posterKey != key) return
         // 【450ms 淡入】重绘仍走 `heroBg.loadImage()`：HeroImageView 内部把旧图垫到 heroBgUnder，
         // 新图做 1.03→1.0 + alpha 0→1 的 450ms 淡入，换背景永远是叠化，不会先清空再闪黑。
-        applyHero(index, upgrade = true)
+        applyHero(index)
     }
 
     /** 写入覆盖表：同一 key 只保留一条；空字段不覆盖已有值；自动结果不许盖手动结果。 */
@@ -1078,37 +1069,53 @@ class HomeViewActivity : AppCompatActivity() {
      * **为什么放在 Activity 级**：`nextFocusUpId/DownId` 只在「被聚焦的 View 自己」上生效，
      * 焦点落在 Adapter 代码创建的子项上时容器属性不起作用，FocusFinder 会按几何去猜
      * （海报行 ↑ 常常落到最右边的「设置」）。在分发口拦截是唯一能 100% 命中原版语义的位置。
+     *
+     * **长按照抄 ref_docs/HomeActivityV2.java**：
+     * - `ACTION_DOWN` + `repeatCount == 0` → `V = true`、`W = false`、`removeCallbacks` +
+     *   `postDelayed(..., ViewConfiguration.getLongPressTimeout())`（`recycler` 作为宿主，与原版 `this.L` 一致）；
+     * - `ACTION_DOWN` + `repeatCount != 0` → `return true`（原版的打断机制）；
+     * - `ACTION_UP` → `removeCallbacks(U / X)`、`z = V && !W`、`V = W = false`、`z` 为真走短按。
      */
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
-        // ── 【长按锁】最开头：触发后到抬起之前，所有按键全部吞掉 ───────────────────
-        // 抬起这一下也吞掉：卡片收不到 UP 就不会走 onClick，长按不会被当成一次短按点进详情。
-        if (isLongPressTriggered) {
-            if (event.action == KeyEvent.ACTION_UP) {
-                isLongPressTriggered = false // 松开按键，解除锁定
-                return true
+        val key = event.keyCode
+        // 原版只在海报行 `L` 里认「下键 / 确定键」（`m2(this.L, getCurrentFocus())` + `tf.L(keyEvent)`）。
+        val isPosterKey = key == KeyEvent.KEYCODE_DPAD_DOWN ||
+            key == KeyEvent.KEYCODE_DPAD_CENTER ||
+            key == KeyEvent.KEYCODE_ENTER
+
+        // ── ACTION_UP（原版 L1236-1249）────────────────────────────────────────
+        // removeCallbacks(U / X)；z = V && !W；V = false；W = false；z 为真 = 短按 → 回详情。
+        if (event.action == KeyEvent.ACTION_UP && isPosterKey && (isKeyDown || isLongPressTriggered)) {
+            recycler.removeCallbacks(longPressDownRunnable)
+            recycler.removeCallbacks(longPressCenterRunnable)
+            val shortPress = isKeyDown && !isLongPressTriggered
+            isKeyDown = false
+            isLongPressTriggered = false
+            // 短按：原版在这里拿 `currentFocus.tag` 的 Vod 直接进详情；
+            // 我们的卡片 tag 不一定是 Vod，用同一个 `focusedIndex`，走同一条路由。
+            if (shortPress) items.getOrNull(focusedIndex)?.let(::onPosterClicked)
+            return true
+        }
+
+        // ── ACTION_DOWN（原版 L1344-1360）──────────────────────────────────────
+        if (event.action == KeyEvent.ACTION_DOWN && isPosterKey && recycler.findFocus() != null) {
+            // 连发：原版 `if (repeatCount != 0) return true` —— 这就是「打断连续按键输出」的机制本身。
+            if (event.repeatCount != 0) return true
+            isKeyDown = true
+            isLongPressTriggered = false
+            // 原版：removeCallbacks 后 postDelayed(getLongPressTimeout())
+            val timeout = ViewConfiguration.getLongPressTimeout().toLong()
+            if (key == KeyEvent.KEYCODE_DPAD_DOWN) {
+                recycler.removeCallbacks(longPressDownRunnable)
+                recycler.postDelayed(longPressDownRunnable, timeout)
+            } else {
+                recycler.removeCallbacks(longPressCenterRunnable)
+                recycler.postDelayed(longPressCenterRunnable, timeout)
             }
-            return true // 没松开之前，所有按下事件（包括 repeatCount > 0 的连发）全部拦截
+            return true
         }
-        // ── 【按下】第一次按下（repeatCount == 0）起 1000ms 定时器 ─────────────────
-        if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
-            val key = event.keyCode
-            // 只有海报区里的下键 / 确定键算长按；顶栏 / 分类栏的下键仍然走焦点路由。
-            val longPressKey = key == KeyEvent.KEYCODE_DPAD_DOWN ||
-                key == KeyEvent.KEYCODE_DPAD_CENTER ||
-                key == KeyEvent.KEYCODE_ENTER
-            if (longPressKey && recycler.findFocus() != null) {
-                cancelLongPress()
-                val runnable = Runnable { onPosterLongPressFired(key) }
-                longPressRunnable = runnable
-                handler.postDelayed(runnable, POSTER_LONG_PRESS_MS)
-                // 下键由本方法独占（海报行向下没有可聚焦目标）；确定键继续下发，短按靠 View 的 onClick。
-                if (key == KeyEvent.KEYCODE_DPAD_DOWN) return true
-            }
-        }
-        // ── 【抬起】没到 1 秒就松手：撤定时器，事件放行（原短按逻辑照旧）───────────
-        if (event.action == KeyEvent.ACTION_UP && longPressRunnable != null) {
-            cancelLongPress()
-        }
+
+        // ── 其余按键：原焦点路由原样保留 ───────────────────────────────────────
         if (event.action == KeyEvent.ACTION_DOWN) {
             when (event.keyCode) {
                 KeyEvent.KEYCODE_DPAD_UP -> if (onDpadUp()) return true
@@ -1119,26 +1126,18 @@ class HomeViewActivity : AppCompatActivity() {
     }
 
     /**
-     * 1000ms 到点：**先上锁**，再弹对应 Dialog —— 从这一刻起 [dispatchKeyEvent] 最开头的
-     * [isLongPressTriggered] 分支会把后续所有按下 / 连发 / 抬起全部吞掉，直到用户松手。
+     * 长按到点（对应原版 `U` / `X` 两个 Runnable 的 `run()`）：`W = true` 后弹窗。
      *
-     * 对照 ref_docs/HomeActivityV2.dispatchKeyEvent：`this.V / this.W` 两个状态位 +
-     * `removeCallbacks` / `postDelayed(..., getLongPressTimeout())`，抬起时统一清状态。
+     * 弹窗是独立 Window，弹出后系统自然把焦点交给它，后续按键不会再回到 `recycler`，
+     * 所以不需要任何额外的锁 —— 这与原版 `this.W` 的唯一职责完全一致（防止再走短按）。
      */
     private fun onPosterLongPressFired(key: Int) {
-        longPressRunnable = null
         isLongPressTriggered = true
         val item = items.getOrNull(focusedIndex) ?: return
         when (key) {
-            KeyEvent.KEYCODE_DPAD_DOWN -> showTmdbManualMatch(item)     // 下键 → TMDB 手动匹配
-            KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> showChangeSource(item) // 确定键 → 换源
+            KeyEvent.KEYCODE_DPAD_DOWN -> showTmdbManualMatch(item)      // X：下键 → TMDB 手动匹配
+            else -> showChangeSource(item)                                // U：确定键 → 换源
         }
-    }
-
-    /** 撤掉还没到点的定时器（没触发就不上锁，按键继续按原逻辑走）。 */
-    private fun cancelLongPress() {
-        longPressRunnable?.let { handler.removeCallbacks(it) }
-        longPressRunnable = null
     }
 
     /**
@@ -1487,12 +1486,6 @@ class HomeViewActivity : AppCompatActivity() {
 
         /** 分类 Tab 焦点切换的请求防抖：与 Compose 版同一个 220ms。 */
         private const val TAB_SWITCH_DEBOUNCE_MS = 220L
-
-        /**
-         * 海报行长按阈值：1000ms（原版用 `ViewConfiguration.getLongPressTimeout()`，
-         * 这里按需求固定 1s，下键 / 确定键共用）。
-         */
-        private const val POSTER_LONG_PRESS_MS = 1000L
 
         /**
          * TMDB 焦点详情防抖：与 Compose 首页 `HERO_TMDB_FOCUS_DEBOUNCE_MS` 同一个 300ms。
