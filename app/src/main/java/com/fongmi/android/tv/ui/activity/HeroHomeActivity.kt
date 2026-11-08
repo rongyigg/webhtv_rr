@@ -53,8 +53,8 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -145,7 +145,6 @@ import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.roundToInt
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
@@ -984,44 +983,58 @@ private fun HeroHomeScreen(
     // 用 `posters`（已提档）而不是 `homePosters`：预热源站糊图等于白做。
     // Coil 3.3 已移除请求优先级，请求按入队顺序消费 —— 当前背景第一个入队就是最高优先级。
     // 原版 `PosterCache` 同样只预热 `[i - 2, i + 2]` 的窗口，滑过整页不会把几十张图全排进队列。
+    //
+    // 【跨焦点存活】登记表放在 effect 外面：焦点一变 effect 会重启，但**在途请求不能跟着取消**。
+    // 上一版每次焦点移动都 dispose 掉整窗请求再重新入队 —— 主线程全花在 disconnect / 重建连接上，
+    // 连「当前这张背景」都被自己取消过一次，用户看到的就是掉帧 + 背景迟迟不出图。
+    // 现在只释放「已经滑出窗口」的 URL，窗口内已在下载的直接复用。
+    val preloads = remember { HashMap<String, Disposable>() }
     LaunchedEffect(posters, focusedPosterIndex) {
-        if (posters.isEmpty()) return@LaunchedEffect
+        if (posters.isEmpty()) {
+            preloads.values.forEach { it.dispose() }
+            preloads.clear()
+            return@LaunchedEffect
+        }
         val loader = SingletonImageLoader.get(context)
         val currentIndex = focusedPosterIndex.coerceIn(0, posters.lastIndex)
         val start = maxOf(0, currentIndex - HERO_PRELOAD_RANGE)
         val end = minOf(posters.lastIndex, currentIndex + HERO_PRELOAD_RANGE)
-        // 【连接池保护】本轮预热的每个请求都登记下来：焦点一换 / 列表一变，effect 取消，
-        // finally 里逐个 dispose() —— 正在下载的图片会真正断掉，不会留在 Coil / OkHttp 队列里
-        // 挡住下一张「当前背景」。以前只 enqueue 不管，快速滑动几十张后队列里全是大图。
-        val preloads = ArrayList<Disposable>(HERO_PRELOAD_RANGE * 2 + 3)
-        try {
-            // 焦点条目最先入队：当前这一屏的背景 + 艺术字 Logo，必须比邻居更早出图。
-            val current = posters[currentIndex]
-            enqueuePreload(loader, context, current.backdropUrl, HERO_BACKDROP_PRELOAD_WIDTH)
-                ?.let(preloads::add)
-            // 焦点条目补写跨页缓存：切 Tab 回来时 override 还在，但缓存条目可能已被别的 Tab 挤掉。
-            // `put` 会忽略「只匹配到、还没拉详情」的数据，所以这里不会把空壳塞进去。
-            tmdbOverrides[current.posterKey]?.let { data ->
-                HeroTmdbPrefetchCache.put(current.posterKey, data)
-            }
-            // 艺术字 Logo 一起预热（同步缓存命中的也要）：否则「文字标题消失 → Logo 才到」中间会空一段。
-            enqueuePreload(loader, context, current.logoUrl.orEmpty(), HERO_LOGO_PRELOAD_WIDTH)
-                ?.let(preloads::add)
-            // 只遍历窗口内的下标：范围外的一张都不 enqueue。
-            for (i in start..end) {
-                val poster = posters[i]
-                enqueuePreload(loader, context, poster.url, HERO_POSTER_PRELOAD_WIDTH)
-                    ?.let(preloads::add)
-                // 当前这张的背景上面已经入过队，这里只补前后邻居。
-                if (i != currentIndex) {
-                    enqueuePreload(loader, context, poster.backdropUrl, HERO_BACKDROP_PRELOAD_WIDTH)
-                        ?.let(preloads::add)
-                }
-            }
-            // 挂起到下一次焦点 / 列表变化：effect 被取消时才会走到 finally 释放这一轮请求。
-            awaitCancellation()
-        } finally {
-            preloads.forEach { it.dispose() }
+        // 本窗口「应该存在」的 URL。同一个 URL 只登记一次并取最大解码宽度：
+        // 源站没有 TMDB 横图时 `url == backdropUrl`，一张图不该因为两种用途被下载两遍。
+        val wanted = LinkedHashMap<String, Int>(HERO_PRELOAD_RANGE * 4 + 4)
+        fun want(url: String?, width: Int) {
+            val target = url?.takeIf { it.isNotBlank() } ?: return
+            wanted[target] = maxOf(wanted[target] ?: 0, width)
+        }
+        // 焦点条目最先登记：当前这一屏的背景 + 艺术字 Logo，必须比邻居更早出图。
+        val current = posters[currentIndex]
+        want(current.backdropUrl, HERO_BACKDROP_PRELOAD_WIDTH)
+        // 焦点条目补写跨页缓存：切 Tab 回来时 override 还在，但缓存条目可能已被别的 Tab 挤掉。
+        // `put` 会忽略「只匹配到、还没拉详情」的数据，所以这里不会把空壳塞进去。
+        tmdbOverrides[current.posterKey]?.let { data ->
+            HeroTmdbPrefetchCache.put(current.posterKey, data)
+        }
+        // 艺术字 Logo 一起预热（同步缓存命中的也要）：否则「文字标题消失 → Logo 才到」中间会空一段。
+        want(current.logoUrl.orEmpty(), HERO_LOGO_PRELOAD_WIDTH)
+        // 只遍历窗口内的下标：范围外的一张都不 enqueue。
+        for (i in start..end) {
+            val poster = posters[i]
+            want(poster.url, HERO_POSTER_PRELOAD_WIDTH)
+            // 当前这张的背景上面已经登记过，这里只补前后邻居。
+            if (i != currentIndex) want(poster.backdropUrl, HERO_BACKDROP_PRELOAD_WIDTH)
+        }
+        // 先回收窗口外的在途请求（它们已经不可能被看到），再补齐窗口内缺的。
+        preloads.keys.filter { it !in wanted }.forEach { preloads.remove(it)?.dispose() }
+        for ((url, width) in wanted) {
+            if (preloads.containsKey(url)) continue
+            enqueuePreload(loader, context, url, width)?.let { preloads[url] = it }
+        }
+    }
+    // 真正离开首页（View 树销毁）时统一释放：登记表是跨焦点存活的长活对象，不能跟着 effect 走。
+    DisposableEffect(Unit) {
+        onDispose {
+            preloads.values.forEach { it.dispose() }
+            preloads.clear()
         }
     }
 
@@ -1244,14 +1257,13 @@ private fun HeroHomeScreen(
     Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
         // ---- 底层：全屏背景大图 + 横向/纵向遮罩（XML 顺序：heroBg → maskLeft → maskBottom）----
         // 没有数据时传空串，Coil 不加载任何东西，只剩黑色底 + 两层遮罩。
-        // `key(posterKey)`：换剧时整块背景重建（连 Coil painter 都不复用），
-        // 旧剧的图不可能残留在底层；同一部剧内「竖图 → 横图」仍走正常的淡入。
-        key(heroPoster?.posterKey.orEmpty()) {
-            HeroBackdrop(
-                url = heroPoster?.backdropUrl.orEmpty(),
-                verticalUrl = heroPoster?.url.orEmpty(),
-            )
-        }
+        // 【不要再用 `key(posterKey)` 包一层】上一版换剧时用 key() 整块重建 HeroBackdrop，
+        // 连双缓冲里那张「已经显示出来的旧图」一起销毁：新图解码完成前底层是空的，
+        // 每次换焦点都会闪一帧纯黑。现在把条目身份当参数传进去，由 HeroBackdrop 内部迁移状态。
+        HeroBackdrop(
+            posterKey = heroPoster?.posterKey.orEmpty(),
+            url = heroPoster?.backdropUrl.orEmpty(),
+        )
         HeroMaskLeft()
         HeroMaskBottom()
 
@@ -1354,10 +1366,13 @@ private fun HeroHomeScreen(
                 onMoveLeft = { index -> focusTab(index - 1) },
                 onMoveRight = { index -> focusTab(index + 1) },
             )
+            // 【重组收口】焦点下标只喂给 View 侧（滚动 / 记录），**不进 PosterArea 的参数**：
+            // 一旦作为参数传进去，每按一次左右键都会重组 PosterArea 并重跑 AndroidView.update，
+            // 等于每次移动都碰一遍整排数据。这里用 SideEffect 一次性把下标交给 View。
+            SideEffect { posterRow.syncFocus(focusedPosterIndex) }
             PosterArea(
                 posters = posters,
                 row = posterRow,
-                focusedPosterIndex = focusedPosterIndex,
                 onFocused = { index ->
                     focusedPosterIndex = index
                     // 焦点进了卡片：选中的分类 Tab 从实心红块退成红框（规则 ②），
@@ -1458,30 +1473,42 @@ private fun HeroHomeScreen(
  * 它上面淡入，完全就位才丢掉旧图。Compose 的 `Crossfade` 只有固定时长窗口，网络慢时
  * 新图还没解码完、旧图已经淡出，中间就会露黑帧 —— 这里改成显式双图层托底：
  *
- * 1. 底层：最近一张**已成功显示**的图（同一请求参数，Coil 内存缓存命中，几乎零成本）；
- * 2. 顶层：目标图，`onSuccess` 之前 `alpha = 0`，成功后 800ms 淡入；
+ * 1. 底层：最近一张**已成功显示**的图（同一个 Coil 请求参数，内存缓存命中，几乎零成本）；
+ * 2. 顶层：目标图，`onSuccess` 之前 `alpha = 0`，成功后淡入；
  * 3. 淡入结束才释放底层，全屏大图不会长期同时驻留两张。
+ *
+ * 【为什么条目身份是参数而不是 `key()`】调用点以前用 `key(posterKey)` 把整块 HeroBackdrop
+ * 包起来，换剧就整块重建：`previousUrl` 跟着被重置为空，新图解码前底层什么都没有，
+ * 于是每次换焦点都闪一帧纯黑（越快的机器越明显）。现在改成内部状态迁移：
+ * 换条目只换「目标」，底层那张旧图原地保留，直到新图真正盖住它。
  *
  * 左侧文字仍用 320ms，先落位，背景再慢慢跟上。
  */
 @Composable
-private fun HeroBackdrop(url: String, verticalUrl: String) {
+private fun HeroBackdrop(posterKey: String, url: String) {
     var shownUrl by remember { mutableStateOf(url) }    // 目标：当前应该显示的图
-    var previousUrl by remember { mutableStateOf("") }   // 托底：同一部剧最近一张已显示的横图
-    var loadedUrl by remember { mutableStateOf("") }     // Coil 回调：最新成功加载的 URL
+    var previousUrl by remember { mutableStateOf("") }   // 托底：最近一张真正解码成功的图
+    // Coil 回调：最近一次成功加载的 URL，以及它属于哪一条 ——
+    // 换条目后必须知道「底下这张是谁的图」，加载失败时才敢决定要不要撤掉它。
+    var loadedUrl by remember { mutableStateOf("") }
+    var loadedKey by remember { mutableStateOf("") }
 
-    LaunchedEffect(url) {
+    LaunchedEffect(posterKey, url) {
         if (url.isBlank()) {
             // 与改造前一致：没有海报时背景整块为空，不把上一部剧的图留在屏幕上。
             shownUrl = ""
             previousUrl = ""
             loadedUrl = ""
+            loadedKey = ""
             return@LaunchedEffect
         }
         if (url == shownUrl) return@LaunchedEffect
-        // 托底只允许「同一部剧的上一张横图」：竖图（源站 `vod.pic`）绝不当横图的淡入底图，
-        // 否则焦点停下后会先看到竖版海报、再淡入 TMDB 横图（先竖后横）。
-        previousUrl = loadedUrl.takeIf { it.isNotBlank() && it != verticalUrl } ?: ""
+        // 【双缓冲】只换「目标」，绝不清「底」：把最近一张解码成功的图压到底层，
+        // 等新图真正解码完成（下面的 onSuccess → animateTo(1f)）之后才释放。
+        // 这里刻意**不再区分条目、也不再区分横竖**：上一版只允许「同一部剧的横图」托底，
+        // 同一条目从竖图升级到横图时底层被清空 —— 那正好是最常见的一帧纯黑。
+        // 跨条目时底下是上一部剧的剧照，只是过渡画面，新图完全盖住后立刻释放。
+        previousUrl = loadedUrl.takeIf { it.isNotBlank() && it != url } ?: ""
         shownUrl = url
     }
 
@@ -1490,7 +1517,7 @@ private fun HeroBackdrop(url: String, verticalUrl: String) {
     // 交给 Coil 自己的 500ms 淡入，避免多等 800ms，也避免切回时中间空一帧。
     // 每换一个 URL 就换一只 Animatable：新图的第一帧 alpha 就是 0，
     // 不会出现「内存缓存命中 → 先整张闪一下 → 再从头淡入」。
-    val hasPrevious = previousUrl.isNotBlank() && previousUrl != current && previousUrl != verticalUrl
+    val hasPrevious = previousUrl.isNotBlank() && previousUrl != current
     val fade = remember(current) { Animatable(if (hasPrevious) 0f else 1f) }
 
     LaunchedEffect(current, loadedUrl) {
@@ -1501,21 +1528,43 @@ private fun HeroBackdrop(url: String, verticalUrl: String) {
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
-        if (hasPrevious) {
-            AsyncImage(
-                model = rememberHeroImageModel(previousUrl),
-                contentDescription = null,
-                contentScale = ContentScale.Crop,
-                modifier = Modifier.fillMaxSize(),
-            )
-        }
+        // 【固定的两个图层】底层永远在（没有托底图时模型传 null，Coil 什么都不加载）。
+        // 槽位固定有两个好处：托底图出现 / 消失时顶层那个 AsyncImage 不会被重建，
+        // 刚解码好的图不会跟着丢；也不会因为前后兄弟节点增删触发额外的组合移动。
+        val baseModel = rememberHeroImageModel(previousUrl)
+        AsyncImage(
+            model = if (previousUrl.isBlank()) null else baseModel,
+            contentDescription = null,
+            contentScale = ContentScale.Crop,
+            modifier = Modifier.fillMaxSize(),
+        )
         if (current.isNotBlank()) {
             AsyncImage(
                 model = rememberHeroImageModel(current),
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
                 // 新图成功之前 alpha 恒为 0：底层旧图始终可见，不会出现空白帧。
-                onSuccess = { loadedUrl = current },
+                onSuccess = { state ->
+                    // 【必须取回结果里的 URL】快速连按时，上一张图的成功回调可能在 `current`
+                    // 已经换成新目标之后才到；直接写 `current` 会让新目标还没解码就被淡到
+                    // alpha = 1 —— 又变成一帧黑。这里只认「当前这张目标图」。
+                    val loaded = (state.result.request.data as? String) ?: current
+                    if (loaded == current) {
+                        loadedUrl = loaded
+                        loadedKey = posterKey
+                    }
+                },
+                // 目标图失败（403 防盗链 / 404 / 解码失败）：底层如果还是**别的条目**的剧照，
+                // 必须撤掉 —— 否则信息区已经换成 B，背景却一直挂着 A 的图。
+                // 同一条目自己的旧图（例如竖版升级横版失败）保留，那是正确内容，不该闪黑。
+                onError = { state ->
+                    val failed = (state.result.request.data as? String) ?: current
+                    if (failed == current && loadedKey != posterKey) {
+                        previousUrl = ""
+                        loadedUrl = ""
+                        loadedKey = ""
+                    }
+                },
                 modifier = Modifier
                     .fillMaxSize()
                     .graphicsLayer { alpha = fade.value },
@@ -2112,7 +2161,6 @@ private fun HeroTabChip(
 private fun PosterArea(
     posters: List<HeroPoster>,
     row: HeroPosterRowHost,
-    focusedPosterIndex: Int,
     onFocused: (Int) -> Unit,
     onClick: (HeroPoster) -> Unit,
     onLongPress: (HeroPoster) -> Unit,
@@ -2147,9 +2195,10 @@ private fun PosterArea(
         },
         update = { view ->
             // 数据去重在 bindData 内部：列表没变时完全不动，避免每次重组都 notifyDataSetChanged。
+            // 【不要在这里读 `focusedPosterIndex`】它每按一次方向键就变，会把整个 AndroidView
+            // 拖进重组并重跑 update（整排 bindData 检查 + 焦点同步）。焦点同步改由调用点的
+            // SideEffect 直接调 View，见 PosterArea 调用处。
             view.bindData(posters)
-            // 焦点同步：只有 index 变化且焦点还在海报行内才滚动，不会和用户按键抢动画。
-            view.syncFocus(focusedPosterIndex)
         },
         modifier = Modifier
             .fillMaxWidth()
@@ -2766,6 +2815,11 @@ private class HeroPosterRowHost {
 
     fun focusPoster(index: Int): Boolean = view?.focusPoster(index) == true
 
+    /** Compose 侧下标 → View 侧：只做「已经变了才滚」，不进 AndroidView 的 update 块。 */
+    fun syncFocus(index: Int) {
+        view?.syncFocus(index)
+    }
+
     fun scrollToStart() {
         view?.scrollToStart()
     }
@@ -2880,6 +2934,10 @@ private class HeroPosterAdapter(
                 .scaleX(if (hasFocus) POSTER_FOCUS_SCALE else 1f)
                 .scaleY(if (hasFocus) POSTER_FOCUS_SCALE else 1f)
                 .translationZ(if (hasFocus) POSTER_FOCUS_ELEVATION_DP * density else 0f)
+                // 【掉帧修复】动画期间把这张卡提成硬件层：每帧只做一次纹理变换，
+                // 不用把海报位图按 1.1x 重新光栅化（电视盒子上这一步最贵，连按方向键时尤其明显）。
+                // 动画结束 / 被取消时 ViewPropertyAnimator 自己撤掉这层，不用手动复位。
+                .withLayer()
                 .setDuration(POSTER_FOCUS_ANIM_MS)
                 .start()
             if (hasFocus) {
