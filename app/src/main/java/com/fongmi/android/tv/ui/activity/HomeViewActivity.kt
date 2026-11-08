@@ -1148,13 +1148,16 @@ class HomeViewActivity : AppCompatActivity() {
      * **短按只给确定键**：`KEYCODE_DPAD_DOWN` 的短按只吞事件，绝不跳详情。
      */
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
-        // 【强制日志】定位「长按没反应 / 按键被拦」的唯一手段：每一条按键都必须能在这里看到。
-        // 若长按无日志 → 事件根本没进 Activity（被更外层 / 焦点窗口吞了）；
-        // 有日志但 focus=false → 焦点不在海报行，长按分支不会启动。
+        // 【强制日志 · 第一步】每条按键都必须在这里留痕，用来判断「事件到底死在哪」：
+        //  - 压根没这条日志  → 事件没进 Activity（被别的焦点窗口 / 系统层吞了）；
+        //  - 有日志 focus=false → 事件进来了，但焦点不在海报行，长按分支不会启动；
+        //  - 有日志 focus=true  → 事件与焦点都正常，问题只可能在定时器 / 弹窗那一步。
+        val posterFocused = ::recycler.isInitialized &&
+            (recycler.findFocus() != null || recycler.hasFocus())
         Log.d(
             "KeyTest",
-            "dispatchKeyEvent: action=${event.action} key=${event.keyCode} " +
-                "repeat=${event.repeatCount} focus=${::recycler.isInitialized && recycler.hasFocus()}",
+            "Activity: action=${event.action} key=${event.keyCode} " +
+                "repeat=${event.repeatCount} focus=${::recycler.isInitialized && recycler.findFocus() != null}",
         )
         val key = event.keyCode
         // 海报行只接管「下键 / 确定键」。
@@ -1181,9 +1184,9 @@ class HomeViewActivity : AppCompatActivity() {
         if (event.action == KeyEvent.ACTION_DOWN) {
             // 长按已触发：连发事件全部吃掉，一个都不准漏。
             if (isLongPressTriggered && event.repeatCount > 0) return true
-            // 【焦点判定】只认海报行：`hasFocus()` 对 RecyclerView 自身或其后代（卡片）聚焦都成立，
-            // 比 `findFocus() != null` 更贴合「焦点在不在这一行」的语义，且不会被别的 View 误命中。
-            if (isPosterKey && recycler.hasFocus()) {
+            // 【焦点判定】`findFocus()` 覆盖「焦点在卡片子 View 上」这一最常见情况，
+            // `hasFocus()` 兜底「焦点就是这个 RecyclerView 自己」；任一成立即认定为海报行。
+            if (isPosterKey && posterFocused) {
                 // 未触发的连发：同样吃掉，避免重复起定时器 / 漏键。
                 if (event.repeatCount != 0) return true
                 isKeyDown = true
@@ -1216,6 +1219,10 @@ class HomeViewActivity : AppCompatActivity() {
      * 或窗口重新拿到焦点（[onWindowFocusChanged] 兜底）才允许清零。
      */
     private fun onPosterLongPressFired(key: Int) {
+        // 【强制日志 · 第二步】定时器真的到点了才会打这一条。
+        //  - 有 `Activity: ... repeat=0` 但从来没有这条 → 定时器没跑（条件没过 / 被 removeCallbacks 了）；
+        //  - 这条出现却不弹窗 → 问题在弹窗本身，不在按键。
+        Log.d("KeyTest", "LongPress Triggered: key=$key")
         isLongPressTriggered = true
         val item = items.getOrNull(focusedIndex) ?: return
         when (key) {

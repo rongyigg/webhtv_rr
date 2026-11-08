@@ -348,8 +348,11 @@ class HeroPosterCard @JvmOverloads constructor(
         }
 
     /**
-     * 遮罩点击回调（触屏用）。遥控器确定键的长按 / 短按由调用方的 `setOnKeyListener` 处理，
-     * 组件本身不接管按键，避免把「进入编辑模式」和「删除」两个语义耦合进卡片。
+     * 遮罩点击回调（触屏用）。
+     *
+     * 本组件**不注册任何按键监听**（无 `setOnKeyListener`、无 `onKeyDown` / `onKeyUp`、
+     * 无 `dispatchKeyEvent` 覆写），按键一律放行冒泡到 Activity，由 `HomeViewActivity`
+     * 统一处理短按 / 长按，避免两处各自解释同一个确定键。
      */
     var onDeleteClick: (() -> Unit)? = onDeleteClick
 
