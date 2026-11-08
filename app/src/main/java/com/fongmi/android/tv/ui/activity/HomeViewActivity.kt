@@ -291,22 +291,6 @@ class HomeViewActivity : AppCompatActivity() {
         refreshHome("设置页返回")
     }
 
-    /**
-     * 长按状态的**生命周期兜底**（不是另一套状态机）：
-     *
-     * 换源 / TMDB 两个弹窗都是独立 Window，拿到焦点后本窗口收不到那次 `ACTION_UP`，
-     * `isLongPressTriggered` 会一直挂着，导致之后所有连发被误吞。窗口重新拿到焦点
-     * （弹窗关闭 / 回前台）时，物理按键必然已经松开，这里无条件清一次即可。
-     */
-    override fun onWindowFocusChanged(hasFocus: Boolean) {
-        super.onWindowFocusChanged(hasFocus)
-        if (!hasFocus || !::recycler.isInitialized) return
-        recycler.removeCallbacks(longPressDownRunnable)
-        recycler.removeCallbacks(longPressCenterRunnable)
-        isKeyDown = false
-        isLongPressTriggered = false
-    }
-
     override fun onDestroy() {
         pendingTabLoad?.let { handler.removeCallbacks(it) }
         pendingTabLoad = null
@@ -1141,13 +1125,21 @@ class HomeViewActivity : AppCompatActivity() {
      * **长按（1000ms，防误触）**：
      * - `ACTION_DOWN` + `repeatCount == 0` → `isKeyDown = true`、`isLongPressTriggered = false`，
      *   `recycler` 上 `removeCallbacks` + `postDelayed(..., 1000L)`；
-     * - `ACTION_DOWN` + `repeatCount > 0` → **只要 `isLongPressTriggered` 为真就一律 `return true`**，
-     *   弹窗弹出后按键连发一个都不许漏回首页；
-     * - `ACTION_UP` → 撤定时器、算短按、然后才把 `isLongPressTriggered` 复位（**唯一复位点**）。
+     * - `ACTION_DOWN` + `repeatCount > 0` → 方法最顶部的 **W 锁**直接 `return true`（`isLongPressTriggered == true` 时），
+     *   其余情况在 `ACTION_DOWN` 分支里吞掉，弹窗弹着也一个连发都漏不出去；
+     * - `ACTION_UP` → 撤定时器、算短按、再把 `isLongPressTriggered` 复位。
      *
      * **短按只给确定键**：`KEYCODE_DPAD_DOWN` 的短按只吞事件，绝不跳详情。
      */
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        // 【原版硬移植 · 全方法第一条判断】W（isLongPressTriggered）锁：
+        // 长按已触发 + 按键连发 → 直接吞掉，任何弹窗判断、任何事件下发之前就结束。
+        // 对应 `HomeActivityV2.java`：
+        //   if (keyEvent.getAction() == KeyEvent.ACTION_DOWN && this.W && keyEvent.getRepeatCount() > 0) return true;
+        if (event.action == KeyEvent.ACTION_DOWN && isLongPressTriggered && event.repeatCount > 0) {
+            Log.d("KeyTest", "W-lock swallow: key=${event.keyCode} repeat=${event.repeatCount}")
+            return true
+        }
         // 【强制日志 · 第一步】每条按键都必须在这里留痕，用来判断「事件到底死在哪」：
         //  - 压根没这条日志  → 事件没进 Activity（被别的焦点窗口 / 系统层吞了）；
         //  - 有日志 focus=false → 事件进来了，但焦点不在海报行，长按分支不会启动；
@@ -1182,13 +1174,12 @@ class HomeViewActivity : AppCompatActivity() {
 
         // ── ACTION_DOWN ─────────────────────────────────────────────────────────
         if (event.action == KeyEvent.ACTION_DOWN) {
-            // 长按已触发：连发事件全部吃掉，一个都不准漏。
-            if (isLongPressTriggered && event.repeatCount > 0) return true
+            // 未触发的连发：同样吃掉，避免按住时焦点先乱跳、也避免重复起定时器。
+            // （W 已触发的连发在方法最顶部就被拦掉了，走不到这里。）
+            if (isPosterKey && posterFocused && event.repeatCount != 0) return true
             // 【焦点判定】`findFocus()` 覆盖「焦点在卡片子 View 上」这一最常见情况，
             // `hasFocus()` 兜底「焦点就是这个 RecyclerView 自己」；任一成立即认定为海报行。
             if (isPosterKey && posterFocused) {
-                // 未触发的连发：同样吃掉，避免重复起定时器 / 漏键。
-                if (event.repeatCount != 0) return true
                 isKeyDown = true
                 isLongPressTriggered = false
                 if (key == KeyEvent.KEYCODE_DPAD_DOWN) {
@@ -1215,8 +1206,11 @@ class HomeViewActivity : AppCompatActivity() {
     /**
      * 1000ms 到点：先落 `isLongPressTriggered = true`，再弹窗。
      *
-     * 标记**绝不在这里复位**：只有真正收到 `ACTION_UP`（[dispatchKeyEvent] 的 UP 分支）
-     * 或窗口重新拿到焦点（[onWindowFocusChanged] 兜底）才允许清零。
+     * **W 只在两处归零，且都不在这里**：
+     * 1. 真正收到 `ACTION_UP`（[dispatchKeyEvent] 的 UP 分支）—— 手指抬起；
+     * 2. 下一次全新按下（`ACTION_DOWN` + `repeatCount == 0`）—— 原版同样在新一轮按下时清 W。
+     *
+     * 弹窗弹着、手指还按着的整个过程中 W 一直为 true，因此所有连发都会被方法最顶部的 W 锁吞掉。
      */
     private fun onPosterLongPressFired(key: Int) {
         // 【强制日志 · 第二步】定时器真的到点了才会打这一条。

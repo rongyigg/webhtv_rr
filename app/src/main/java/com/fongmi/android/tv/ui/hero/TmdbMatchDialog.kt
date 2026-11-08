@@ -44,6 +44,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.nativeKeyEvent
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalDensity
@@ -325,6 +326,12 @@ internal fun TmdbMatchDialog(
         if (field.text.isNotBlank()) applyFilter()
     }
 
+    // 【原版同款 W 锁 · 弹窗侧】长按打开时手指还按着，连发会让焦点在胶囊 / 结果卡 / 键盘之间乱跑。
+    // 弹窗是独立 Window，Activity 的 `dispatchKeyEvent` 看不到这些事件，只能在弹窗根节点拦：
+    // 从打开起、到收到那次真实的 `ACTION_UP`（或下一次全新按下 `repeatCount == 0`）为止，
+    // 所有连发一律吞掉。松开即恢复，正常「按住下键连续翻结果」不受影响。
+    val swallowRepeat = remember { mutableStateOf(true) }
+
     Dialog(
         onDismissRequest = { onDismiss() },
         properties = DialogProperties(usePlatformDefaultWidth = false),
@@ -334,7 +341,23 @@ internal fun TmdbMatchDialog(
                 // 宽度 = 屏幕 × 0.82（原版 f23 `c0(0.82f)`）；高度按内容 wrap，
                 // 与 dialog_tmdb_match.xml 的 layout_height="wrap_content" 一致。
                 .fillMaxWidth(TMDB_DIALOG_WIDTH_FRACTION)
-                .wrapContentHeight(),
+                .wrapContentHeight()
+                // 连发锁：preview 阶段先于所有子节点（胶囊 / 结果卡 / 键盘）拿到按键。
+                .onPreviewKeyEvent { event ->
+                    val action = event.nativeKeyEvent.action
+                    when {
+                        action == KeyEvent.ACTION_UP -> {
+                            swallowRepeat.value = false
+                            false
+                        }
+                        action == KeyEvent.ACTION_DOWN && event.nativeKeyEvent.repeatCount == 0 -> {
+                            swallowRepeat.value = false
+                            false
+                        }
+                        swallowRepeat.value && action == KeyEvent.ACTION_DOWN -> true
+                        else -> false
+                    }
+                },
         ) {
             // ---- 顶部行：11sp 徽标 + 右侧联想词胶囊（原版 dialog_tmdb_match.xml L7-45）----
             // 行高按内容 wrap（heightIn 只兜住徽标的 24dp）：胶囊比徽标高，写死 24dp 会把它们裁掉。

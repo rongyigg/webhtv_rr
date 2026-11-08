@@ -225,6 +225,24 @@ internal class ChangeSourceDialog private constructor(
     /** 是否已经跑过首轮数据（预搜索直出 / 全局并发搜索）。 */
     private var started = false
 
+    /**
+     * 【原版同款 W 锁 · 弹窗侧】长按打开时手指还按着，连发会让焦点在候选源里一路乱跑。
+     *
+     * 弹窗是独立 Window，Activity 的 `dispatchKeyEvent` 根本看不到这些事件，只能在弹窗自己这里拦：
+     * 从打开起、到收到那次真实的 `ACTION_UP`（或下一次全新按下 `repeatCount == 0`）为止，
+     * 所有连发一律吞掉。松开即恢复，正常「按住下键连续翻源」不受影响。
+     */
+    private var swallowRepeat = true
+
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        when {
+            event.action == KeyEvent.ACTION_UP -> swallowRepeat = false
+            event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0 -> swallowRepeat = false
+            swallowRepeat && event.action == KeyEvent.ACTION_DOWN -> return true
+        }
+        return super.dispatchKeyEvent(event)
+    }
+
     private lateinit var homeBtn: FrameLayout
     private lateinit var siteRecycler: RecyclerView
     private lateinit var resultRecycler: RecyclerView
