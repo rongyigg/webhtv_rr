@@ -20,6 +20,8 @@ import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
+import androidx.compose.ui.platform.ComposeView
+import androidx.compose.ui.platform.ViewCompositionStrategy
 import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import androidx.lifecycle.ViewModelProvider
@@ -51,11 +53,13 @@ import com.fongmi.android.tv.setting.TmdbSitePolicy
 import com.fongmi.android.tv.ui.custom.HeroImageView
 import com.fongmi.android.tv.ui.custom.ProgressLayout
 import com.fongmi.android.tv.ui.helper.TmdbMatcher
+import com.fongmi.android.tv.ui.hero.ChangeSourceDialog
 import com.fongmi.android.tv.ui.hero.HeroHorizontalGapDecoration
 import com.fongmi.android.tv.ui.hero.HeroImageLoader
 import com.fongmi.android.tv.ui.hero.HeroPosterAdapter
 import com.fongmi.android.tv.ui.hero.HeroPosterCard
 import com.fongmi.android.tv.ui.hero.HomePosterItem
+import com.fongmi.android.tv.ui.hero.TmdbMatchDialog
 import com.fongmi.android.tv.ui.hero.openHeroDetailOrFolder
 import com.fongmi.android.tv.utils.Notify
 import com.fongmi.android.tv.utils.Util
@@ -116,6 +120,24 @@ class HomeViewActivity : AppCompatActivity() {
     /** 分类 Tab 焦点切换的请求防抖（与 Compose 版同一个 220ms）。 */
     private val handler = Handler(Looper.getMainLooper())
     private var pendingTabLoad: Runnable? = null
+
+    // ------------------------------------------------------------------
+    // 海报行长按（下键 / 确定键，1000ms）
+    // ------------------------------------------------------------------
+    /** 按下中：定时器在跑，还没到 1000ms。 */
+    private var isLongPressing = false
+
+    /** 已触发：动作已经执行；之后的按下 / repeat / 抬起全部吞掉，直到松开。 */
+    private var isLongPressTriggered = false
+
+    /** 正在长按的键：[KeyEvent.KEYCODE_DPAD_DOWN] = TMDB 手动匹配，确定键 = 换源弹窗。 */
+    private var longPressKeyCode = KeyEvent.KEYCODE_UNKNOWN
+
+    /** 1000ms 定时器本体（对应 ref_docs 里的 `this.X` / `this.U`）。 */
+    private var longPressRunnable: Runnable? = null
+
+    /** TMDB 手动匹配弹窗的 Compose 宿主（0×0，只承载组合；窗口由弹窗自己开）。 */
+    private var tmdbMatchHost: ComposeView? = null
 
     // ------------------------------------------------------------------
     // XML 节点
@@ -258,6 +280,9 @@ class HomeViewActivity : AppCompatActivity() {
         pendingTabLoad = null
         pendingEmptyRetry?.let { handler.removeCallbacks(it) }
         pendingEmptyRetry = null
+        // 长按定时器与 Compose 弹窗宿主都必须跟着 Activity 一起撤掉，否则回调会打到已销毁的 View。
+        resetPosterLongPress()
+        dismissTmdbMatchHost()
         // 在途 TMDB 请求 / 防抖一起作废：Activity 已经没了，回调绝不能再去碰 View。
         tmdbJob?.cancel()
         tmdbScope.cancel()
@@ -859,9 +884,10 @@ class HomeViewActivity : AppCompatActivity() {
             else -> item.backdropUrl
         }
         if (backdrop.isNotBlank()) {
-            // 正常切换：立刻收竖图，新图在 `heroBg` 里 450ms 淡入（旧图由 HeroImageView 垫在
-            // heroBgUnder 上，所以整个淡入期间画面都是满的，不会先黑一下）。
-            if (!upgrade) posterCard.visibility = View.GONE
+            // 【冷启动防闪】横图地址一确定就先收竖图，**不等** `loadImage` 回调：
+            // 升级路径（`upgrade = true`，TMDB 详情刚到）以前会先画着竖图再等横图淡入，
+            // 首帧就会闪一张竖图。这里没有 `if (!upgrade)` 的前提 —— 有横图就先藏。
+            posterCard.visibility = View.GONE
             HeroImageView.setSharedUrl(backdrop)
             heroBg.visibility = View.VISIBLE
             heroBg.loadImage(backdrop, position) {
@@ -870,8 +896,9 @@ class HomeViewActivity : AppCompatActivity() {
                 // 所以它能区分「这张新图真的上屏了」和「保持着上一张旧图 / 什么都没画」。
                 if (heroBg.lastUrl == backdrop && heroBg.drawable != null) {
                     posterCard.visibility = View.GONE
-                } else if (!upgrade) {
+                } else if (!upgrade || heroBg.drawable == null) {
                     // 横图彻底失败（403 / 404 / 解码失败）：把竖图放回来，绝不留一整屏黑。
+                    // `upgrade` 分支多看一眼 `heroBg.drawable`：升级失败且 Hero 区什么都没有时必须回填。
                     posterCard.visibility = View.VISIBLE
                     loadPosterCard(item.posterUrl)
                 }
@@ -1046,6 +1073,8 @@ class HomeViewActivity : AppCompatActivity() {
      * （海报行 ↑ 常常落到最右边的「设置」）。在分发口拦截是唯一能 100% 命中原版语义的位置。
      */
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        // 【长按】海报区的下键 / 确定键先过长按状态机；不命中就直接放行，其余按键路由完全不变。
+        if (onPosterLongPressKey(event)) return true
         if (event.action == KeyEvent.ACTION_DOWN) {
             when (event.keyCode) {
                 KeyEvent.KEYCODE_DPAD_UP -> if (onDpadUp()) return true
@@ -1053,6 +1082,184 @@ class HomeViewActivity : AppCompatActivity() {
             }
         }
         return super.dispatchKeyEvent(event)
+    }
+
+    /**
+     * 海报行长按状态机（对照 ref_docs/HomeActivityV2.dispatchKeyEvent 的
+     * `this.V / this.W` + `removeCallbacks` + `postDelayed(..., getLongPressTimeout())` 三段式）：
+     *
+     * - **ACTION_DOWN + repeatCount == 0**：起 [POSTER_LONG_PRESS_MS] 定时器，记下是哪个键；
+     * - **定时器到点**：`isLongPressTriggered = true` → 下键 = TMDB 手动匹配，确定键 = 换源弹窗；
+     * - **ACTION_DOWN + repeatCount > 0**：已触发 → 直接吞；未触发 → 下键吞掉（行内向下没有可去的焦点）、
+     *   确定键继续下发（短按要靠它进详情）；
+     * - **ACTION_UP**：撤定时器并清状态；触发过就吞掉抬起事件。
+     *
+     * 「长按触发后打断按键输出直到松开」= 已触发时 ACTION_DOWN（含所有 repeat）和 ACTION_UP 全部 return true：
+     * 卡片收不到 UP 就不会走 onClick，长按绝不会被当成一次短按点进详情。
+     *
+     * @return true = 本次事件已被长按逻辑消费，调用方不要再往下发。
+     */
+    private fun onPosterLongPressKey(event: KeyEvent): Boolean {
+        val key = event.keyCode
+        val isLongPressKey = key == KeyEvent.KEYCODE_DPAD_DOWN ||
+            key == KeyEvent.KEYCODE_DPAD_CENTER ||
+            key == KeyEvent.KEYCODE_ENTER
+        // 只在焦点已经落在海报行里时接管；顶栏 / 分类栏的下键仍然走原来的焦点路由。
+        if (!isLongPressKey || recycler.findFocus() == null) return false
+        when (event.action) {
+            KeyEvent.ACTION_DOWN -> {
+                // 长按已经触发：之后的每一次按下 / 系统 repeat 全部吞掉。
+                if (isLongPressTriggered) return true
+                if (event.repeatCount > 0) {
+                    // 还没到 1000ms 的系统重复：不重起定时器，也不再往下发。
+                    return key == KeyEvent.KEYCODE_DPAD_DOWN
+                }
+                isLongPressing = true
+                longPressKeyCode = key
+                longPressRunnable?.let { handler.removeCallbacks(it) }
+                val runnable = Runnable { onPosterLongPressFired() }
+                longPressRunnable = runnable
+                handler.postDelayed(runnable, POSTER_LONG_PRESS_MS)
+                // 下键由本方法独占（海报行向下没有可聚焦目标）；确定键必须继续下发，短按靠 View 的 onClick。
+                return key == KeyEvent.KEYCODE_DPAD_DOWN
+            }
+            KeyEvent.ACTION_UP -> {
+                val triggered = isLongPressTriggered
+                resetPosterLongPress()
+                // 触发过就吞掉抬起事件：卡片拿不到 UP 就不会触发短按点击。
+                return triggered
+            }
+        }
+        return false
+    }
+
+    /** 1000ms 到点：先落状态再执行动作（弹窗本身是异步的，不受这里 return 影响）。 */
+    private fun onPosterLongPressFired() {
+        longPressRunnable = null
+        if (!isLongPressing) return
+        isLongPressing = false
+        isLongPressTriggered = true
+        val item = items.getOrNull(focusedIndex) ?: return
+        when (longPressKeyCode) {
+            KeyEvent.KEYCODE_DPAD_DOWN -> showTmdbManualMatch(item)
+            KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> showChangeSource(item)
+        }
+    }
+
+    /** 撤销定时器并把两个状态位复位（抬起 / 销毁 / 新一次按下前都走这里）。 */
+    private fun resetPosterLongPress() {
+        longPressRunnable?.let { handler.removeCallbacks(it) }
+        longPressRunnable = null
+        isLongPressing = false
+        isLongPressTriggered = false
+        longPressKeyCode = KeyEvent.KEYCODE_UNKNOWN
+    }
+
+    /**
+     * 长按确定键：换源弹窗（View 版 [ChangeSourceDialog]，候选项与 Compose 首页 `changeSource` 同一套规则）。
+     */
+    private fun showChangeSource(item: HomePosterItem) {
+        val keyword = item.title
+        if (keyword.isBlank()) {
+            Notify.show("剧名为空，无法换源")
+            return
+        }
+        val currentSiteKey = VodConfig.get().getHome().key
+        var candidates = ChangeSourceDialog.candidates(currentSiteKey)
+        // 兜底：当前源不可换 / 全被屏蔽时退回全部可搜索源，绝不静默失败。
+        if (candidates.isEmpty()) candidates = VodConfig.get().getSites().filter { it.isSearchable }
+        if (candidates.isEmpty()) {
+            Notify.show(getString(R.string.play_change_empty))
+            return
+        }
+        ChangeSourceDialog.show(
+            context = this,
+            viewModel = siteViewModel,
+            sites = candidates,
+            keyword = keyword,
+            quick = false,
+            onSourceSelected = { vod, site ->
+                openHeroDetailOrFolder(
+                    activity = this,
+                    vod = vod,
+                    site = site,
+                    backdropUrl = "",
+                    logoUrl = "",
+                    overview = "",
+                )
+            },
+            // 关窗后把焦点还给长按的那张卡，遥控器不会掉到窗口外。
+            onClosed = { recycler.post { focusPoster(focusedIndex) } },
+        )
+    }
+
+    /**
+     * 长按方向下键：TMDB 手动匹配（复用 Compose 首页那份 [TmdbMatchDialog]，不另写第二套）。
+     *
+     * 弹窗是 Compose 组件，这里用 0×0 的 [ComposeView] 挂在 Activity 的 content 上承载组合
+     * （与 `ChangeSourceDialog` 承载 `HeroPlayDialog` 的写法一致），真正的窗口由弹窗自己开。
+     */
+    private fun showTmdbManualMatch(item: HomePosterItem) {
+        dismissTmdbMatchHost()
+        val host = ComposeView(this).apply {
+            setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
+            layoutParams = ViewGroup.LayoutParams(0, 0)
+        }
+        host.setContent {
+            TmdbMatchDialog(
+                initialKeyword = item.title,
+                vod = item.vod,
+                onConfirm = { tmdbItem ->
+                    applyManualTmdbMatch(item, tmdbItem)
+                    dismissTmdbMatchHost()
+                    // 新条目立刻生效：标题 / 简介 / 横图 / 艺术字一次换齐。
+                    applyHero(focusedIndex)
+                },
+                onDismiss = {
+                    dismissTmdbMatchHost()
+                    recycler.post { focusPoster(focusedIndex) }
+                },
+            )
+        }
+        (findViewById<ViewGroup>(android.R.id.content))?.addView(host)
+        tmdbMatchHost = host
+    }
+
+    private fun dismissTmdbMatchHost() {
+        val host = tmdbMatchHost ?: return
+        tmdbMatchHost = null
+        (host.parent as? ViewGroup)?.removeView(host)
+        host.disposeComposition()
+    }
+
+    /**
+     * 手动匹配结果落地：与 Compose 首页 `onConfirm` 同一套规则 ——
+     * 同一条目保留简介 / Logo，换了条目整体作废；并写回 `TmdbMatchCache`（重启不丢）。
+     */
+    private fun applyManualTmdbMatch(item: HomePosterItem, tmdbItem: TmdbItem) {
+        val prev = tmdbOverrides[item.posterKey]?.takeIf { it.item.tmdbId == tmdbItem.tmdbId }
+        tmdbOverrides[item.posterKey] = HeroTmdbData(
+            item = tmdbItem,
+            detail = prev?.detail,
+            cast = prev?.cast.orEmpty(),
+            overview = prev?.overview.orEmpty().ifBlank { tmdbItem.overview },
+            logoUrl = prev?.logoUrl,
+            highResBackdrop = upgradeTmdbImage(
+                tmdbItem.backdropUrl.ifBlank { tmdbItem.posterUrl },
+                TMDB_BACKDROP_WIDTH,
+            ),
+            manual = true,
+            rating = formatRating(tmdbItem.rating),
+            year = extractYear(tmdbItem.subtitle),
+        )
+        runCatching {
+            synchronized(Setting::class.java) {
+                val cache = Setting.getTmdbMatchCache()
+                val titles = listOf(item.vod.name, item.title).filter { it.isNotBlank() }.distinct()
+                cache.putManual(item.site.key, item.vod.id.ifBlank { item.vod.name }, titles, tmdbItem)
+                Setting.putTmdbMatchCache(cache)
+            }
+        }.onFailure { Log.w(TAG, "手动匹配落盘失败: ${item.title} | ${it.message}") }
     }
 
     private fun onDpadUp(): Boolean {
@@ -1294,6 +1501,12 @@ class HomeViewActivity : AppCompatActivity() {
 
         /** 分类 Tab 焦点切换的请求防抖：与 Compose 版同一个 220ms。 */
         private const val TAB_SWITCH_DEBOUNCE_MS = 220L
+
+        /**
+         * 海报行长按阈值：1000ms（原版用 `ViewConfiguration.getLongPressTimeout()`，
+         * 这里按需求固定 1s，下键 / 确定键共用）。
+         */
+        private const val POSTER_LONG_PRESS_MS = 1000L
 
         /**
          * TMDB 焦点详情防抖：与 Compose 首页 `HERO_TMDB_FOCUS_DEBOUNCE_MS` 同一个 300ms。
