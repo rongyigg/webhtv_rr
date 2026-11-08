@@ -164,6 +164,13 @@ class HomeViewActivity : AppCompatActivity() {
     private lateinit var heroLogoImg: ImageView
     private lateinit var heroMetaText: TextView
     private lateinit var heroDescText: TextView
+    /**
+     * `heroInfo`：Hero 文案整块（标题 / 艺术字 / 元数据 / 简介）。
+     *
+     * 下探目录时按原版 `HomeActivityV2.f()` 的做法把整块收起（原版对应的是 Hero 区的可见性切换），
+     * 出栈 / 切 Tab / 换源时再恢复。
+     */
+    private lateinit var heroInfo: View
     private lateinit var posterCard: FrameLayout
     private lateinit var posterCardImg: ImageView
     private lateinit var posterEmpty: View
@@ -187,6 +194,23 @@ class HomeViewActivity : AppCompatActivity() {
 
     /** 当前 Hero 区对应的下标：列表重建后夹回合法范围。 */
     private var focusedIndex: Int = 0
+
+    /**
+     * 原版 `HomeActivityV2.c1`：首页下探栈。
+     *
+     * 每进一层目录，先把**上一层整页状态**压进来（原版 `u31`：列表、选中位、Tab、焦点标记）；
+     * 返回键按原版 `U1()`（L1089-1113）出栈，把列表 / 焦点原样恢复，不重新请求。
+     * 空栈 = 当前停在首页根页。
+     */
+    private val folderStack = ArrayDeque<FolderDrillState>()
+
+    /** 原版 `u31`：一层目录的整页快照。 */
+    private data class FolderDrillState(
+        val items: List<HomePosterItem>,
+        val focusedIndex: Int,
+        val tabIndex: Int,
+        val lastFocusedTabIndex: Int,
+    )
 
     /** 当前接口源真实返回的分类（`Result.types`）：Tab 列表的唯一数据源。 */
     private var homeTypes: List<VodType> = emptyList()
@@ -318,6 +342,13 @@ class HomeViewActivity : AppCompatActivity() {
         super.onDestroy()
     }
 
+    @Suppress("DEPRECATION")
+    override fun onBackPressed() {
+        // 原版：目录里按返回先 `U1()` 出栈回到上一层；只有停在根页时才交给系统退出。
+        if (exitFolder()) return
+        super.onBackPressed()
+    }
+
     // ==================================================================
     // 初始化
     // ==================================================================
@@ -328,6 +359,7 @@ class HomeViewActivity : AppCompatActivity() {
         heroLogoImg = findViewById(R.id.heroLogoImg)
         heroMetaText = findViewById(R.id.heroMetaText)
         heroDescText = findViewById(R.id.heroDescText)
+        heroInfo = findViewById(R.id.heroInfo)
         posterCard = findViewById(R.id.posterCard)
         posterCardImg = findViewById(R.id.posterCardImg)
         posterEmpty = findViewById(R.id.posterEmpty)
@@ -615,6 +647,13 @@ class HomeViewActivity : AppCompatActivity() {
             val list = result.list.orEmpty()
             val types = result.types.orEmpty()
             list.forEach { it.setSite(site) }
+            // 【下探中】这次结果属于当前目录：只替换海报行，绝不改 Tab 栏 / 首页状态，
+            // 也绝不重新走首页的空态 / 自动分类逻辑（原版 `B2(List)`：只 `B0.clear/addAll`
+            // + `D2(0,...)` 重画第 0 条）。
+            if (folderStack.isNotEmpty()) {
+                renderFolder(list, site)
+                return@observe
+            }
             updateTabs(site, types)
             // 与原版 `HomeActivity.addVideo()` 一致：首页 list 为空但站点返回了分类时，
             // 自动拉第一个分类的第 1 页（只返回 class、不返回 list 的源靠这一步才有内容）。
@@ -694,6 +733,12 @@ class HomeViewActivity : AppCompatActivity() {
      * 必须落到「空态」而不是再排一次重试（否则真实空源会无限请求）。
      */
     private fun refreshHome(reason: String, resetEmptyRetry: Boolean = true) {
+        // 换源 / 回首页重拉：目录视图整体作废。目录卡片必须跟着清掉，
+        // 否则新源的首页上会继续挂着上一层目录的数据（视觉上的「满屏污染」）。
+        if (exitFolderDrill()) {
+            items = emptyList()
+            posterAdapter.submit(emptyList())
+        }
         // 新的一次请求已经发起：还没执行的重试作废，避免 2.5 秒后又多打一轮。
         pendingEmptyRetry?.let { handler.removeCallbacks(it) }
         pendingEmptyRetry = null
@@ -883,6 +928,12 @@ class HomeViewActivity : AppCompatActivity() {
         val item = items.getOrNull(index) ?: return
         focusedIndex = index
         focusedPosterKey = item.posterKey
+        // 【下探中】目录页不画 Hero：原版 `f()` 进入目录后只展开卡片，不加截上一层的横图 / 文案。
+        // 这里连 TMDB 覆盖也一并跳过，避免把上一部剧的大图留在屏幕上（`showEmpty()` 同款清理）。
+        if (folderStack.isNotEmpty()) {
+            hideHeroSurface()
+            return
+        }
         // 【叠加层】TMDB 异步结果只在这里生效：文本 / 评分 / 简介 / 横图 / 艺术字一次换齐。
         val tmdb = tmdbOverrides[item.posterKey]
         heroNameText.text = item.title
@@ -894,6 +945,19 @@ class HomeViewActivity : AppCompatActivity() {
         heroDescText.visibility = View.VISIBLE
         bindLogo(item, tmdb)
         bindBackdrop(item, tmdb, index)
+    }
+
+    /**
+     * 下探目录时把 Hero 整块收起（原版 `HomeActivityV2.f()` 进入目录后不再展示 Hero 区）。
+     *
+     * 必须走 `heroBg.reset()` 而不是只 `setVisibility(GONE)`：`HeroImageView` 里的底图
+     * `heroBgUnder` 不跟着清就会把上一部剧的整屏位图留在屏幕上（清屏链见 `HeroImageView.reset()`）。
+     */
+    private fun hideHeroSurface() {
+        heroBg.reset()
+        heroBg.visibility = View.GONE
+        posterCard.visibility = View.GONE
+        heroInfo.visibility = View.GONE
     }
 
     /** 元数据行：没有 TMDB 覆盖时用同步缓存拼好的那行；有覆盖时用详情里的年份 / 评分重拼。 */
@@ -1048,6 +1112,8 @@ class HomeViewActivity : AppCompatActivity() {
      * 结果只有 [onTmdbDetailReady] 一个落地口，且以 `posterKey` 判身份（下标会漂移）。
      */
     private fun requestFocusedTmdbDetail() {
+        // 目录页没有 Hero：不为目录卡片发 TMDB 详情请求（没有地方画横图 / 艺术字）。
+        if (folderStack.isNotEmpty()) return
         // 1. 立刻掐断上一个请求
         tmdbRequestJob?.cancel()
         tmdbRequestJob = lifecycleScope.launch(Dispatchers.IO) {
@@ -1281,6 +1347,21 @@ class HomeViewActivity : AppCompatActivity() {
             // 只拦第 0 张：NO_POSITION(-1) / 其它下标一律放行，行内左右移动保持原样。
             if (position == 0) {
                 Log.d("KeyTest", "poster-left at head: swallow action=${event.action}")
+                return true
+            }
+        }
+
+        // ── 海报行最右端按 →：原地不动 ─────────────────────────────────────────
+        // 原版 Leanback 的横向列表走到末列之后 → 会天然停住；RecyclerView 没有这个边界，
+        // 默认的 `FocusFinder` 会继续往右 / 往上找可聚焦控件（顶栏 Tab、小房子），
+        // 于是「最后一列按 →」会跳到文档里更靠右（或更靠上）的控件。必须在这里吃掉。
+        if (key == KeyEvent.KEYCODE_DPAD_RIGHT && posterFocused && items.isNotEmpty()) {
+            val position = recycler.findFocus()
+                ?.let { recycler.findContainingViewHolder(it)?.absoluteAdapterPosition }
+                ?: focusedIndex
+            // 只拦最后一列；中间列继续走默认的左右移动。
+            if (position == items.lastIndex) {
+                Log.d("KeyTest", "poster-right at tail: swallow action=${event.action}")
                 return true
             }
         }
@@ -1585,30 +1666,32 @@ class HomeViewActivity : AppCompatActivity() {
     }
 
     /**
-     * 卡片确定键：进这条数据**所属源**的真实详情页。
+     * 卡片确定键：正片进详情页，目录壳在首页**原地下探**（严格复刻原版 `HomeActivityV2.f()`）。
      *
-     * 与 Compose 首页（`HeroHomeScreen.onClick` → `openHeroDetailOrFolder`）同一条路由：
-     * folder 壳（网盘聚类的 `atvp_detail:`）交给分类页展开，其余进 Hero 详情页。
-     * 已经把当前画面上的横图 / 艺术字 / TMDB 简介一起带过去，详情页首帧不再等第二轮网络。
-     *
-     * <p>【逆向硬复刻】原版 `HomeActivityV2.f()`（L1529-1630）的判断顺序是：
+     * <p>【逆向硬复刻】原版 `f()` 的判断顺序（L1529-1630）：
      * <pre>
      * if (vod.isAction())  { ...; return; }                 // 插件动作项：不跳页
      * if (!vod.isFolder()) { DetailActivity.q2(...); return; }  // 正片：详情页
      * // vod.isFolder() → 分类 / 目录壳
      * c1.push(u31(...));                                    // ① 压入下探栈
-     * B0.clear(); L.setSelectedPosition(0); ...             // ② 清空首页列表
-     * H.c(f2().getKey(), vod.getId(), "1", new HashMap());  // ③ 用分类接口展开目录
+     * d1 = vod.getName(); T0 = vod.getId(); ...             // ② 记录当前目录
+     * B0.clear(); L.setSelectedPosition(0);                 // ③ 清空首页列表 + 选中位归零
+     * L.setDescendantFocusability(BLOCK); L.requestFocus(); // ④ 焦点交给（空）海报行
+     * Z.setVisibility(8); Y.setVisibility(0);               // ⑤ 空态收起、进度显示
+     * H.c(f2().getKey(), vod.getId(), "1", new HashMap());  // ⑥ 用分类接口展开目录
      * </pre>
-     * 原版把分类结果继续灌回**同一张海报列表**（`B0`），那正是「点击分类壳之后首页被满屏
-     * 同质化卡片占满」的机制。WebHTV 的首页列表只承载 `homeContent()` 的结果，所以 folder
-     * 一律交给独立分类页（`HeroFolderLauncher` → `VodActivity` / `FolderActivity` +
-     * `Result.folder(vod)`，与原版 `CollectActivity.onItemClick` 同一个落点），
-     * **绝不**把 `categoryContent()` 返回的列表塞回 [HeroPosterAdapter]。
-     * folder 判定（`vod.isFolder()` 与 `atvp_detail:` 前缀）只保留在 [openHeroDetailOrFolder]
-     * 一处，首页 / 搜索结果 / 换源结果共用，避免两处判断漂移。
+     * 原版的下探结果继续灌回**同一张海报列表**，本类按 `B2(List)`（L366-381）落同一步：
+     * [renderFolder] 只替换海报行，Tab 栏 / 首页状态一律不动；返回键按 `U1()`（L1089-1113）
+     * 出栈恢复上一层。正片仍走 [openHeroDetailOrFolder]，详情页首帧带上横图 / 艺术字 / 简介。
      */
     private fun onPosterClicked(item: HomePosterItem) {
+        // 【原版 HomeActivityV2.f() 的 folder 分支】分类 / 目录壳在首页**原地展开**：
+        // 压栈 → `B0.clear()` → 收起 Hero → 选中位归零 → 用分类接口拉这一层。
+        // 绝不把目录 id 当详情页 id 去请求，也绝不把目录结果当成「推荐」首页数据。
+        if (item.vod.isFolder) {
+            enterFolder(item)
+            return
+        }
         val tmdb = tmdbOverrides[item.posterKey]
         Log.d(TAG, "海报确定键: ${item.title} → 详情页")
         openHeroDetailOrFolder(
@@ -1619,6 +1702,135 @@ class HomeViewActivity : AppCompatActivity() {
             logoUrl = tmdb?.logoUrl?.takeIf { it.isNotBlank() } ?: item.logoUrl.orEmpty(),
             overview = tmdb?.overview.orEmpty(),
         )
+    }
+
+    // ==================================================================
+    // 目录下探（原版 `HomeActivityV2.f()` / `B2()` / `U1()` 的等价实现）
+    // ==================================================================
+
+    /**
+     * 进入一层目录（原版 `f(Vod)` 的 folder 分支，L1534-1584）。
+     *
+     * 顺序与原版一一对应，一步不能少：
+     * 1. `c1.push(u31(...))`：备份当前整页（列表 / 焦点 / Tab）；
+     * 2. `B0.clear()`：立刻清空海报行，上一层的卡片绝不能再留在屏幕上；
+     * 3. 收起 Hero（大图 / 竖图 / 文案）—— 目录页没有 Hero 区；
+     * 4. `L.setSelectedPosition(0)` + `FOCUS_BLOCK_DESCENDANTS` + `requestFocus()`：焦点归零；
+     * 5. `Z.setVisibility(8)` / `Y.setVisibility(0)`：空态收起、进度显示；
+     * 6. `H.c(siteKey, vod.getId(), "1", new HashMap())`：用分类接口展开这一层目录。
+     */
+    private fun enterFolder(item: HomePosterItem) {
+        val vod = item.vod
+        val site = item.site
+        // 1.【原版 c1.push(u31(...))】先备份，不然后退时没有任何东西可恢复。
+        folderStack.addLast(
+            FolderDrillState(
+                items = items,
+                focusedIndex = focusedIndex,
+                tabIndex = tabAdapter.selectedIndex,
+                lastFocusedTabIndex = lastFocusedTabIndex,
+            )
+        )
+        // 2.【原版 B0.clear()】整排立刻清空（Adapter 与 Activity 两份列表必须同步换掉）。
+        items = emptyList()
+        posterAdapter.submit(emptyList())
+        // 3.【收起 Hero】`reset()` 连 `heroBgUnder` 底图一起清，绝不让上一部剧的大图留在屏幕上。
+        hideHeroSurface()
+        // 4.【原版 L.setSelectedPosition(0) + setDescendantFocusability + requestFocus()】
+        //    先挡住子项抢焦点，再把焦点交给（已清空的）海报行；数据回来再放开。
+        focusedIndex = 0
+        recycler.scrollToPosition(0)
+        recycler.descendantFocusability = ViewGroup.FOCUS_BLOCK_DESCENDANTS
+        recycler.requestFocus()
+        // 5.【原版 Z.setVisibility(8) / Y.setVisibility(0)】
+        posterEmpty.visibility = View.GONE
+        posterProgress.visibility = View.VISIBLE
+        // 6.【原版 H.c(siteKey, vod.getId(), "1", new HashMap())】
+        Log.d(TAG, "下探目录: site=${site.key} id=${vod.id} name=${vod.name}")
+        siteViewModel.categoryContent(site.key, vod.id, "1", true, hashMapOf())
+    }
+
+    /**
+     * 目录数据落地（原版 `B2(List)`，L366-381）：**只**替换海报行。
+     *
+     * Tab 栏 / 首页的空态与自动分类逻辑一律不动 —— 目录结果绝不能冒充「推荐」首页数据，
+     * 这正是「下探之后整页被同质化卡片污染」的根源。
+     */
+    private fun renderFolder(list: List<Vod>, site: Site) {
+        val next = buildPosterItems(list, site)
+        items = next
+        // 换了一整页目录数据：上一页解析出来的横图 / 预取窗口全部作废。
+        syncBackdrops.clear()
+        tmdbWindowJobs.values.forEach { it.cancel() }
+        tmdbWindowJobs.clear()
+        posterProgress.visibility = View.GONE
+        // 数据回来了：卡片可以接焦点了（对应原版进入目录前的 FOCUS_BLOCK_DESCENDANTS）。
+        recycler.descendantFocusability = ViewGroup.FOCUS_AFTER_DESCENDANTS
+        focusedIndex = 0
+        if (next.isEmpty()) {
+            posterEmpty.visibility = View.VISIBLE
+            return
+        }
+        posterEmpty.visibility = View.GONE
+        posterAdapter.submit(next)
+        recycler.visibility = View.VISIBLE
+        recycler.scrollToPosition(0)
+        // 原版 `D2(0, ...)`：Hero 状态跟着第 0 条走（下探期间由 [applyHero] 统一收起）。
+        applyHero(0)
+        progressLayout.showContent()
+        // 原版 `L.requestFocus()`：进入目录后焦点就在海报行第 0 张。
+        recycler.post { focusPoster(0) }
+    }
+
+    /**
+     * 原版 `U1()`（L1089-1113）：出栈一层，把上一层列表 / 焦点原样恢复，不重新请求。
+     *
+     * @return true = 消费了这次返回键；false = 已经在根页，交给系统。
+     */
+    private fun exitFolder(): Boolean {
+        if (folderStack.isEmpty()) return false
+        // 这一层的目录请求还在路上也必须作废：迟到的结果绝不能写回上一层。
+        siteViewModel.cancelResult()
+        val state = folderStack.removeLast()
+        items = state.items
+        syncBackdrops.clear()
+        tmdbWindowJobs.values.forEach { it.cancel() }
+        tmdbWindowJobs.clear()
+        posterProgress.visibility = View.GONE
+        posterEmpty.visibility = View.GONE
+        recycler.descendantFocusability = ViewGroup.FOCUS_AFTER_DESCENDANTS
+        tabAdapter.selectedIndex = state.tabIndex
+        lastFocusedTabIndex = state.lastFocusedTabIndex
+        categoryTabActive = state.tabIndex > 0
+        val index = if (state.items.isEmpty()) 0 else state.focusedIndex.coerceIn(0, state.items.lastIndex)
+        focusedIndex = index
+        posterAdapter.submit(items)
+        if (items.isEmpty()) {
+            recycler.visibility = View.GONE
+            return true
+        }
+        recycler.visibility = View.VISIBLE
+        // 只有回到根页才恢复 Hero：还有上一层目录时继续藏着。
+        if (folderStack.isEmpty()) {
+            heroInfo.visibility = View.VISIBLE
+            applyHero(index)
+        }
+        recycler.post { focusPoster(index) }
+        return true
+    }
+
+    /**
+     * 离开目录视图（切 Tab / 换源 / 重拉首页）：清空下探栈、作废在途目录请求、恢复 Hero。
+     *
+     * @return true = 确实离开了一个目录。调用方必须把它当成「整页换数据」，不能再走
+     *         「同一个 Tab 已加载就跳过」的快速返回，否则目录卡片会被当成这个 Tab 的内容留在屏幕上。
+     */
+    private fun exitFolderDrill(): Boolean {
+        if (folderStack.isEmpty()) return false
+        folderStack.clear()
+        siteViewModel.cancelResult()
+        heroInfo.visibility = View.VISIBLE
+        return true
     }
 
     private fun onTabFocused(index: Int) {
@@ -1642,6 +1854,12 @@ class HomeViewActivity : AppCompatActivity() {
      * 同一个 Tab 已经加载过就跳过，避免焦点来回移动时反复请求。
      */
     private fun selectTab(index: Int) {
+        // 切 Tab = 离开目录：目录卡片绝不能冒充这个 Tab 的内容，整页必须重新加载。
+        if (exitFolderDrill()) {
+            loadedTabKey = ""
+            items = emptyList()
+            posterAdapter.submit(emptyList())
+        }
         pendingTabLoad?.let { handler.removeCallbacks(it) }
         pendingTabLoad = null
         lastFocusedTabIndex = index

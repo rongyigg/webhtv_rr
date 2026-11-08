@@ -137,6 +137,19 @@ public class SiteViewModel extends ViewModel {
         execute(TaskType.RESULT, result, () -> SiteApi.categoryContent(key, tid, page, filter, extend));
     }
 
+    /**
+     * 作废当前 RESULT 请求：首页下探目录返回上一层时，迟到的目录结果绝不能写回上一层。
+     *
+     * <p>与 {@link #cancelPlayerContent()} 同一套做法：先递增 taskId，再取消 Future，
+     * 回调里的 {@code taskId.get() != currentId} 判断会让迟到的结果直接丢弃。</p>
+     */
+    public void cancelResult() {
+        taskIds.get(TaskType.RESULT).incrementAndGet();
+        ListenableFuture<?> future = futures.get(TaskType.RESULT);
+        if (future != null) future.cancel(true);
+        futures.remove(TaskType.RESULT);
+    }
+
     public void action(String key, String act) {
         execute(TaskType.ACTION, action, () -> SiteApi.action(key, act));
     }
