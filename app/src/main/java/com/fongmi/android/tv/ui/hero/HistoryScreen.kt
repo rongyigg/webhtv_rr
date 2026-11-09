@@ -3,11 +3,15 @@ package com.fongmi.android.tv.ui.hero
 import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
+import android.graphics.Typeface
 import android.util.Log
+import android.util.TypedValue
+import android.view.Gravity
 import android.view.KeyEvent
 import android.view.LayoutInflater
 import android.view.View
 import android.widget.FrameLayout
+import android.widget.TextView
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.LinearOutSlowInEasing
 import androidx.compose.animation.core.tween
@@ -69,7 +73,6 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.res.colorResource
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.TextStyle
@@ -79,12 +82,14 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.content.ContextCompat
 import coil3.compose.AsyncImage
 import com.fongmi.android.tv.R
 import com.fongmi.android.tv.bean.History
+import com.fongmi.android.tv.ui.activity.rememberHeroImageModel
+import com.fongmi.android.tv.utils.ResUtil
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.max
@@ -295,38 +300,94 @@ fun HistoryScreen(
 // ---------------------------------------------------------------------------
 
 /**
- * 全屏背景大图（XML L13-19 `heroBg`，`HeroImageView` 等价物）。
+ * 全屏背景大图：`heroBg`（XML L13-19）+ 垫底层 `heroBgUnder`（XML L6-12）。
  *
- * `HeroImageView.java` L125-126 固定加载 1920×1080；L114-175 `f()` 的交叉淡入为
- * scale 1.03→1.0 + alpha 0→1、450ms、DecelerateInterpolator，且**开始前延迟 220ms**
- * （`o11.p0` L504-506 非首次切换延迟 200ms，这里是 HeroImageView 自身的 220ms 起始延迟）。
+ * 与首页 `HeroHomeActivity` 的 `HeroBackdrop` 是同一套「双缓冲」实现（逆向自 `HeroImageView`）：
+ *
+ * 1. `heroBgUnder`：最近一张**已经解码成功**的图，始终铺在最下面，换图期间不消失；
+ * 2. `heroBg`：目标图，`onSuccess` 之前 alpha 恒为 0；解码成功后按原版做
+ *    `scale 1.03 → 1.0` + `alpha 0 → 1`、450ms、DecelerateInterpolator（`HeroImageView.java` L114-175）；
+ * 3. 动画跑完才释放底图（原版在动画结束回调里清 `heroBgUnder`），
+ *    网络再慢也不会出现「新图没到、旧图也没了」的黑帧。
+ *
+ * 没有背景图 = 原版 `heroBg.reset()`（`o11.q0` L528）：**先清底图、再清主图**，顺序照抄。
  */
 @Composable
 private fun HeroBackdrop(url: String) {
-    if (url.isEmpty()) return
-    val alpha = remember { Animatable(0f) }
-    val scale = remember { Animatable(BACKDROP_START_SCALE) }
+    var current by remember { mutableStateOf(url) }     // 目标：当前应该显示的图
+    var under by remember { mutableStateOf("") }        // 托底：最近一张解码成功的图
+    var loadedUrl by remember { mutableStateOf("") }    // Coil 回调：最近一次加载成功的地址
+
     LaunchedEffect(url) {
-        alpha.snapTo(0f)
-        scale.snapTo(BACKDROP_START_SCALE)
-        delay(BACKDROP_START_DELAY_MS)
-        coroutineScope {
-            launch { alpha.animateTo(1f, tween(BACKDROP_FADE_MS, easing = LinearOutSlowInEasing)) }
-            launch { scale.animateTo(1f, tween(BACKDROP_FADE_MS, easing = LinearOutSlowInEasing)) }
+        if (url.isEmpty()) {
+            // `HeroImageView.reset()` → `b()` → `d()`：先清底图，再清主图。
+            under = ""
+            loadedUrl = ""
+            current = ""
+            return@LaunchedEffect
+        }
+        if (url == current) return@LaunchedEffect
+        // 【双缓冲】只换「目标」，绝不清「底」：旧图原地留在 heroBgUnder 上，
+        // 直到新图解码成功、完整盖住它之后才释放。
+        // 目标恰好就是底下这张（A→B→A，B 还没解码完就切回来）时**不能动底图**，
+        // 否则 A 会先被撤掉、再从 alpha 0 淡回来，中间必然出现一帧纯黑。
+        if (url != loadedUrl) under = loadedUrl.takeIf { it.isNotEmpty() && it != url } ?: ""
+        current = url
+    }
+
+    // 每换一个地址换一只 Animatable：新图第一帧 alpha 一定是 0，
+    // 内存缓存命中时也不会「先闪一下整图、再从头发淡入」。
+    val progress = remember(current) { Animatable(if (current.isEmpty()) 1f else 0f) }
+
+    LaunchedEffect(current, loadedUrl) {
+        // 目标图**真的解码成功**才开始：在这之前新图 alpha 恒为 0、底图恒为 1。
+        if (current.isEmpty() || loadedUrl != current) return@LaunchedEffect
+        progress.snapTo(0f)
+        progress.animateTo(1f, tween(BACKDROP_FADE_MS, easing = LinearOutSlowInEasing))
+        // 原版在动画结束回调里才丢底图：避免淡到一半背景变黑，也避免两张全屏图长期同时驻留。
+        under = ""
+    }
+
+    Box(modifier = Modifier.fillMaxSize()) {
+        // 固定的两个图层：底图槽位永远在（没有托底图时 model 传 null），
+        // 这样底图出现 / 消失不会重建上层节点，刚解码好的图不会跟着丢。
+        // 两层都 crossfadeMs = 0：淡入完全交给上面那条 450ms 进度，否则 Coil 再淡一次成了两层淡入。
+        AsyncImage(
+            model = if (under.isEmpty()) null else rememberHeroImageModel(under, crossfadeMs = 0),
+            contentDescription = null,
+            contentScale = ContentScale.Crop,
+            modifier = Modifier.fillMaxSize(),
+        )
+        if (current.isNotEmpty()) {
+            AsyncImage(
+                model = rememberHeroImageModel(current, crossfadeMs = 0),
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                onSuccess = { state ->
+                    // 只认「当前这张目标图」：快速连按时上一张的成功回调可能迟到，
+                    // 直接写会让还没解码的新目标被淡到 alpha = 1 —— 又是一帧黑。
+                    val loaded = (state.result.request.data as? String) ?: current
+                    if (loaded == current) loadedUrl = loaded
+                },
+                // 目标图加载失败（403 防盗链 / 404 / 解码失败）：撤掉底图，
+                // 否则左侧信息已经换成 B，背景却一直挂着 A 的画面。
+                onError = {
+                    if (loadedUrl != current) under = ""
+                },
+                modifier = Modifier
+                    .fillMaxSize()
+                    // 逐帧只走 draw 阶段：`graphicsLayer` 的 lambda 里读 `progress.value`
+                    // 不触发重组 / 重测，每帧只改一次图层的 alpha 与缩放。
+                    .graphicsLayer {
+                        val p = progress.value
+                        alpha = p
+                        val scale = BACKDROP_START_SCALE + (1f - BACKDROP_START_SCALE) * p
+                        scaleX = scale
+                        scaleY = scale
+                    },
+            )
         }
     }
-    AsyncImage(
-        model = url,
-        contentDescription = null,
-        contentScale = ContentScale.Crop,
-        modifier = Modifier
-            .fillMaxSize()
-            .graphicsLayer {
-                this.alpha = alpha.value
-                scaleX = scale.value
-                scaleY = scale.value
-            },
-    )
 }
 
 /**
@@ -372,33 +433,37 @@ private fun HeroMaskBottom() {
 // ---------------------------------------------------------------------------
 
 /**
- * 左上角站点角标（XML L32-47 `pageSite` + `shape_config_name.xml`）。
+ * 左上角站点角标（XML L32-47 `pageSite`）。
  *
- * 13sp bold 白 / 高 26dp / 左右 12dp 内边距 / 四角 4dp / 24dp 外边距 / 单行。
- * 底色取工程既有 `@color/red`（`res/values/colors.xml` L56 = `#E50914`）——
- * `ref_docs/colors.xml` 没有 `red` 条目，数值来自本仓库既有资源，不是新造色。
+ * 这里刻意用**真实 `TextView`**（`AndroidView`），而不是 Compose `Text` + `.background(...)`：
+ * 背景必须是逆向里的 `@drawable/shape_config_name`（XML L39），而 Compose 的
+ * `painterResource` 不支持 ShapeDrawable，自己再画一个圆角矩形又等于新造一份图形资源。
+ * `HistoryEmptyState` 已经是同一套 `AndroidView` 写法，不存在新增的互操作坑。
+ *
+ * 13sp bold / `@color/white` / gravity=center / 高 26dp / 左右各 12dp 内边距 /
+ * 24dp 外边距 / maxLines 1（全部照抄 XML L32-47）。
  */
 @Composable
 private fun PageSite(text: String, modifier: Modifier = Modifier) {
-    Box(
+    AndroidView(
         modifier = modifier
             .padding(PAGE_SITE_MARGIN)
-            .height(PAGE_SITE_HEIGHT)
-            .clip(PAGE_SITE_SHAPE)
-            .background(colorResource(id = R.color.red))
-            .padding(horizontal = PAGE_SITE_PADDING_H),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(
-            text = text,
-            color = Color.White,
-            fontSize = PAGE_SITE_SP.sp,
-            fontWeight = FontWeight.Bold,
-            maxLines = 1,
-            overflow = TextOverflow.Clip,
-            softWrap = false,
-        )
-    }
+            .height(PAGE_SITE_HEIGHT),
+        factory = { context ->
+            val padding = ResUtil.dp2px(PAGE_SITE_PADDING_H.value.toInt())
+            TextView(context).apply {
+                setBackgroundResource(R.drawable.shape_config_name)
+                setTextColor(ContextCompat.getColor(context, R.color.white))
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, PAGE_SITE_SP)
+                setTypeface(typeface, Typeface.BOLD)
+                gravity = Gravity.CENTER
+                maxLines = 1
+                isSingleLine = true
+                setPadding(padding, 0, padding, 0)
+            }
+        },
+        update = { view -> view.text = text },
+    )
 }
 
 /**
@@ -1064,8 +1129,8 @@ private val PAGE_SITE_PADDING_H = 12.dp
 /** `pageSite` 字号 13sp（XML L33）。 */
 private const val PAGE_SITE_SP = 13f
 
-/** `shape_config_name.xml` 圆角 4dp。 */
-private val PAGE_SITE_SHAPE = RoundedCornerShape(4.dp)
+// `pageSite` 的圆角与底色不在这里画：XML L39 指明背景是 `@drawable/shape_config_name`，
+// 由 [PageSite] 里的真实 TextView `setBackgroundResource` 套用，详见 res/drawable/shape_config_name.xml。
 
 /** `posterCard` 150×210（XML L55-56）。 */
 private val POSTER_CARD_WIDTH = 150.dp
@@ -1160,10 +1225,14 @@ private val POSTER_ROW_ITEM_GAP = 16.dp
 /** 焦点项缩放 1.08（`o11.H()` L174 `mm3.f(recyclerView, 1.08f)`）。 */
 private const val FOCUS_SCALE = 1.08f
 
-/** 背景淡入：scale 1.03→1.0、alpha 0→1、450ms、延迟 220ms（`HeroImageView.java` L114-175）。 */
+/**
+ * 背景淡入：scale 1.03→1.0、alpha 0→1、450ms（`HeroImageView.java` L114-175 的 AnimatorSet）。
+ *
+ * 原版的 220ms 起始延迟只属于「重新可见」那次入场动画；换图走的是 `loadImage()`，
+ * 加载成功立刻淡入（`startFadeIn(0L)`），所以这里没有延迟。
+ */
 private const val BACKDROP_START_SCALE = 1.03f
 private const val BACKDROP_FADE_MS = 450
-private const val BACKDROP_START_DELAY_MS = 220L
 
 /** 内容淡入 100ms（`posterContent` 从 gone → visible）。 */
 private const val CONTENT_FADE_MS = 100

@@ -369,13 +369,17 @@ class HeroDetailActivity : ComponentActivity() {
      * [mergeDetail] 用真实 [Vod] 整体覆盖（含年份 / 地区 / 分类 / 简介 / 导演 / 主演）。
      *
      * 演职员：真实条目**不再**沿用 [DEMO_DETAIL] 的假演员（TMDB 到达前整行隐藏，
-     * 命中后由 TMDB 真演员整体替换）；只有旧 adb 入口（`EXTRA_PIC` 为空）才保留假演员用于离线验证。
+     * 命中后由 TMDB 真演员整体替换）；只有旧 adb 入口（既没有海报、也没有 `extra_vod_id`）
+     * 才保留假数据用于离线验证。
      * 线路与选集则完全来自 `SiteViewModel.detailContent` 返回的 `Vod.flags`，不再有假数据。
      */
     private fun readDetail(): HeroDetail {
         val title = intent.getStringExtra(EXTRA_TITLE).orEmpty().ifBlank { return DEMO_DETAIL }
         val pic = intent.getStringExtra(EXTRA_PIC).orEmpty()
-        if (pic.isBlank()) return DEMO_DETAIL.copy(title = title)
+        // 旧 adb 入口 = 「只有剧名」：既没有海报，也没有详情主键（`extra_vod_id`）。
+        // 真实历史记录经常没有 `vod_pic`，但有 `vod_id`（详情页靠它拉真实线路 / 选集），
+        // 不能因为没海报就整页掉回 [DEMO_DETAIL] 的假数据。
+        val demo = pic.isBlank() && intent.getStringExtra(EXTRA_VOD_ID).isNullOrBlank()
         // 首页已经预取到 TMDB w1920 横图时，把它作为**首帧背景**直出：
         // 详情接口只给竖版 `vod.pic`，等它回来再换背景会让首帧从横图硬切成竖图。
         val extraBackdrop = intent.getStringExtra(EXTRA_BACKDROP).orEmpty()
@@ -394,11 +398,11 @@ class HeroDetailActivity : ComponentActivity() {
         ).filter { it.isNotBlank() }.joinToString(" · ")
         return DEMO_DETAIL.copy(
             title = title,
-            meta = meta.ifBlank { DEMO_DETAIL.meta },
+            meta = meta.ifBlank { if (demo) DEMO_DETAIL.meta else "" },
             // 简介优先级：首页预取的 TMDB 译文 → Intent 里的源站简介 → 离线假数据。
             synopsis = extraOverview
                 .ifBlank { intent.getStringExtra(EXTRA_CONTENT).orEmpty() }
-                .ifBlank { DEMO_DETAIL.synopsis },
+                .ifBlank { if (demo) DEMO_DETAIL.synopsis else "" },
             posterUrl = pic,
             // 详情接口只给竖版图：有首页预取的横图就用横图，否则仍用竖图裁 16:9（改动前行为）。
             backdropUrl = if (wideBackdrop) extraBackdrop else pic,
@@ -414,8 +418,8 @@ class HeroDetailActivity : ComponentActivity() {
             // 首帧简介已经是 TMDB 译文时，`mergeDetail` 不要再用源站 `vod.content` 盖掉它。
             hasTmdbOverview = extraOverview.isNotBlank(),
             // 真实条目清空假演员：TMDB 未配置 / 未命中时演员行为空（UI 整行隐藏），
-            // 不会出现「真数据 + 10 位假演员」混排；旧 adb 入口走上面的 DEMO_DETAIL 分支，假演员保留。
-            cast = emptyList(),
+            // 不会出现「真数据 + 10 位假演员」混排；旧 adb 入口（demo）保留假演员。
+            cast = if (demo) DEMO_DETAIL.cast else emptyList(),
         )
     }
 
@@ -500,6 +504,40 @@ class HeroDetailActivity : ComponentActivity() {
                     .putExtra(EXTRA_SITE_KEY, site.key)
                     .putExtra(EXTRA_SITE_NAME, site.displayName),
             )
+        }
+
+        /**
+         * 历史记录入口：`ref_docs/HistoryFragment.java` L338-344 `h0()` 的等价实现。
+         *
+         * ```java
+         * DetailActivity.q2(L(), history.getSiteKey(), history.getVodId(), history.getVodName(),
+         *                   history.getVodPic(), history.getVodRemarks(), "");
+         * ```
+         *
+         * 只接收原版 `q2` 的**七个标量**。本工程没有 `DetailActivity`，所以在这里把标量还原成
+         * 详情页真正需要的 [Vod] + [Site]，再交给上面的统一入口：
+         * - [Vod] 只填真实字段（id / 名称 / 海报 / 备注 / 简介），**不注入任何假数据**；
+         * - [Site] 从当前配置里按 `siteKey` 查（`VodConfig.get().getSite`），配置还没加载时用
+         *   key 兜底，保证详情页「排除当前源」用的仍是真实 key。
+         */
+        fun start(
+            context: Context,
+            siteKey: String,
+            vodId: String,
+            vodName: String,
+            vodPic: String,
+            vodRemarks: String,
+            vodContent: String,
+        ) {
+            val vod = Vod().apply {
+                id = vodId
+                name = vodName
+                pic = vodPic
+                remarks = vodRemarks
+                content = vodContent
+            }
+            val site = VodConfig.get().getSite(siteKey).takeIf { !it.isEmpty } ?: Site().apply { key = siteKey }
+            start(context, vod, site)
         }
 
         /**

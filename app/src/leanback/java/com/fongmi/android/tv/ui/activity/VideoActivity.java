@@ -738,6 +738,22 @@ private boolean runtimeSourceOnly;
                 item.getVodFlag(), item.getVodRemarks(), item.getEpisodeUrl(), item);
     }
 
+    /**
+     * 历史页专用入口：与 [startFromHistory] 完全一致，只是起播后**直接全屏**
+     * （不显示「左侧小窗 + 右侧选集」的嵌入式首屏）。
+     *
+     * 原版对应 `ref_docs/HistoryFragment.java` L338-344 `h0()` 的续播分支 + `DetailActivity.g2()`
+     * 的 `VideoActivity.q3(...)`：历史页起播就是全屏播放，不接受任何小窗 / 悬浮窗参数。
+     */
+    public static void startFromHistoryFullscreen(Activity activity, History item) {
+        if (shouldOpenLegacyTmdbDetail(item.getSiteKey(), item.getVodId(), false)) {
+            TmdbDetailActivity.startFromHistory(activity, item);
+            return;
+        }
+        startDirect(activity, item.getSiteKey(), item.getVodId(), item.getVodName(), item.getVodPic(), item.getVodRemarks(),
+                item.getVodFlag(), item.getSourceBindingKey(), item.getVodRemarks(), item.getEpisodeUrl(), true, item, true);
+    }
+
     public static void startFromResolvedHistory(Activity activity, History source, Vod target, Flag flag, Episode episode) {
         if (source == null || target == null || flag == null || episode == null) return;
         if (shouldOpenLegacyTmdbDetail(target.getSiteKey(), target.getId(), false)) {
@@ -831,6 +847,9 @@ private boolean runtimeSourceOnly;
             // 与 startDirectResolved 一致：Hero UI 起播就是「直达播放」，不进详情增强/融合流程。
             intent.putExtra("detail_mode", Setting.DETAIL_OPEN_DIRECT);
             intent.putExtra(EXTRA_DETAIL_RUNTIME_MODE, Setting.DETAIL_OPEN_DIRECT);
+            // 【强制全屏起播】历史页 / 详情页选集起播统一要求：不复用任务栈里可能存在的旧播放页，
+            // 也不携带任何 PIP / 悬浮窗参数（本类从未读取过这类 extra，这里显式声明不新增）。
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
         }
         if (resumeHistory != null) {
             intent.putExtra(EXTRA_RESUME_HISTORY_CID, resumeHistory.getCid());

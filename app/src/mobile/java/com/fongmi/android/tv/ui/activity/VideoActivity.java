@@ -709,6 +709,19 @@ private final Task.Scope mPersonalRecommendationTasks = new Task.Scope(Task.reco
                 item.getVodFlag(), item.getVodRemarks(), item.getEpisodeUrl(), item);
     }
 
+    /**
+     * 历史页专用入口：手机版播放页本身就是全屏（没有 leanback 的「左侧小窗 + 右侧选集」），
+     * 与 [startFromHistory] 的续播链路完全一致，只多补上「直达播放」的启动标志。
+     */
+    public static void startFromHistoryFullscreen(Activity activity, History item) {
+        if (shouldOpenLegacyTmdbDetail(item.getSiteKey(), item.getVodId())) {
+            TmdbDetailActivity.startFromHistory(activity, item);
+            return;
+        }
+        startDirect(activity, item.getSiteKey(), item.getVodId(), item.getVodName(), item.getVodPic(), item.getVodRemarks(),
+                item.getVodFlag(), item.getSourceBindingKey(), item.getVodRemarks(), item.getEpisodeUrl(), true, item, true);
+    }
+
     public static void startFromResolvedHistory(Activity activity, History source, Vod target, Flag flag, Episode episode) {
         if (source == null || target == null || flag == null || episode == null) return;
         if (shouldOpenLegacyTmdbDetail(target.getSiteKey(), target.getId())) {
@@ -791,7 +804,7 @@ private final Task.Scope mPersonalRecommendationTasks = new Task.Scope(Task.reco
      */
     public static void startDirectFullscreen(Activity activity, String key, String id, String name, String pic, String mark,
             String playFlag, String playEpisodeName, String playEpisodeUrl) {
-        startDirect(activity, key, id, name, pic, mark, playFlag, playEpisodeName, playEpisodeUrl);
+        startDirect(activity, key, id, name, pic, mark, playFlag, "", playEpisodeName, playEpisodeUrl, false, null, true);
     }
 
     public static void startDirect(Activity activity, String key, String id, String name, String pic, String mark,
@@ -815,6 +828,13 @@ private final Task.Scope mPersonalRecommendationTasks = new Task.Scope(Task.reco
     private static void startDirect(Activity activity, String key, String id, String name, String pic, String mark,
             String playFlag, String playFlagKey, String playEpisodeName, String playEpisodeUrl,
             boolean resumeFromHistory, History resumeHistory) {
+        startDirect(activity, key, id, name, pic, mark, playFlag, playFlagKey,
+                playEpisodeName, playEpisodeUrl, resumeFromHistory, resumeHistory, false);
+    }
+
+    private static void startDirect(Activity activity, String key, String id, String name, String pic, String mark,
+            String playFlag, String playFlagKey, String playEpisodeName, String playEpisodeUrl,
+            boolean resumeFromHistory, History resumeHistory, boolean fullscreenLaunch) {
         if (AudioActivity.startSite(activity, key, id, name, pic, mark)) return;
         Intent intent = new Intent(activity, VideoActivity.class);
         intent.putExtra("collect", false);
@@ -827,6 +847,11 @@ private final Task.Scope mPersonalRecommendationTasks = new Task.Scope(Task.reco
         if (resumeHistory != null) {
             intent.putExtra(EXTRA_RESUME_HISTORY_CID, resumeHistory.getCid());
             intent.putExtra(EXTRA_RESUME_HISTORY_KEY, HistoryResumePayload.encode(resumeHistory));
+        }
+        if (fullscreenLaunch) {
+            // 【强制全屏起播】与 leanback 侧同一约定：不复用任务栈里可能存在的旧播放页，
+            // 也不携带任何 PIP / 悬浮窗参数（本类从未读取过这类 extra）。
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
         }
         putIntentPlaybackSelection(intent, playFlag, playFlagKey, playEpisodeName, playEpisodeUrl);
         activity.startActivity(intent);

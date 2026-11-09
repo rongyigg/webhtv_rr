@@ -7,6 +7,8 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModel
 import com.fongmi.android.tv.App
 import com.fongmi.android.tv.bean.History
+import com.fongmi.android.tv.bean.TmdbMatchCache
+import com.fongmi.android.tv.setting.Setting
 import com.fongmi.android.tv.ui.activity.HeroDetailActivity
 import com.fongmi.android.tv.ui.activity.VideoActivity
 import coil3.SingletonImageLoader
@@ -27,7 +29,7 @@ import java.util.regex.Pattern
  * - [openResume] / [openDetail] ← `pp` case 14 L374-385 + `g20` case 2 L104-119
  *
  * **不碰数据层**：只调用 `History.getForDisplay()` / `history.delete()` 这类既有公开入口，
- * 跳转同样直接走工程既有入口（[VideoActivity.startFromHistory] / [HeroDetailActivity.start]），
+ * 跳转同样直接走工程既有入口（[VideoActivity.startFromHistoryFullscreen] / [HeroDetailActivity.start]），
  * 不做任何配置/cid 前置校验。
  * 所有线程切换走 `Task.execute`（读库）+ `App.post`（回主线程），与工程既有写法一致。
  */
@@ -35,6 +37,14 @@ class HistoryViewModel : ViewModel() {
 
     var state: HistoryUiState by mutableStateOf(HistoryUiState())
         private set
+
+    /**
+     * TMDB 匹配缓存：整页只读一次（与 `HomeViewActivity` 的 `syncCache` 同一策略）。
+     *
+     * `Setting.getTmdbMatchCache()` 每次调用都要做一次整表 Gson 解析，而 [buildHero] 在
+     * 每一次焦点切换时都要查背景图（[tmdbBackdrop]），不能在那里逐次调用。
+     */
+    private var tmdbCache: TmdbMatchCache? = null
 
     /**
      * 首次装载（对应 `a0()` → `m11` case 3）：后台读库 → 主线程刷新。
@@ -53,10 +63,13 @@ class HistoryViewModel : ViewModel() {
         val previousKey = if (keepSelection) state.selectedItem?.key else null
         state = state.copy(loading = !state.loaded, empty = false)
         Task.execute {
+            // TMDB 匹配缓存整页只读一次：读盘 / 解析都留在后台线程，主线程只拿引用。
+            val tmdb = runCatching { Setting.getTmdbMatchCache() }.getOrNull()
             // `History.getForDisplay()` 内部已经做了「全局历史聚合 + 排序」（History.java L201-206），
             // 这里不再二次排序（原版 `History.get()` 的排序规则见待确认清单）。
             val items = History.getForDisplay().toList()
             App.post {
+                tmdbCache = tmdb
                 val index = when {
                     items.isEmpty() -> -1
                     previousKey == null -> 0
@@ -117,35 +130,49 @@ class HistoryViewModel : ViewModel() {
     /**
      * 卡片单击 / 确定键 → **全屏续播**（原版 `pp` case 14 终点 = `o11.h0` 的「续播」分支）。
      *
-     * 直接走工程既有的历史续播入口 [VideoActivity.startFromHistory]：它内部已经按站点策略分流到
-     * `TmdbDetailActivity.startFromHistory` 或 `startDirect(..., history)`，并把整条 `History`
-     * 带进播放页续播。历史页**不做** `Config.find` / `cid` 前置校验（那是原版首页/收藏页的切源逻辑，
+     * 走 [VideoActivity.startFromHistoryFullscreen]：内部仍是工程既有的历史续播链路
+     * （`TmdbDetailActivity.startFromHistory` 或 `startDirect(..., history)`，把整条 `History`
+     * 带进播放页续播），只是多带一个「直接全屏」标记 —— 不再显示 leanback 播放页的
+     * 「左侧小窗 + 右侧选集」嵌入式首屏，也不带任何 PIP / 悬浮窗参数。
+     * 历史页**不做** `Config.find` / `cid` 前置校验（那是原版首页/收藏页的切源逻辑，
      * 在这里只会把已入库的历史降级到搜索页）。
      *
      * [history] 默认取当前选中项；触摸点击时由调用方传入被点的那一条，避免「点了但没先聚焦」的错位。
      */
     fun openResume(activity: Activity, history: History? = state.selectedItem) {
         val item = history ?: return
-        VideoActivity.startFromHistory(activity, item)
+        VideoActivity.startFromHistoryFullscreen(activity, item)
     }
 
     /**
-     * 「查看详情」按钮 → **详情页**，与首页卡片**完全同一个入口**：
-     * `HeroHomeActivity` L146 `HeroHomeScreen(onOpenDetail = { HeroDetailActivity.start(this, it) })`。
+     * 「查看详情」按钮 → **真实详情页**（`ref_docs/HistoryFragment.java` L338-344 `h0()`）：
      *
-     * 只需要 `activity` + 剧名（`History.getVodName()`）；历史记录里的 siteKey / vodId / 集数
-     * 一律不参与跳转，因此不存在任何配置、cid 或站点前置校验。
+     * ```java
+     * DetailActivity.q2(L(), history.getSiteKey(), history.getVodId(), history.getVodName(),
+     *                   history.getVodPic(), history.getVodRemarks(), "");
+     * ```
+     *
+     * 七个参数**全部来自这条历史记录本身**：不构造 Mock `Vod`、不塞假 `siteKey` / 假 `vodId`。
+     * 详情页拿到真实 `vodId` 后自己走 `SiteViewModel.detailContent` 拉线路与选集。
      */
     fun openDetail(activity: Activity, history: History? = state.selectedItem) {
         val item = history ?: return
-        HeroDetailActivity.start(activity, item.vodName.orEmpty())
+        HeroDetailActivity.start(
+            activity,
+            item.siteKey,
+            item.vodId,
+            item.vodName.orEmpty(),
+            item.vodPic.orEmpty(),
+            item.vodRemarks.orEmpty(),
+            "",
+        )
     }
 
     /**
      * 选中项 Hero 信息（`p0` L457-511 的逐项映射）。
      *
      * `gd3.*` / `je2.*` 在本工程没有公开等价入口，对应字段直接取 History bean 已解析好的值：
-     * - `gd3.l(vodName)`（背景）→ `history.wallPic`
+     * - `gd3.l(vodName)`（背景）→ TMDB 匹配缓存里的横图（[tmdbBackdrop]，对应 `q0` 的 `TmdbCache.l`）
      * - `gd3.t(vodName)` / `vodPic`（海报）→ `history.vodPic`
      * - `gd3.q(vodName)`（Logo）→ 无字段，恒空 → 剧名文字常显
      * - `gd3.s(vodName)`（简介）→ 无字段，恒空 → 简介行隐藏
@@ -165,10 +192,32 @@ class HistoryViewModel : ViewModel() {
             progressText = if (showProgress) progressText(position, duration) else "",
             progress = if (showProgress) (position.toFloat() / duration.toFloat()).coerceIn(0f, 1f) else 0f,
             showProgress = showProgress,
-            backdropUrl = history.wallPic.orEmpty(),
+            // `q0` L514-526：**只认 TMDB 横图**。为空时 `HistoryScreen` 会走
+            // 「`heroBg.reset()` + 显示右上角 posterCard」那条分支，绝不拿竖图拉伸铺满全屏。
+            backdropUrl = tmdbBackdrop(history),
             posterUrl = history.vodPic.orEmpty(),
             logoUrl = "",
         )
+    }
+
+    /**
+     * 全屏背景大图（`HistoryFragment.q0()` L514-526 `TmdbCache.l(vodName)` 的等价实现）。
+     *
+     * 原版分支：
+     * - 命中横图 → `heroBg.f(url, i, null)`，并隐藏右侧 `posterCard`；
+     * - 未命中 → `heroBg.a()`（`reset()`），显示右侧 `posterCard`。
+     *
+     * 本工程的 TMDB 匹配缓存是 [TmdbMatchCache]（key = 站点 + vodId），
+     * 与 `History.enrichTmdbId()` L1148 / `SubtitleTmdbResolver` 同一套用法。
+     * 缓存对象在 [loadInternal] 的后台线程里整页读一次，这里只做内存查询。
+     */
+    private fun tmdbBackdrop(history: History): String {
+        val cache = tmdbCache ?: return ""
+        val siteKey = runCatching { history.siteKey }.getOrNull().orEmpty()
+        val vodId = runCatching { history.vodId }.getOrNull().orEmpty()
+        if (siteKey.isEmpty() || vodId.isEmpty()) return ""
+        val item = runCatching { cache.find(siteKey, vodId, history.vodName.orEmpty()) }.getOrNull()
+        return item?.backdropUrl.orEmpty()
     }
 
     /**
@@ -184,8 +233,10 @@ class HistoryViewModel : ViewModel() {
     /**
      * 背景窗口预热（`o11.q0` L536-551：±2 项 Glide 150dp × 1.5 预热）+ `k0` L356-368（±2 背景窗口）。
      *
-     * 原版 `gd3.g(...)` / `je2.d(...)` 是 TMDB 侧接口，本工程没有等价入口，
-     * 这里只对已存在的 URL 做 Coil 预热，不发起任何 TMDB 查询。
+     * 原版 `gd3.g(...)` / `je2.d(...)` 是 TMDB 侧接口，本工程用 [TmdbMatchCache] 的横图代替，
+     * 只对已存在的 URL 做 Coil 预热，不发起任何 TMDB 查询。
+     * 预热必须与 `HistoryScreen` 里 `HeroBackdrop` 真正会加载的那张**完全一致**：原来预热的是
+     * `wallPic`，而现在背景走 TMDB 横图，预热错了图就等于焦点落上去仍然要现下载。
      */
     private fun prefetch(index: Int) {
         val items = state.items
@@ -194,7 +245,7 @@ class HistoryViewModel : ViewModel() {
             val item = items[i]
             val poster = item.vodPic.orEmpty()
             if (poster.isNotEmpty()) HeroImagePrefetch.poster(poster)
-            val backdrop = item.wallPic.orEmpty()
+            val backdrop = tmdbBackdrop(item)
             if (backdrop.isNotEmpty()) HeroImagePrefetch.backdrop(backdrop)
         }
     }
