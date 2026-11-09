@@ -63,9 +63,9 @@ public class HeroImageView extends ImageView {
 
     private static final String TAG = "HeroImageView";
 
-    /** 原版 {@code p / q}：背景图固定解码尺寸。 */
-    private static final int TARGET_WIDTH = 1920;
-    private static final int TARGET_HEIGHT = 1080;
+    /** 原版 {@code p / q}：背景图固定解码尺寸（预取 {@link #prefetch} 必须与它完全一致）。 */
+    public static final int TARGET_WIDTH = 1920;
+    public static final int TARGET_HEIGHT = 1080;
 
     /** 原版构造里的 AnimatorSet 时长。 */
     private static final long FADE_DURATION = 450L;
@@ -194,6 +194,34 @@ public class HeroImageView extends ImageView {
         // enqueue 的回包在 Main 线程，可以直接操作 View。内存缓存命中时也可能同步回调，
         // 此时这里赋值的是一个已经结束的 Disposable，下次 dispose 是空操作，无副作用。
         request = loader.enqueue(imageRequest);
+    }
+
+    /**
+     * 静默预取一张背景大图（原版 `je2.e(...)` 的等价机制）：**只把图下进 Coil 缓存，不碰任何 View**。
+     *
+     * <p>与 {@link #loadImage} 用**完全相同**的 data + size 构造请求，这是内存缓存能命中的前提：
+     * Coil 的内存缓存键默认就是 `request.data`（即 URL），再叠加解码尺寸；两边尺寸一致，
+     * 焦点移过来时 `loadImage` 才能直接拿到同一份已解码位图。磁盘缓存键只认 URL，同样一定命中。
+     *
+     * <p>故意只 {@code enqueue} 不保存 {@link Disposable}：预取是「替缓存干活」，
+     * 用户焦点已经移走也必须让它写完，否则这张图下次还要重下。
+     *
+     * @param url 背景大图地址；空地址直接忽略
+     */
+    public static void prefetch(Context context, String url) {
+        if (TextUtils.isEmpty(url)) return;
+        try {
+            ImageLoader loader = imageLoader(context);
+            if (loader == null) return;
+            ImageRequest request = new ImageRequest.Builder(context)
+                    .data(url)
+                    .size(TARGET_WIDTH, TARGET_HEIGHT)
+                    .build();
+            loader.enqueue(request);
+        } catch (Throwable e) {
+            // 预取失败绝不能影响首页：真正的显示请求还会再走一次同一条链路。
+            Log.w(TAG, "prefetch failed: " + url, e);
+        }
     }
 
     /**

@@ -1136,6 +1136,8 @@ class HomeViewActivity : AppCompatActivity() {
         val existing = tmdbOverrides[item.posterKey]
         if (existing != null && existing.detail != null) {
             HeroTmdbPrefetchCache.put(item.posterKey, existing)
+            // 元数据有、图不一定有（进程重启后磁盘里有元数据、图却可能被清过）。
+            prefetchBackdropImage(existing.highResBackdrop)
             return
         }
         // 没配 Key / 该源被排除 / 没有剧名：保持源站画面，绝不发无效请求。
@@ -1143,7 +1145,29 @@ class HomeViewActivity : AppCompatActivity() {
         if (!config.isReady() || item.vod.name.orEmpty().isBlank()) return
         if (!TmdbSitePolicy.isEnabled(config, item.site.key, item.vod.id)) return
         val data = loadTmdbDetail(item, config) ?: return
+        // 【大图预取】元数据一落地，立刻把 backdropUrl 静默下进 Coil 缓存 —— **必须在切主线程之前**：
+        // 这样下载与 `onTmdbDetailReady` 的重绘并行开始，焦点真落到这张卡时 `heroBg.loadImage()`
+        // 直接命中内存 / 磁盘，不再出现「先黑一帧、图才淡入」。
+        // `highResBackdrop` 在没有真横图时是空串（见 loadTmdbDetail），空串直接跳过。
+        prefetchBackdropImage(data.highResBackdrop)
         withContext(Dispatchers.Main) { onTmdbDetailReady(item.posterKey, data) }
+    }
+
+    /**
+     * 静默预取一张背景大图（原版 `je2.e(...)` 的等价机制）：**只下缓存，不碰任何 View**。
+     *
+     * 滑动窗口（i-2 … i+2）原来只预取了**元数据**，大图实体要等焦点真正落到那张卡、
+     * `heroBg.loadImage()` 发请求时才第一次下载，于是「焦点移过去 → 先空一帧 → 图才淡入」。
+     * 这里在元数据落地的同一刻就把图丢给 Coil，焦点移过去时直接命中缓存。
+     *
+     * 与 `HeroImageView.loadImage` 共用**同一个** data + size（[HeroImageView.prefetch]），
+     * 内存缓存键天然一致；磁盘缓存键只认 URL，也一定命中。
+     *
+     * 只在 IO 线程调用（[fetchTmdbDetailForPosition] 的上下文），绝不阻塞主线程。
+     */
+    private fun prefetchBackdropImage(url: String?) {
+        if (url.isNullOrBlank()) return
+        HeroImageView.prefetch(this, url)
     }
 
     /**
