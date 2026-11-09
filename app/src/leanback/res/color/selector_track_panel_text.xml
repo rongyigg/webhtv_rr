@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    轨道面板文字颜色：
+    - 焦点：白字（红底上保证可读）；
+    - 已选中：红色文字（全局 OsdFocusColor）；
+    - 普通：白色。
+-->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:state_focused="true" android:color="@color/white" />
+    <item android:state_selected="true" android:color="@color/osd_focus" />
+    <item android:color="@color/white" />
+</selector>

@@ -110,13 +110,13 @@
     </style>
 
     <!--
-        播放页 OSD 底部文字按钮：默认透明，焦点态是 @color/osd_focus 圆角矩形红渐变。
-        字号 13sp、按钮间距 12dp（含 6dp 内边距，视觉间距约 16dp），对齐 ref_docs/player_down_controls.png。
+        播放页 OSD 底部文字按钮：默认透明，焦点态是 @color/osd_focus 圆角胶囊红渐变。
+        字号 13sp、按钮间距 8dp（含 6dp 内边距，视觉间距约 14dp），整行在屏幕正中央。
     -->
     <style name="OsdAction">
         <item name="android:layout_width">wrap_content</item>
         <item name="android:layout_height">40dp</item>
-        <item name="android:layout_marginEnd">12dp</item>
+        <item name="android:layout_marginEnd">8dp</item>
         <item name="android:background">@drawable/selector_osd_action</item>
         <item name="android:focusable">true</item>
         <item name="android:focusableInTouchMode">true</item>
@@ -129,11 +129,11 @@
         <item name="android:textSize">13sp</item>
     </style>
 
-    <!-- 播放页 OSD 图标按钮（上一集 / 下一集）。 -->
+    <!-- 播放页 OSD 图标按钮（上一集 / 下一集），与文字按钮共用 20dp 胶囊焦点态。 -->
     <style name="OsdIcon">
         <item name="android:layout_width">40dp</item>
         <item name="android:layout_height">40dp</item>
-        <item name="android:layout_marginEnd">12dp</item>
+        <item name="android:layout_marginEnd">8dp</item>
         <item name="android:background">@drawable/selector_osd_icon</item>
         <item name="android:focusable">true</item>
         <item name="android:focusableInTouchMode">true</item>

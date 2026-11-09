@@ -142,6 +142,7 @@ import com.fongmi.android.tv.ui.dialog.SubtitleDialog;
 import com.fongmi.android.tv.ui.dialog.SubtitleManualSearchDialog;
 import com.fongmi.android.tv.ui.dialog.TmdbSearchDialog;
 import com.fongmi.android.tv.ui.dialog.TitleDialog;
+import com.fongmi.android.tv.ui.dialog.TrackPanelDialog;
 import com.fongmi.android.tv.ui.dialog.TrackDialog;
 import com.fongmi.android.tv.ui.helper.EpisodeDisplayPolicy;
 import com.fongmi.android.tv.ui.helper.EpisodeCardImagePolicy;
@@ -4751,6 +4752,13 @@ private boolean runtimeSourceOnly;
         hideControl();
     }
 
+    /** OSD「轨道」：打开逆向 dialog_track.xml 复刻的视频/音频双列面板。 */
+    private void openTrackPanel() {
+        if (player() == null) return;
+        TrackPanelDialog.create().player(player()).show(this);
+        hideControl();
+    }
+
     private void onTitle() {
         TitleDialog.create().player(player()).show(this);
         hideControl();
@@ -4892,10 +4900,10 @@ private boolean runtimeSourceOnly;
         mBinding.osdControl.osdSpeed.setOnClickListener(guarded(this::onSpeed));
         mBinding.osdControl.osdSpeed.setOnLongClickListener(view -> onSpeedLong());
         mBinding.osdControl.osdScale.setOnClickListener(guarded(this::onScale));
-        // 字幕 / 音轨 / 视轨分别对应 Media3 的 TEXT / AUDIO / VIDEO 轨道类型。
+        // 字幕走原有 TrackDialog（TEXT 轨道）；轨道按钮打开逆向双列面板（视频 + 音频）。
         mBinding.osdControl.osdText.setOnClickListener(guarded(() -> onTrack(3)));
-        mBinding.osdControl.osdAudio.setOnClickListener(guarded(() -> onTrack(1)));
-        mBinding.osdControl.osdVideo.setOnClickListener(guarded(() -> onTrack(2)));
+        mBinding.osdControl.osdTrack.setOnClickListener(guarded(this::openTrackPanel));
+        mBinding.osdControl.osdPlayParams.setOnClickListener(guarded(this::onPlayParams));
         mBinding.osdControl.osdOpening.setOnClickListener(guarded(this::onOpening));
         mBinding.osdControl.osdEnding.setOnClickListener(guarded(this::onEnding));
         mBinding.episodePanel.getRoot().setVisibility(View.GONE);
@@ -4968,6 +4976,7 @@ private boolean runtimeSourceOnly;
     private void toggleOsdColumn() {
         osdColumnFew = !osdColumnFew;
         applyOsdColumn();
+        refocusTab(mBinding.episodePanel.osdTabColumn);
     }
 
     private int getOsdColumn() {
@@ -4986,14 +4995,15 @@ private boolean runtimeSourceOnly;
         osdCompact = !osdCompact;
         if (mOsdEpisodeAdapter != null) mOsdEpisodeAdapter.setCompact(osdCompact);
         updateOsdTabs();
+        refocusTab(mBinding.episodePanel.osdTabCompact);
     }
 
-    /** 正序 / 倒序：复用详情页的排序入口，翻完后重新绑定面板。 */
+    /** 正序 / 倒序：复用详情页的排序入口，翻完后重新绑定面板并保留标签焦点。 */
     private void onOsdSort() {
         if (mHistory == null) return;
         onRevSort();
         bindEpisodePanel(true);
-        focusEpisodePanel();
+        refocusTab(mBinding.episodePanel.osdTabSort);
     }
 
     /**
@@ -5005,6 +5015,19 @@ private boolean runtimeSourceOnly;
         mBinding.episodePanel.osdTabColumn.setText(osdColumnFew ? R.string.osd_column_many : R.string.osd_column_few);
         mBinding.episodePanel.osdTabCompact.setText(osdCompact ? R.string.play_scale : R.string.osd_compact);
         mBinding.episodePanel.osdTabSort.setText(mHistory != null && mHistory.isRevSort() ? R.string.detail_episode_forward : R.string.detail_episode_reverse);
+    }
+
+    /**
+     * 少列/多列、原始/紧凑、正序/倒序都会触发 notifyDataSetChanged()，RecyclerView 重排时会把焦点吸走。
+     * 用 post 等这一帧布局结束后，把焦点交还给刚刚点击的标签，避免焦点掉进下方集数网格。
+     */
+    private void refocusTab(View tab) {
+        if (tab == null) return;
+        tab.post(() -> {
+            if (mBinding == null || !isVisible(mBinding.episodePanel.getRoot())) return;
+            if (tab.getVisibility() != View.VISIBLE) return;
+            tab.requestFocus();
+        });
     }
 
     /** 旧控制栏的入口 View 映射到新版 OSD 对应按钮，保持 showControl 的调用点不变。 */

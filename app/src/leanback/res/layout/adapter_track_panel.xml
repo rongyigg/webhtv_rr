@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    轨道面板列表项：普通态白色文字；获得焦点 = 20dp 胶囊红渐变 + 白字；
+    已选中的轨道 = 红色文字 + 红色描边胶囊底（不是方块，也不用 #FF0000）。
+    根节点就是可聚焦的 TextView，状态选择器直接作用在同一个 View 上。
+-->
+<com.google.android.material.textview.MaterialTextView xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:id="@+id/text"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:layout_marginTop="2dp"
+    android:layout_marginBottom="2dp"
+    android:background="@drawable/selector_track_panel_item"
+    android:ellipsize="end"
+    android:focusable="true"
+    android:focusableInTouchMode="true"
+    android:gravity="center_vertical"
+    android:minHeight="40dp"
+    android:paddingStart="12dp"
+    android:paddingEnd="12dp"
+    android:singleLine="true"
+    android:textColor="@color/selector_track_panel_text"
+    android:textSize="14sp"
+    tools:text="Japanese 5.1" />

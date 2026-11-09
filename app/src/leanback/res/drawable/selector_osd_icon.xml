@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-    OSD 图标按钮（上一集 / 下一集）：和文字按钮同一套焦点态，
-    只用圆角矩形红渐变，不再用高亮圆环。
+    OSD 图标按钮（上一集 / 下一集）：和文字按钮同一套胶囊焦点态，
+    只用 20dp 圆角红渐变，不再用高亮圆环。
 -->
 <selector xmlns:android="http://schemas.android.com/apk/res/android">
     <item android:state_focused="true">
@@ -10,13 +10,13 @@
                 android:angle="270"
                 android:endColor="@color/osd_focus_dark"
                 android:startColor="@color/osd_focus" />
-            <corners android:radius="4dp" />
+            <corners android:radius="20dp" />
         </shape>
     </item>
     <item>
         <shape android:shape="rectangle">
             <solid android:color="@android:color/transparent" />
-            <corners android:radius="4dp" />
+            <corners android:radius="20dp" />
         </shape>
     </item>
 </selector>

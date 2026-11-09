@@ -12,7 +12,7 @@
                 android:angle="270"
                 android:endColor="@color/osd_focus_dark"
                 android:startColor="@color/osd_focus" />
-            <corners android:radius="4dp" />
+            <corners android:radius="17dp" />
         </shape>
     </item>
     <item android:state_selected="true">
@@ -21,13 +21,13 @@
             <stroke
                 android:width="2dp"
                 android:color="@color/osd_focus" />
-            <corners android:radius="4dp" />
+            <corners android:radius="17dp" />
         </shape>
     </item>
     <item>
         <shape android:shape="rectangle">
             <solid android:color="@color/osd_surface" />
-            <corners android:radius="4dp" />
+            <corners android:radius="17dp" />
         </shape>
     </item>
 </selector>

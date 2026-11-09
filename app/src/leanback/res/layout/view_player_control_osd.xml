@@ -3,9 +3,9 @@
     播放页 OSD 控制层（纯 View 实现，不使用 Compose）。
     - 左上：分辨率；右上：实时网速
     - 左下：剧集艺术字 vodLogo（只显示标题文字，不加载海报图；为空则整块隐藏）
-    - 底部：进度条 + 严格顺序的按钮行：
+    - 底部：进度条 + 严格顺序的按钮行（整行水平居中）：
             上一集 → 下一集 → 选集 → EXO → 硬解 → 刷新 → 重播 →
-            倍速 → 画面比例 → 字幕 → 音轨 → 视轨 → 片头 → 片尾
+            倍速 → 画面比例 → 字幕 → 轨道 → 播放参数 → 片头 → 片尾
     说明：中间的播放/暂停大圆键已删除，确认键（DPAD_CENTER）直接接管播放/暂停。
 -->
 <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
@@ -91,10 +91,15 @@
             android:layout_height="wrap_content"
             android:nextFocusDown="@id/osdPrev" />
 
+        <!--
+            居中：fillViewport 让按钮行在内容不足一屏时撑满可视宽度，
+            再由 LinearLayout 的 gravity=center 把按钮居中；layout_gravity 作为兜底。
+            内容超过一屏时退化为可横向滚动，不裁切任何按钮。
+        -->
         <HorizontalScrollView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:fillViewport="false"
+            android:fillViewport="true"
             android:overScrollMode="never"
             android:scrollbars="none">
 
@@ -102,7 +107,8 @@
                 android:id="@+id/osdActions"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:gravity="center_vertical"
+                android:layout_gravity="center"
+                android:gravity="center"
                 android:orientation="horizontal">
 
                 <!-- 1. 上一集 -->
@@ -169,17 +175,17 @@
                     style="@style/OsdAction"
                     android:text="@string/play_track_text" />
 
-                <!-- 11. 音轨 -->
+                <!-- 11. 轨道：逆向 dialog_track.xml 的「视频轨道 / 音频轨道」双列面板 -->
                 <com.google.android.material.textview.MaterialTextView
-                    android:id="@+id/osdAudio"
+                    android:id="@+id/osdTrack"
                     style="@style/OsdAction"
-                    android:text="@string/play_track_audio" />
+                    android:text="@string/play_track" />
 
-                <!-- 12. 视轨 -->
+                <!-- 12. 播放参数 -->
                 <com.google.android.material.textview.MaterialTextView
-                    android:id="@+id/osdVideo"
+                    android:id="@+id/osdPlayParams"
                     style="@style/OsdAction"
-                    android:text="@string/play_track_video" />
+                    android:text="@string/play_params" />
 
                 <!-- 13. 片头 -->
                 <com.google.android.material.textview.MaterialTextView

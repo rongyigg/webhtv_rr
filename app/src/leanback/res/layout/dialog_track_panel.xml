@@ -1,0 +1,159 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    播放页「轨道」面板：结构逐项照抄逆向 ref_docs/dialog_track.xml。
+    左列 = 视频轨道（videoRecycler，paddingStart 20dp），右列 = 音频轨道（audioRecycler，paddingStart 24dp），
+    两列各占 weight=1，标题 16sp 白色，列表 maxHeight 320dp。
+    与原文件的唯一差异：
+    1. 逆向引用的 selector_control_circle 在本地不存在，按项目既有替代方案改成
+       ?attr/selectableItemBackgroundBorderless（仅头部三个 GONE 按钮使用）；
+    2. 本面板固定展示视频 + 音频两列，因此 track_titles 直接可见
+       （逆向里该属性由 Java 按轨道类型动态切换）。
+-->
+<androidx.appcompat.widget.LinearLayoutCompat xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:id="@+id/root"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:background="@drawable/shape_controller"
+    android:orientation="vertical"
+    android:paddingBottom="0dp">
+
+    <androidx.appcompat.widget.LinearLayoutCompat
+        android:id="@+id/header"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingHorizontal="24dp"
+        android:paddingLeft="24dp"
+        android:paddingTop="24dp"
+        android:paddingRight="24dp"
+        android:paddingBottom="8dp"
+        android:visibility="gone">
+
+        <com.google.android.material.textview.MaterialTextView
+            android:id="@+id/title"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:textColor="@color/white"
+            android:textSize="16sp" />
+
+        <androidx.appcompat.widget.AppCompatImageView
+            android:id="@+id/choose"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:focusable="true"
+            android:padding="8dp"
+            android:src="@drawable/ic_action_choose"
+            android:visibility="gone"
+            app:tint="@color/white" />
+
+        <androidx.appcompat.widget.AppCompatImageView
+            android:id="@+id/subtitle"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="16dp"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:focusable="true"
+            android:padding="8dp"
+            android:src="@drawable/ic_action_subtitle"
+            android:visibility="gone"
+            app:tint="@color/white" />
+
+        <androidx.appcompat.widget.AppCompatImageView
+            android:id="@+id/offset"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="16dp"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:focusable="true"
+            android:padding="8dp"
+            android:src="@drawable/ic_action_offset"
+            android:visibility="gone"
+            app:tint="@color/white" />
+
+    </androidx.appcompat.widget.LinearLayoutCompat>
+
+    <!-- 双列标题：视频轨道 / 音频轨道（16sp 白色，padding 与逆向完全一致） -->
+    <androidx.appcompat.widget.LinearLayoutCompat
+        android:id="@+id/track_titles"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal">
+
+        <com.google.android.material.textview.MaterialTextView
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:paddingStart="20dp"
+            android:paddingTop="24dp"
+            android:paddingBottom="8dp"
+            android:text="@string/play_track_video"
+            android:textColor="@color/white"
+            android:textSize="16sp" />
+
+        <com.google.android.material.textview.MaterialTextView
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:paddingStart="24dp"
+            android:paddingTop="24dp"
+            android:paddingBottom="8dp"
+            android:text="@string/play_track_audio"
+            android:textColor="@color/white"
+            android:textSize="16sp" />
+
+    </androidx.appcompat.widget.LinearLayoutCompat>
+
+    <androidx.appcompat.widget.LinearLayoutCompat
+        android:id="@+id/track_content"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:baselineAligned="false"
+        android:orientation="horizontal"
+        android:paddingBottom="12dp">
+
+        <com.fongmi.android.tv.ui.custom.CustomRecyclerView
+            android:id="@+id/videoRecycler"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:clipChildren="false"
+            android:clipToPadding="false"
+            android:paddingStart="20dp"
+            android:paddingEnd="0dp"
+            app:layoutManager="androidx.recyclerview.widget.LinearLayoutManager"
+            app:maxHeight="320dp" />
+
+        <com.fongmi.android.tv.ui.custom.CustomRecyclerView
+            android:id="@+id/audioRecycler"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:clipChildren="false"
+            android:clipToPadding="false"
+            android:paddingStart="24dp"
+            android:paddingEnd="0dp"
+            app:layoutManager="androidx.recyclerview.widget.LinearLayoutManager"
+            app:maxHeight="320dp" />
+
+    </androidx.appcompat.widget.LinearLayoutCompat>
+
+    <!-- 文本字幕列表：本面板不使用，保留逆向结构以便两份布局可逐行对照 -->
+    <com.fongmi.android.tv.ui.custom.CustomRecyclerView
+        android:id="@+id/recycler"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:clipChildren="false"
+        android:clipToPadding="false"
+        android:overScrollMode="never"
+        android:paddingStart="24dp"
+        android:paddingEnd="24dp"
+        android:paddingBottom="24dp"
+        android:visibility="gone"
+        app:layoutManager="androidx.recyclerview.widget.LinearLayoutManager"
+        app:maxHeight="160dp" />
+
+</androidx.appcompat.widget.LinearLayoutCompat>
