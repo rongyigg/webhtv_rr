@@ -187,7 +187,7 @@ import kotlinx.coroutines.withContext
  * 外观 / 焦点态（严格按《焦点总结》的三态）：
  * - 背景 = 首页大图极小尺寸解码后放大（等价高斯模糊）+ 半透明黑遮罩，同原版
  *   `SearchActivityV2` 的 `heroBitmap` 模糊 + `0x33000000` 蒙层；
- * - **聚焦**（胶囊 / 站点 Tab）→ 实心红渐变色块 #E50914 → #F44336 → 玫瑰粉 + 纯白字，无描边；
+ * - **聚焦**（胶囊 / 站点 Tab）→ 实心红渐变色块 #E50914 → #FF7A85 两段 + 纯白字，无描边；
  * - **失焦但仍选中、且焦点还在结果区** → 站点 Tab 挂红框描边 + 弱底，提示下方属于哪个站点；
  * - **焦点离开结果区**（回键盘 / 顶栏）→ 无红底无红框，选中态暂时休眠。
  */
@@ -1428,7 +1428,7 @@ private fun HeroWordSection(
 /**
  * 胶囊标签：**不铺纯黑**，底色沿用 `selector_item_round.xml` 的半透明黑（`#33000000`）；
  * 焦点态是原版 `shape_item_round_focused` 的**红色渐变色块**
- * （#E50914 → #F44336 → 玫瑰粉），整块实心、无描边。
+ * （#E50914 → #FF7A85 两段），整块实心、无描边。
  *
  * 底色药丸紧贴文字：横向 6dp、纵向 2dp（`shape_chip_round_normal.xml` 只声明了左右 6dp），
  * 不做大块 padding —— 大块 padding 会让半透明底看起来比文字宽一圈。
@@ -1452,7 +1452,7 @@ private fun HeroWordChip(
         modifier = modifier
             .then(if (requester != null) Modifier.focusRequester(requester) else Modifier)
             .clip(CHIP_SHAPE)
-            // 焦点态 = **红色渐变色块**（左深右浅：#E50914 → #F44336 → 玫瑰粉），
+            // 焦点态 = **红色渐变色块**（左深右浅：#E50914 → #FF7A85 两段），
             // 整块实心变红、无描边 —— 与原版截图里「开心锤锤」的焦点样式一致。
             .background(
                 brush = if (focused) HeroFocusBrush else SolidColor(CHIP_BG_NORMAL),
@@ -1924,7 +1924,7 @@ private val RESULT_BAND_HEIGHT = RESULT_SECTION_TOP_GAP + SITE_ROW_HEIGHT + SITE
 
 // 红色 @color/red = #E50914 与键盘常量一起抽到 HeroKeyboard.kt（internal ACCENT_RED）。
 
-// 焦点红块统一用全局 [HeroFocusBrush]（HeroCommonUi）：#E50914 → #F44336 → 玫瑰粉，
+// 焦点红块统一用全局 [HeroFocusBrush]（HeroCommonUi）：#E50914 → #FF7A85 两段，
 // 与首页分类 Tab、播放线路、换源弹窗站点标签共用同一支渐变，不再各自维护一份色标。
 
 // 历史最多 9 条（输入上限 19 字随键盘常量一起抽到 HeroKeyboard.kt）。

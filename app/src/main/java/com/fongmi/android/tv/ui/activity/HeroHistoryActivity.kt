@@ -17,7 +17,6 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.ViewModelProvider
-import com.fongmi.android.tv.BuildConfig
 import com.fongmi.android.tv.event.RefreshEvent
 import com.fongmi.android.tv.ui.hero.HeroImageLoader
 import com.fongmi.android.tv.ui.hero.HistoryScreen
@@ -46,16 +45,6 @@ class HeroHistoryActivity : ComponentActivity() {
         ViewModelProvider(this)[HistoryViewModel::class.java]
     }
 
-    /**
-     * Mock 开关：Intent extra [EXTRA_FORCE_MOCK_HISTORY] 优先，缺省取 [BuildConfig.DEBUG]。
-     *
-     * - Release 包 `BuildConfig.DEBUG == false` → 永远走真实数据；
-     * - Debug 包默认开启，但只在「真实历史为空」时才真的显示 Mock（见 `HistoryViewModel.loadInternal`）。
-     */
-    private val forceMockHistory: Boolean by lazy {
-        intent?.getBooleanExtra(EXTRA_FORCE_MOCK_HISTORY, BuildConfig.DEBUG) ?: BuildConfig.DEBUG
-    }
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.setBackgroundDrawable(ColorDrawable(Color.BLACK))
@@ -65,7 +54,7 @@ class HeroHistoryActivity : ComponentActivity() {
             systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
         }
         HeroImageLoader.install()
-        setContent { HistoryScreen(viewModel = viewModel, forceMock = forceMockHistory) }
+        setContent { HistoryScreen(viewModel = viewModel) }
     }
 
     override fun onStart() {
@@ -93,19 +82,8 @@ class HeroHistoryActivity : ComponentActivity() {
 
     companion object {
 
-        /** Intent extra：`--ez force_mock_history true/false`。缺省取 `BuildConfig.DEBUG`。 */
-        const val EXTRA_FORCE_MOCK_HISTORY = "force_mock_history"
-
         fun start(context: Context) {
             context.startActivity(Intent(context, HeroHistoryActivity::class.java))
-        }
-
-        /** 显式指定 Mock 开关的入口（仅调试用；[start] 的默认行为不变）。 */
-        fun start(context: Context, forceMock: Boolean) {
-            context.startActivity(
-                Intent(context, HeroHistoryActivity::class.java)
-                    .putExtra(EXTRA_FORCE_MOCK_HISTORY, forceMock),
-            )
         }
     }
 }

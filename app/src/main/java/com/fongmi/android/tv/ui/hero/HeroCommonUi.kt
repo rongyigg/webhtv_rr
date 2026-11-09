@@ -18,6 +18,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.ReadOnlyComposable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
@@ -29,11 +30,13 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.res.colorResource
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.TextUnit
@@ -47,19 +50,28 @@ import com.fongmi.android.tv.R
 // 1. [HeroAccentColor]：**描边 / 下划线 / 小竖条**用纯红 #FF0000
 //    （与海报卡 2dp 焦点框、选集格 2dp 焦点框同色）。
 // 2. [HeroFocusBrush]：**实心红块**（分类 Tab、搜索胶囊、站点 Tab、播放线路、分组按钮）
-//    统一用搜索页那支三段横向渐变 #E50914 → #F44336 → 玫瑰粉，
-//    即原版 `shape_item_round_focused` 的色标（@color/red → @color/red_500）。
+//    **直接读首页 Tab 栏的同一组资源** `home_tab_focus_start → home_tab_focus_end`
+//    （见 `HomeViewActivity.tabBackground`：2 段 LEFT_RIGHT 渐变 + 28dp 胶囊），
+//    不再单独维护色值，杜绝各页面各调一支红。
 //
 // 以后新增任何「实心焦点块」都直接用 [HeroFocusBrush]，不要再写纯红 solid。
 // ---------------------------------------------------------------------------
 internal val HeroAccentColor = Color(0xFFFF0000)
 
-/** 实心焦点块专用渐变：左深红 → 中红 → 右侧玫瑰粉，横向铺满被填充的控件。 */
-internal val HeroFocusBrush: Brush = Brush.horizontalGradient(
-    0.0f to Color(0xFFE50914),   // @color/red
-    0.55f to Color(0xFFF44336),  // @color/red_500
-    1.0f to Color(0xFFFF7A85),   // 玫瑰粉端：原版焦点块右端明显更浅
-)
+/**
+ * 实心焦点块专用渐变：与首页 Tab 栏焦点背景**同源、同向、同两段色标**。
+ *
+ * 直接读取 `colors.xml` 的 `home_tab_focus_start`（@color/red = #E50914）与
+ * `home_tab_focus_end`（#FF7A85），由 [colorResource] 在组合期解析 ——
+ * 首页（View 侧 `GradientDrawable`）与 Compose 侧永远同色，不存在第二份硬编码。
+ */
+internal val HeroFocusBrush: Brush
+    @Composable
+    @ReadOnlyComposable
+    get() = Brush.horizontalGradient(
+        0.0f to colorResource(R.color.home_tab_focus_start),
+        1.0f to colorResource(R.color.home_tab_focus_end),
+    )
 
 // ---------------------------------------------------------------------------
 // 统一弹窗外壳（ref_docs/dialog_source.xml）：深色半透明 #E6000000 + 16dp 圆角 + 18dp 内边距。
@@ -120,8 +132,9 @@ internal fun HeroSectionTitle(text: String, fontSize: TextUnit = SECTION_TITLE_S
 //   <FrameLayout homeBtnClip  24dp  background=@drawable/shape_oval_clip clipToOutline
 //     <ImageView homeBtnHome  16dp  src=@drawable/ic_home_logo layout_marginBottom=1dp
 //
-// 状态与 ref_docs/selector_home_logo 一致：常态 @color/white_10 椭圆，焦点 #E50914 椭圆；
+// 状态与 ref_docs/selector_home_logo 一致：常态 @color/white_10 椭圆，焦点渐变红椭圆；
 // 原版没有放大、没有白描边，这里也不加。
+// 焦点红与首页 Tab 栏同源（HeroFocusBrush），不再使用单独的实心 #E50914。
 // 方向键交给调用方按上下文处理（首页 ↓ 进 Tab，弹窗 ↓ 进结果卡片）。
 // ---------------------------------------------------------------------------
 private val HOME_LOGO_FRAME = 28.dp                 // homeBtn layout_width / layout_height
@@ -129,7 +142,6 @@ private val HOME_LOGO_CLIP = 24.dp                  // homeBtnClip layout_width 
 private val HOME_LOGO_ICON = 16.dp                  // homeBtnHome layout_width / layout_height
 private val HOME_LOGO_ICON_BOTTOM_MARGIN = 1.dp     // homeBtnHome layout_marginBottom
 private val HOME_LOGO_NORMAL = Color(0x1AFFFFFF)    // selector_home_logo 常态 = @color/white_10
-private val HOME_LOGO_FOCUSED = Color(0xFFE50914)   // selector_home_logo 焦点 = #E50914
 
 @Composable
 internal fun HeroHomeLogoButton(
@@ -145,7 +157,8 @@ internal fun HeroHomeLogoButton(
     Box(
         modifier = modifier
             .size(HOME_LOGO_FRAME)
-            .background(if (isFocused) HOME_LOGO_FOCUSED else HOME_LOGO_NORMAL, CircleShape)
+            // 焦点态 = 首页 Tab 同源渐变红圆；常态仍是 white_10 椭圆。
+            .background(if (isFocused) HeroFocusBrush else SolidColor(HOME_LOGO_NORMAL), CircleShape)
             .focusRequester(requester)
             .onFocusChanged { if (it.isFocused) onFocused() }
             .onPreviewKeyEvent { event ->

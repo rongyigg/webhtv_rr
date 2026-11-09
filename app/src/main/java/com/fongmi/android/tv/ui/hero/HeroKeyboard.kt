@@ -1,7 +1,7 @@
 package com.fongmi.android.tv.ui.hero
 
 import android.util.Log
-import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -38,17 +38,20 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.res.colorResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.TextFieldValue
@@ -196,8 +199,8 @@ internal fun KeyboardSection(
  * 单个按键：**严格 40 × 40dp**（`adapter_keyboard_text.xml` L10），4dp 圆角（`shape_keyboard_normal.xml`）、16sp 白字。
  *
  * 焦点反馈（TV 端核心）：
- * - 常态 `0x33FFFFFF`（半透明白）；**焦点纯红 `0xFFFF0000`**（[KEY_BG_FOCUSED] / HeroAccentColor）、文字纯白；
- * - 背景色用 `animateColorAsState` 做 90ms 过渡，遥控器连按时红底跟着焦点"滑"过去，不闪不跳；
+ * - 常态 `0x33FFFFFF`（半透明白）；**焦点 = 首页 Tab 同源的渐变红**（[HeroFocusBrush] 的两端色标）、文字纯白；
+ * - 背景用 90ms 的 `animateFloatAsState` 把常态底色分别插值到渐变两端，遥控器连按时红底跟着焦点"滑"过去，不闪不跳；
  * - `collectIsFocusedAsState()` 是主信号，`onFocusChanged` 只做兜底（极端机型上交互源可能不派发），
  *   两者取或，绝不会出现「焦点到了但按键还是灰的」。
  * - 只挂一个焦点节点（`clickable` 自带 focusable），再叠 `focusable()` 会分裂焦点、红底会丢。
@@ -213,18 +216,25 @@ internal fun KeyboardKey(
     val isFocused by interaction.collectIsFocusedAsState()
     var focusFlag by remember { mutableStateOf(false) }
     val focused = isFocused || focusFlag
-    // 红底跟随焦点：90ms 线性过渡，够快（TV 不能拖）又不会硬切闪屏。
-    val bgColor by animateColorAsState(
-        targetValue = if (focused) KEY_BG_FOCUSED else KEY_BG_NORMAL,
+    // 红底跟随焦点：90ms 过渡，够快（TV 不能拖）又不会硬切闪屏。
+    // 焦点色不是纯色：把常态底色分别插值到首页 Tab 渐变的两端（[HeroFocusBrush] 同源色标）。
+    val focusProgress by animateFloatAsState(
+        targetValue = if (focused) 1f else 0f,
         animationSpec = tween(durationMillis = KEY_FOCUS_FADE_MS),
         label = "keyFocusBg",
+    )
+    val focusStart = colorResource(R.color.home_tab_focus_start)
+    val focusEnd = colorResource(R.color.home_tab_focus_end)
+    val bgBrush = Brush.horizontalGradient(
+        0.0f to lerp(KEY_BG_NORMAL, focusStart, focusProgress),
+        1.0f to lerp(KEY_BG_NORMAL, focusEnd, focusProgress),
     )
 
     Box(
         modifier = Modifier
             .size(KEY_SIZE)                       // 40dp 写死，任何区域都不会被拉伸
             .clip(KEY_SHAPE)                      // 4dp 圆角
-            .background(bgColor, KEY_SHAPE)       // 焦点 = 纯红底
+            .background(bgBrush, KEY_SHAPE)       // 焦点 = 渐变红底
             .focusRequester(requester)
             .onFocusChanged { focusFlag = it.isFocused }
             .onPreviewKeyEvent { event ->
@@ -387,7 +397,7 @@ internal fun HeroSearchSubmit(
         modifier = Modifier
             .size(SEARCH_BUTTON_SIZE)
             .clip(CircleShape)
-            .background(if (focused) KEY_BG_FOCUSED else KEY_BG_NORMAL, CircleShape)
+            .background(if (focused) HeroFocusBrush else SolidColor(KEY_BG_NORMAL), CircleShape)
             .focusRequester(requester)
             .onFocusChanged { focusFlag = it.isFocused }
             .onPreviewKeyEvent { event ->
@@ -711,7 +721,6 @@ internal val INPUT_PADDING_H = 12.dp
 internal val KEY_SHAPE = RoundedCornerShape(4.dp)
 internal const val KEY_TEXT_SP = 16f
 internal val KEY_BG_NORMAL = Color(0x33FFFFFF)
-internal val KEY_BG_FOCUSED = Color(0xFFFF0000)      // HeroAccentColor：焦点红底
 internal const val KEY_FOCUS_FADE_MS = 90            // 红底跟随焦点的过渡时长（TV 要快）
 
 // 红色：@color/red = #e50914（shape_red_bar.xml L4）。输入框焦点红框用它。

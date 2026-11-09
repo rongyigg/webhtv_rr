@@ -1,9 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-    历史页「查看详情」按钮 · 焦点态。
+    历史页「查看详情」按钮 · 焦点态（旧 View 版 activity_hero_history.xml 仍在引用）。
 
-    焦点色统一用 @color/hero_accent（= 首页 HeroAccentColor 的 #FFFF0000），
-    与海报卡 2dp 焦点框、顶栏红色短横线是同一个红，不再引入第二种高亮色。
+    焦点底色与 Compose 侧 HistoryScreen / HeroFocusBrush 保持一致：
+    首页 Tab 栏同源两段渐变 home_tab_focus_start → home_tab_focus_end，不再使用实心纯红。
     圆角 / 内边距与常态完全一致，避免焦点切换时按钮尺寸跳动。
 -->
 <shape xmlns:android="http://schemas.android.com/apk/res/android"
@@ -11,7 +11,11 @@
 
     <corners android:radius="16dp" />
 
-    <solid android:color="@color/hero_accent" />
+    <gradient
+        android:angle="0"
+        android:endColor="@color/home_tab_focus_end"
+        android:startColor="@color/home_tab_focus_start"
+        android:type="linear" />
 
     <padding
         android:left="12dp"

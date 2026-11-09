@@ -6,9 +6,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModel
 import com.fongmi.android.tv.App
-import com.fongmi.android.tv.api.config.VodConfig
 import com.fongmi.android.tv.bean.History
-import com.fongmi.android.tv.db.AppDatabase
 import com.fongmi.android.tv.ui.activity.HeroDetailActivity
 import com.fongmi.android.tv.ui.activity.VideoActivity
 import coil3.SingletonImageLoader
@@ -39,23 +37,12 @@ class HistoryViewModel : ViewModel() {
         private set
 
     /**
-     * Mock 回退开关（默认关闭）。
+     * 首次装载（对应 `a0()` → `m11` case 3）：后台读库 → 主线程刷新。
      *
-     * 语义是「**允许**在真实历史为空时注入 [MockHistory]」，**不是**「强制覆盖真实数据」：
-     * 真实记录存在时永远优先展示真实数据。由 [load] 写入，[reload] 沿用同一值。
+     * 数据唯一来源是 `History.getForDisplay()`（内部已含「全局历史聚合 + 按 createTime 倒序」），
+     * 不再有 Mock 回退分支：真实记录为空就直接进入空态。
      */
-    private var mockFallback = false
-
-    /** 当前列表是不是 [MockHistory] 注入的假数据（决定删除时要不要打数据库）。 */
-    private var mockActive = false
-
-    /**
-     * 首次装载（对应 `a0()` → `m11` case 3）。
-     *
-     * @param forceMock 是否允许空列表回退到 Mock；由 `HistoryScreen` 从 Activity 的 Intent extra 传入。
-     */
-    fun load(forceMock: Boolean = mockFallback) {
-        mockFallback = forceMock
+    fun load() {
         loadInternal(keepSelection = false)
     }
 
@@ -68,12 +55,8 @@ class HistoryViewModel : ViewModel() {
         Task.execute {
             // `History.getForDisplay()` 内部已经做了「全局历史聚合 + 排序」（History.java L201-206），
             // 这里不再二次排序（原版 `History.get()` 的排序规则见待确认清单）。
-            val real = History.getForDisplay().toList()
-            // Mock 只做「空列表回退」：真实记录存在时永远优先真实数据。
-            val mock = mockFallback && real.isEmpty()
-            val items = if (mock) MockHistory.items() else real
+            val items = History.getForDisplay().toList()
             App.post {
-                mockActive = mock
                 val index = when {
                     items.isEmpty() -> -1
                     previousKey == null -> 0
@@ -113,12 +96,6 @@ class HistoryViewModel : ViewModel() {
         val items = state.items
         if (index < 0 || index >= items.size) return
         val target = items[index]
-        if (mockActive) {
-            // Mock 数据从未入库：只做内存移除，不打 `History.delete()`，
-            // 避免拿一个假 key 去碰真实数据库（也避免误删同 key 的真实记录）。
-            removeItemAt(index)
-            return
-        }
         Task.execute {
             target.delete()
             App.post { removeItemAt(index) }
@@ -478,111 +455,4 @@ internal object HeroImagePrefetch {
             // 预热失败不影响主流程（原版 `q0` 的预热同样整体包在 try/catch 里）。
         }
     }
-}
-
-/**
- * 历史页本地 Mock 数据（**只在内存里，绝不落库**）。
- *
- * 用途：在 TV 上直观验收 [HistoryScreen] 的布局、焦点联动、进度条与长按删除。
- *
- * 触发规则见 [HistoryViewModel.loadInternal]：
- * `mockFallback == true` **且** 真实历史为空时才注入；真实记录存在时永远优先真实数据。
- *
- * 三条硬约束（都是读 [History] bean 的既有行为推出来的，不是猜的）：
- * 1. `key` 必须非空且唯一 —— `History.getKey()` 标了 `@NonNull`，`getSiteKey()` 直接
- *    `getKey().split(AppDatabase.SYMBOL)[0]`，为 null 会 NPE；格式与真实记录一致：`siteKey@@@vodId`。
- * 2. `cid` 取当前配置 id —— `History.getSiteName()` 首句就是
- *    `if (getCid() != VodConfig.getCid()) return "其他配置"`，写死一个值会让卡片角标变成「其他配置」。
- * 3. `siteName` **没有 setter**，它是 `History.getSiteName()` 按 `getSiteKey()` 反查 `VodConfig` 的派生值，
- *    所以这里让 `key` 指到当前配置的第一个真实站点，角标才能显示成真实站点名。
- *
- * 构造方式：`History()` + 既有 setter，**不调 `save()`**，因此不会写进本地数据库。
- */
-internal object MockHistory {
-
-    // TMDB 官方 image CDN（https）。本机无外网，未做可达性验证；
-    // 要换图只改这 8 行，其余代码不用动。
-    private const val POSTER_A = "https://image.tmdb.org/t/p/w500/9gk7adHYeDvHkCSEqAvQNLV5Uge.jpg"
-    private const val BACKDROP_A = "https://image.tmdb.org/t/p/w1280/s3TBrRGB1iav7gFOCNx3H31MoES.jpg"
-    private const val POSTER_B = "https://image.tmdb.org/t/p/w500/gEU2QniE6E77NI6lCU6MxlNBvIx.jpg"
-    private const val POSTER_C = "https://image.tmdb.org/t/p/w500/qJ2tW6WMUDux911r6m7haRef0WH.jpg"
-    private const val POSTER_D = "https://image.tmdb.org/t/p/w500/ggFHVNu6YYI5L9pCfOacjizRGt.jpg"
-    private const val BACKDROP_D = "https://image.tmdb.org/t/p/w1280/9faGSFi5jam6pDWGNd0p8JcJgXQ.jpg"
-    private const val POSTER_E = "https://image.tmdb.org/t/p/w500/49WJfeN0moxb9IPfGn8AIqMGskD.jpg"
-    private const val BACKDROP_E = "https://image.tmdb.org/t/p/w1280/xJHokMbljvjADYdit5fK5VQsXEG.jpg"
-
-    /** 第 5 条的超长备注：用于验证 `pageSite` 单行裁剪 + 元数据行裁剪。 */
-    private const val LONG_REMARKS =
-        "更新至第30集 4K HDR 高码率 国语中字 全集无删减 导演剪辑版 特别加长版 附花絮与幕后访谈完整收录"
-
-    /** 第 5 条的超长剧名：`heroNameText` 是唯一带 `basicMarquee` 的控件（`HistoryScreen` L483）。 */
-    private const val LONG_TITLE = "三体：黑暗森林面壁计划特别加长导演剪辑完整版"
-
-    fun items(): List<History> {
-        val siteKey = currentSiteKey()
-        val cid = currentCid()
-        val now = System.currentTimeMillis()
-        return listOf(
-            // 1) 全要素：海报 + 背景 + 站点角标 + 进度 + 备注。
-            mockItem(1, siteKey, cid, now, "盗梦空间", POSTER_A, BACKDROP_A, "更新至12集",
-                120_000L, 2_700_000L, "2010", "科幻", "movie"),
-            // 2) 只有海报、无背景、无进度 → 右上角 posterCard 回退 + 进度区整体隐藏。
-            mockItem(2, siteKey, cid, now, "星际穿越", POSTER_B, "", "HD中字",
-                0L, 0L, "2014", "科幻", "movie"),
-            // 3) 无背景 + 有进度 → posterCard 回退与进度区同屏（原版「有 TMDB Logo」在本工程无数据源）。
-            mockItem(3, siteKey, cid, now, "蝙蝠侠：黑暗骑士", POSTER_C, "", "更新至第5集",
-                600_000L, 1_500_000L, "2008", "动作", "tv"),
-            // 4) 无海报无背景 → HeroPosterCard 占位图 + 全屏纯黑；备注走「全N集」分支。
-            mockItem(4, siteKey, cid, now, "庆余年", "", "", "全24集",
-                0L, 0L, "2019", "古装", "tv"),
-            // 5) 超长备注 + 超长剧名 → 跑马灯 + 各处单行裁剪。
-            mockItem(5, siteKey, cid, now, LONG_TITLE, POSTER_D, BACKDROP_D, LONG_REMARKS,
-                0L, 0L, "2023", "科幻", "tv"),
-            // 6) 有进度 + 「第3期」→ `HistoryEpisodeLabel` 的 P0 分支应解析成 E03。
-            mockItem(6, siteKey, cid, now, "歌手2024", POSTER_E, BACKDROP_E, "第3期",
-                1_200_000L, 5_400_000L, "2024", "音乐", "tv"),
-        )
-    }
-
-    @Suppress("LongParameterList")
-    private fun mockItem(
-        index: Int,
-        siteKey: String,
-        cid: Int,
-        createTime: Long,
-        name: String,
-        poster: String,
-        backdrop: String,
-        remarks: String,
-        position: Long,
-        duration: Long,
-        year: String,
-        typeName: String,
-        mediaType: String,
-    ): History = History().apply {
-        // `siteKey` 取不到时退化成空串：`getSiteKey()` 会返回 ""，
-        // `getSiteName()` 走 `getSites().isEmpty()` 分支返回 ""，只是不显示角标，不会 NPE。
-        key = "$siteKey${AppDatabase.SYMBOL}mock-history-$index"
-        vodName = name
-        vodPic = poster
-        wallPic = backdrop
-        vodRemarks = remarks
-        this.position = position
-        this.duration = duration
-        this.cid = cid
-        this.createTime = createTime - index * 60_000L
-        this.year = year
-        this.typeName = typeName
-        this.mediaType = mediaType
-        vodFlag = ""
-        episodeUrl = ""
-        sourceBindingKey = ""
-    }
-
-    /** 当前配置里第一个站点 key；`VodConfig` 未就绪或站点为空时返回 ""。 */
-    private fun currentSiteKey(): String =
-        runCatching { VodConfig.get().sites.firstOrNull()?.key.orEmpty() }.getOrDefault("")
-
-    /** 当前配置 id；`VodConfig` 未就绪时返回 0（此时角标会显示「其他配置」，但不会崩）。 */
-    private fun currentCid(): Int = runCatching { VodConfig.getCid() }.getOrDefault(0)
 }

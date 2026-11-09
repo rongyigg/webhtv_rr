@@ -1,13 +1,18 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  首页 homeBtn「聚焦」底：实心红圆。
+  首页 homeBtn「聚焦」底：渐变红圆（与首页 Tab 栏焦点背景同源）。
 
-  颜色只用真值：@color/red = #E50914（ref_docs/shape_red_bar.xml / shape_tmdb_badge.xml 原值），
-  与 ref_docs/selector_home_logo_source.xml 指向的 shape_home_logo_source_focused 同色。
-  形状 oval、无描边、无渐变 —— 与 ref_docs/shape_home_logo_normal_white.xml 的结构一一对应
+  色标直接复用 `colors.xml` 的 `home_tab_focus_start`（@color/red = #E50914）与
+  `home_tab_focus_end`（#FF7A85），与 Compose 侧 `HeroFocusBrush` 完全一致；
+  angle=0 = 从左到右。
+  形状 oval、无描边 —— 与 ref_docs/shape_home_logo_normal_white.xml 的结构一一对应
   （那个文件是常态，这里是它缺的那一档聚焦态）。
 -->
 <shape xmlns:android="http://schemas.android.com/apk/res/android"
     android:shape="oval">
-    <solid android:color="@color/red" />
+    <gradient
+        android:angle="0"
+        android:endColor="@color/home_tab_focus_end"
+        android:startColor="@color/home_tab_focus_start"
+        android:type="linear" />
 </shape>

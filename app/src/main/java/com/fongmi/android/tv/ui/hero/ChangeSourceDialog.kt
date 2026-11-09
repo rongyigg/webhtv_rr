@@ -1105,7 +1105,14 @@ internal class ChangeSourceDialog private constructor(
         /** 窗口上下至少留出的屏幕边距，避免顶到屏幕边缘。 */
         private const val WINDOW_MARGIN_DP = 16
 
-        private const val DIM_AMOUNT = 0.6f
+        /**
+         * 窗口遮罩暗度：**50%**。
+         *
+         * 与选集弹窗的自绘遮罩 `DIALOG_SCRIM = 0x80000000` 对齐；工程既有弹窗也都在
+         * 0.56–0.6 之间（`TmdbDetailActivity 0.56`、`ChoiceDialog 0.58`）。
+         * 原来的 0.6 叠在深色 Hero 页上接近全黑，弹窗外的背景完全看不见，已按需求调浅。
+         */
+        private const val DIM_AMOUNT = 0.5f
 
         /** 初始焦点重试：ViewHolder 未布局完成时，焦点会停在 RecyclerView 上，标签就没有红底。 */
         private const val FOCUS_RETRY_COUNT = 6

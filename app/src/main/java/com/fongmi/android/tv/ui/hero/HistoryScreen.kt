@@ -43,7 +43,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -59,6 +58,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shadow
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
@@ -82,7 +82,6 @@ import androidx.compose.ui.viewinterop.AndroidView
 import coil3.compose.AsyncImage
 import com.fongmi.android.tv.R
 import com.fongmi.android.tv.bean.History
-import com.fongmi.android.tv.utils.HistoryProgressFormatter
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.coroutineScope
@@ -111,13 +110,6 @@ import kotlin.math.min
 fun HistoryScreen(
     viewModel: HistoryViewModel,
     modifier: Modifier = Modifier,
-    /**
-     * Mock 开关：`true` 时允许在真实历史为空的情况下注入 [MockHistory]。
-     *
-     * 默认 `false` → 永远走真实数据。真实历史非空时即使为 `true` 也仍显示真实数据。
-     * 由 `HeroHistoryActivity` 从 Intent extra 读入（缺省取 `BuildConfig.DEBUG`）。
-     */
-    forceMock: Boolean = false,
 ) {
     val state = viewModel.state
     val context = LocalContext.current
@@ -138,35 +130,13 @@ fun HistoryScreen(
     val scope = rememberCoroutineScope()
     val contentAlpha = remember { Animatable(0f) }
 
-    // ---- 临时：UI 层假数据（FORCE_FAKE_RENDER）------------------------------
-    // 假列表用 mutableStateListOf，长按删除才能真正从列表里消失。
-    val fakeItems = remember { mutableStateListOf<History>().apply { addAll(fakeHistoryItems()) } }
-    // 假数据模式下自己维护选中项：ViewModel 的列表还是空的，select() 拿不到东西。
-    var fakeSelected by remember { mutableIntStateOf(0) }
-
-    // 渲染用的状态：假数据模式把 items / hero / selectedIndex 整体换掉，
-    // 下游 LazyRow、左侧信息区、进度区拿到的就是这一份，签名都不用改。
-    val renderState = if (FORCE_FAKE_RENDER) {
-        val safeIndex = if (fakeItems.isEmpty()) -1 else fakeSelected.coerceIn(0, fakeItems.size - 1)
-        state.copy(
-            items = fakeItems.toList(),
-            selectedIndex = safeIndex,
-            loading = false,
-            loaded = true,
-            empty = fakeItems.isEmpty(),
-            hero = buildFakeHero(fakeItems.getOrNull(safeIndex)),
-        )
-    } else {
-        state
-    }
-
     // ---- 编辑模式三件事：进入 / 退出 / 确认删除 ------------------------------
     // 都是普通局部函数（非 @Composable），只在按键回调里被调用，不参与重组。
 
     fun enterEditMode() {
         if (isEditMode) return
         isEditMode = true
-        Log.d(LOG_TAG_EDIT, "进入编辑模式，遮罩卡片数 = ${renderState.items.size}")
+        Log.d(LOG_TAG_EDIT, "进入编辑模式，遮罩卡片数 = ${state.items.size}")
     }
 
     fun exitEditMode() {
@@ -176,48 +146,36 @@ fun HistoryScreen(
     }
 
     fun confirmDelete(index: Int) {
-        val items = renderState.items
+        val items = state.items
         if (index !in items.indices) {
             exitEditMode()
             return
         }
         Log.d(LOG_TAG_EDIT, "删除第 $index 条：${items[index].vodName}")
-        if (FORCE_FAKE_RENDER) {
-            // 假数据只在内存里，直接移除；选中项回退到删除位置（同 `m11` case 1 L39 的公式）。
-            if (index in fakeItems.indices) fakeItems.removeAt(index)
-            fakeSelected = if (fakeItems.isEmpty()) -1 else index.coerceAtMost(fakeItems.size - 1)
-        } else {
-            viewModel.deleteAt(index)
-        }
+        viewModel.deleteAt(index)
         isEditMode = false
         refocusAfterDelete = true
     }
     // -----------------------------------------------------------------------
 
-    // 排查用日志：确认 LazyRow 真的拿到 6 条。`adb logcat -s MockDebug`
-    LaunchedEffect(renderState.items.size) {
-        Log.d(LOG_TAG_FAKE, "当前渲染的数据量: ${renderState.items.size}")
-    }
-    // -----------------------------------------------------------------------
-
     // 首次装载（对应 `o11.a0()` + `m11` case 3）。
-    LaunchedEffect(forceMock) { viewModel.load(forceMock) }
+    LaunchedEffect(Unit) { viewModel.load() }
 
     // 数据到达：内容 alpha 0→1，100ms（对应 `posterContent` 从 gone 到可见的淡入）。
-    LaunchedEffect(renderState.loaded) {
-        if (renderState.loaded) contentAlpha.animateTo(1f, tween(CONTENT_FADE_MS))
+    LaunchedEffect(state.loaded) {
+        if (state.loaded) contentAlpha.animateTo(1f, tween(CONTENT_FADE_MS))
     }
 
     // 进页默认焦点：第一张卡（对应 `m11` case 1/2 的 `recycler.post { focusPoster(0) }`）。
-    LaunchedEffect(renderState.loaded) {
-        if (renderState.loaded && renderState.items.isNotEmpty()) pendingFocus = 0
+    LaunchedEffect(state.loaded) {
+        if (state.loaded && state.items.isNotEmpty()) pendingFocus = 0
     }
 
     // 删除后把焦点还给「回退后的选中项」。
-    LaunchedEffect(renderState.selectedIndex, renderState.items.size) {
-        if (refocusAfterDelete && renderState.items.isNotEmpty()) {
+    LaunchedEffect(state.selectedIndex, state.items.size) {
+        if (refocusAfterDelete && state.items.isNotEmpty()) {
             refocusAfterDelete = false
-            pendingFocus = renderState.selectedIndex.coerceAtLeast(0)
+            pendingFocus = state.selectedIndex.coerceAtLeast(0)
         }
     }
 
@@ -241,10 +199,10 @@ fun HistoryScreen(
             // ---------------------------------------------------------------
             // 1) 背景层（自下而上）
             // ---------------------------------------------------------------
-            HeroBackdrop(url = renderState.hero.backdropUrl)
+            HeroBackdrop(url = state.hero.backdropUrl)
 
             // maskLeft / maskBottom 在 XML 里初始 gone，`o11.H()` L163-164 建视图时置为 visible。
-            if (renderState.loaded) {
+            if (state.loaded) {
                 HeroMaskLeft()
                 HeroMaskBottom()
             }
@@ -252,17 +210,17 @@ fun HistoryScreen(
             // ---------------------------------------------------------------
             // 2) 左上角 pageSite（XML L32-47）：13sp bold 白 / 26dp / 12dp 内边距 / 24dp 外边距
             // ---------------------------------------------------------------
-            if (renderState.loaded && renderState.hero.pageSite.isNotEmpty()) {
-                PageSite(text = renderState.hero.pageSite, modifier = Modifier.align(Alignment.TopStart))
+            if (state.loaded && state.hero.pageSite.isNotEmpty()) {
+                PageSite(text = state.hero.pageSite, modifier = Modifier.align(Alignment.TopStart))
             }
 
             // ---------------------------------------------------------------
             // 3) 右上角 posterCard（XML L48-66）：150×210 / 12dp 圆角 / 4dp 内边距 / 72dp 顶 / 80dp 右
             //    仅在背景大图为空时显示（`o11.q0` L527-535）。
             // ---------------------------------------------------------------
-            if (renderState.loaded && renderState.hero.backdropUrl.isEmpty() && renderState.hero.posterUrl.isNotEmpty()) {
+            if (state.loaded && state.hero.backdropUrl.isEmpty() && state.hero.posterUrl.isNotEmpty()) {
                 PosterFallback(
-                    url = renderState.hero.posterUrl,
+                    url = state.hero.posterUrl,
                     modifier = Modifier.align(Alignment.TopEnd),
                 )
             }
@@ -270,33 +228,28 @@ fun HistoryScreen(
             // ---------------------------------------------------------------
             // 4) 加载 / 空态（ProgressLayout 语义：`view_progress` / `view_empty`）
             // ---------------------------------------------------------------
-            if (!renderState.loaded) {
+            if (!state.loaded) {
                 CircularProgressIndicator(
                     color = Color.White,
                     modifier = Modifier.align(Alignment.Center),
                 )
-            } else if (renderState.items.isEmpty()) {
+            } else if (state.items.isEmpty()) {
                 HistoryEmptyState(modifier = Modifier.align(Alignment.Center))
             }
 
             // ---------------------------------------------------------------
             // 5) 底部内容区（XML L72-239 `posterContent`，alignParentBottom）
             // ---------------------------------------------------------------
-            if (renderState.loaded && renderState.items.isNotEmpty()) {
+            if (state.loaded && state.items.isNotEmpty()) {
                 PosterContent(
-                    state = renderState,
+                    state = state,
                     contentAlpha = contentAlpha.value,
                     listState = listState,
                     resumeFocus = resumeFocus,
                     pendingFocus = pendingFocus,
                     onFocusConsumed = { pendingFocus = -1 },
                     onCardFocused = { index ->
-                        if (FORCE_FAKE_RENDER) {
-                            // 假数据模式：选中项在 UI 层自己维护，不走 ViewModel。
-                            fakeSelected = index
-                        } else if (state.selectedIndex != index) {
-                            viewModel.select(index)
-                        }
+                        if (state.selectedIndex != index) viewModel.select(index)
                         // 焦点滚动对齐到起点（`o11.H()` L173 `setFocusScrollStrategy(0)`）。
                         scope.launch { listState.scrollToItem(index) }
                     },
@@ -312,10 +265,10 @@ fun HistoryScreen(
                     onCardUp = {
                         runCatching { resumeFocus.requestFocus() }
                     },
-                    // 「查看详情」必须显式传当前项：`openDetail(activity)` 的默认参数取的是
-                    // ViewModel 的 `state.selectedItem`，假数据模式下那是空的 → `open()` 直接 return。
+                    // 「查看详情」显式传当前选中项：`openDetail(activity)` 的默认参数取
+                    // ViewModel 的 `state.selectedItem`，这里直接传渲染中的同一份数据，避免两处不同步。
                     onResumeClick = {
-                        val currentItem = renderState.selectedItem
+                        val currentItem = state.selectedItem
                         val activity = context.findActivity()
                         Log.e(LOG_TAG_DETAIL, "查看详情被点击 activity=$activity currentItem=${currentItem?.vodName}")
                         if (activity == null) {
@@ -326,7 +279,7 @@ fun HistoryScreen(
                             viewModel.openDetail(activity, currentItem)
                         }
                     },
-                    onResumeDown = { pendingFocus = renderState.selectedIndex.coerceAtLeast(0) },
+                    onResumeDown = { pendingFocus = state.selectedIndex.coerceAtLeast(0) },
                     modifier = Modifier.align(Alignment.BottomCenter),
                 )
             }
@@ -705,7 +658,8 @@ private fun ResumeButton(
                 }
             }
             .clip(RESUME_SHAPE)
-            .background(if (isFocused) RESUME_BACKGROUND_FOCUSED else RESUME_BACKGROUND_IDLE)
+            // 焦点态 = 与首页 Tab 同源的 [HeroFocusBrush] 渐变红块，不再用纯红 solid。
+            .background(if (isFocused) HeroFocusBrush else SolidColor(RESUME_BACKGROUND_IDLE))
             .clickable(interactionSource = interaction, indication = null, onClick = onClick)
             .padding(horizontal = RESUME_PADDING_H),
         verticalAlignment = Alignment.CenterVertically,
@@ -1178,9 +1132,8 @@ private val RESUME_PADDING_H = 16.dp
 /** `shape_item_round_*` 未收录 → 4dp 占位（待确认 #3）。 */
 private val RESUME_SHAPE = RoundedCornerShape(4.dp)
 
-/** 常态 `white_10` / 焦点 `hero_accent`（工程既有 token，同 HeroDetailActionButton）。 */
+/** 常态 `white_10`；焦点态改用 [HeroFocusBrush]（与首页 Tab 同源渐变红）。 */
 private val RESUME_BACKGROUND_IDLE = Color(0x1AFFFFFF)
-private val RESUME_BACKGROUND_FOCUSED = Color(0xFFFF0000)
 
 /** `progressGroup` 宽 200dp / marginStart 20dp（XML L180-182）。 */
 private val PROGRESS_GROUP_WIDTH = 200.dp
@@ -1214,76 +1167,3 @@ private const val BACKDROP_START_DELAY_MS = 220L
 
 /** 内容淡入 100ms（`posterContent` 从 gone → visible）。 */
 private const val CONTENT_FADE_MS = 100
-
-// ---------------------------------------------------------------------------
-// 临时：UI 层暴力假数据渲染（排查卡片 / 焦点联动用，正式逻辑不依赖它）
-// ---------------------------------------------------------------------------
-
-/**
- * `true` = 完全绕过 ViewModel，直接用本地假列表渲染。
- *
- * **不能用 `BuildConfig.DEBUG` 当这个开关** —— release 包里 `DEBUG == false`，
- * 一旦发版就又会退回空态，等于没改。这里用常量，任何 variant 都生效。
- *
- * 排查完把这里改成 `false` 即可，其余代码不用动。
- */
-private const val FORCE_FAKE_RENDER = true
-
-private const val LOG_TAG_FAKE = "MockDebug"
-
-/**
- * 6 条假数据：不设图片 URL（避免 TV 上等网络卡死）。
- *
- * `key` 必须写：`History.getKey()` 标了 `@NonNull`，而 `LazyRow` 的 `itemsIndexed(key = ...)`
- * 和 `History.getSiteKey()` 都直接读它，为 null 会当场崩。
- */
-private fun fakeHistoryItems(): List<History> = List(6) { i ->
-    History().apply {
-        key = "fake@@@${i + 1}"
-        vodName = "测试片名_${i + 1}"
-        vodRemarks = "更新至第${i + 1}集"
-        vodPic = ""
-        wallPic = ""
-        vodFlag = ""
-        episodeUrl = ""
-        // 奇偶交替：奇数条带进度，用来验证进度条与「集数」文案；偶数条无进度。
-        position = if (i % 2 == 0) 0L else (i + 1) * 60_000L
-        duration = if (i % 2 == 0) 0L else 2_700_000L
-    }
-}
-
-/**
- * 从假 [History] 直接算左侧 Hero 信息。
- *
- * 等价于 `HistoryViewModel.buildHero`，但完全在 UI 层算，**不碰 ViewModel**
- * （ViewModel 的列表还是空的，`select()` 拿不到数据，所以这里必须自己算，
- * 否则焦点移动时左侧信息、进度条会一直是空的）。
- */
-private fun buildFakeHero(item: History?): HeroInfo {
-    if (item == null) return HeroInfo()
-    val name = item.vodName.orEmpty()
-    val remarks = item.vodRemarks.orEmpty()
-    val showProgress = item.position > 0 && item.duration > 0
-    return HeroInfo(
-        name = name,
-        meta = HistoryMetaText.build(item),
-        desc = "",
-        pageSite = remarks,
-        episode = if (showProgress) HistoryEpisodeLabel.resolve(remarks, name) else "",
-        progressText = if (showProgress) {
-            "${HistoryProgressFormatter.format(item.position, item.duration)} / " +
-                HistoryProgressFormatter.format(item.duration, item.duration)
-        } else {
-            ""
-        },
-        progress = if (showProgress) {
-            (item.position.toFloat() / item.duration.toFloat()).coerceIn(0f, 1f)
-        } else {
-            0f
-        },
-        showProgress = showProgress,
-        backdropUrl = "",
-        posterUrl = "",
-        logoUrl = "",
-    )
-}

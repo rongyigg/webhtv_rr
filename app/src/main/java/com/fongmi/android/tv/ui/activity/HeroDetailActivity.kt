@@ -66,6 +66,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.Shadow
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
@@ -2794,7 +2795,8 @@ private fun HeroToggleButton(
 }
 
 /**
- * 选集格子：高 34dp、16sp 居中、单行 `basicMarquee()` 防溢出，焦点态红框，当前播放集红字。
+ * 选集格子：高 34dp、16sp 居中、单行 `basicMarquee()` 防溢出。
+ * 焦点态 = [HeroFocusBrush] 渐变红块 + `HeroAccentColor` 2dp 环；当前播放集红字。
  * 方向键不在这里处理：统一交给网格层的 `onKeyEvent`，保证边界切组判断只有一处。
  */
 @Composable
@@ -2820,9 +2822,10 @@ private fun HeroEpisodeCell(
             .background(
                 when {
                     // 动作项永远不亮焦点红块：它不能被误认为「可播放」。
-                    isFocused && !actionOnly -> EPISODE_CELL_FOCUS_BACKGROUND
-                    actionOnly -> EPISODE_CELL_ACTION_BACKGROUND
-                    else -> EPISODE_CELL_BACKGROUND
+                    // 焦点态与其他实心块共用首页 Tab 同源的 [HeroFocusBrush]。
+                    isFocused && !actionOnly -> HeroFocusBrush
+                    actionOnly -> SolidColor(EPISODE_CELL_ACTION_BACKGROUND)
+                    else -> SolidColor(EPISODE_CELL_BACKGROUND)
                 },
             )
             .then(
@@ -3369,7 +3372,17 @@ private val DETAIL_ACTION_IDLE_BACKGROUND = Color(0x1AFFFFFF) // white_10
 // 统一弹窗外壳：外壳实现与常量已抽到 HeroCommonUi.HeroDialogShell（选集 / 换源共用）
 // ---------------------------------------------------------------------------
 private const val DIALOG_WIDTH_FRACTION = 0.82f
-private val DIALOG_SCRIM = Color(0x99000000)
+
+/**
+ * 弹窗背后的自绘遮罩。
+ *
+ * Compose `Dialog` 不能像 `Window.setDimAmount()` 那样直接调窗口暗度（项目内也没有
+ * `DialogWindowProvider` 先例），所以选集弹窗用这层全屏自绘遮罩代替窗口 dim。
+ * 取 50%（`0x80000000`）：与换源弹窗的 `DIM_AMOUNT = 0.5f`、工程既有
+ * `TmdbDetailActivity 0.56` / `ChoiceDialog 0.58` 同一量级，背景必须能透出来，
+ * 不能再回到 60%（`0x99000000`）那种「纯黑 + 纯红」的刺眼组合。
+ */
+private val DIALOG_SCRIM = Color(0x80000000)
 
 // 选集弹窗本地偏好（SharedPreferences）：跨剧、退弹窗、杀进程都保持上次的列数与排序
 private const val DIALOG_PREFS_NAME = "hero_detail_ui"
@@ -3429,7 +3442,6 @@ private val EPISODE_CELL_SHAPE = RoundedCornerShape(6.dp)
 private val EPISODE_CELL_BORDER = 2.dp
 private val EPISODE_CELL_H_PADDING = 8.dp
 private val EPISODE_CELL_BACKGROUND = Color(0x14FFFFFF)
-private val EPISODE_CELL_FOCUS_BACKGROUND = Color(0x1FFFFFFF)
 
 // 动作指令集数（`msubinfo-...` 等）专用：底色更暗、字更灰，和「可播放的集数」一眼分开。
 private val EPISODE_CELL_ACTION_BACKGROUND = Color(0x0AFFFFFF)

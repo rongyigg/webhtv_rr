@@ -1,4 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+  换源弹窗（View 版 dialog_source.xml）小房子按钮的聚焦态：
+  与首页 homeBtn、Compose HeroFocusBrush 共用同一支两段渐变（home_tab_focus_start → home_tab_focus_end）。
+-->
 <shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="oval">
-    <solid android:color="#e50914" />
+    <gradient
+        android:angle="0"
+        android:endColor="@color/home_tab_focus_end"
+        android:startColor="@color/home_tab_focus_start"
+        android:type="linear" />
 </shape>

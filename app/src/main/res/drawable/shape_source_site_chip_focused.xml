@@ -2,8 +2,9 @@
 <!--
   换源弹窗（ChangeSourceDialog）站点标签的焦点态：红渐变色块 + 白字。
 
-  色标与 Compose 侧 HeroCommonUi.HeroFocusBrush 完全一致（全站实心焦点块统一这一支渐变）：
-    #E50914（@color/red）→ #F44336（@color/red_500）→ #FF7A85（玫瑰粉端）
+  色标与 Compose 侧 HeroCommonUi.HeroFocusBrush、首页 Tab 栏焦点背景
+  （HomeViewActivity.tabBackground）完全一致 —— 只有两段，不再插中间色：
+    #E50914（@color/home_tab_focus_start = @color/red）→ #FF7A85（@color/home_tab_focus_end）
   angle=0 = 从左到右，对应 Compose 的 Brush.horizontalGradient。
 
   与常态 `shape_source_chip_round_normal` 保持同一套 padding（左右各 6dp）；
@@ -15,9 +16,8 @@
     <shape android:shape="rectangle">
         <gradient
             android:angle="0"
-            android:centerColor="@color/red_500"
-            android:endColor="#FFFF7A85"
-            android:startColor="@color/red"
+            android:endColor="@color/home_tab_focus_end"
+            android:startColor="@color/home_tab_focus_start"
             android:type="linear" />
         <corners android:radius="28dp" />
         <padding

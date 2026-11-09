@@ -5,7 +5,7 @@
       android:background="@drawable/selector_home_logo"
 
   两档：
-    - focused  → shape_home_logo_focused：实心红圆（@color/red #E50914）
+    - focused  → shape_home_logo_focused：渐变红圆（home_tab_focus_start → home_tab_focus_end，与首页 Tab 同源）
     - 默认      → shape_home_logo_normal ：细红边框 + 透明填充（1dp @color/red）
 
   与换源弹窗的 `selector_home_logo_source` 分开：那边底是浅灰面板，常态用 @color/white_10 圆；
