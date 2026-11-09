@@ -257,7 +257,7 @@ internal object HeroTmdbPrefetchCache {
  * - 写内存 + `apply()` 异步落盘：当前进程立刻可读，又不阻塞焦点切换；
  * - 条数封顶 [MAX_ENTRIES]，超出时丢任意一条，避免长期使用后无限增长。
  */
-private object HeroLogoCache {
+internal object HeroLogoCache {
 
     private const val PREFS_NAME = "hero_logo_cache"
     private const val MAX_ENTRIES = 200
@@ -280,6 +280,15 @@ private object HeroLogoCache {
 
     /** 首帧构建展示数据专用：一次返回全部 Logo，调用方只做内存查表。 */
     fun snapshot(): Map<String, String> = memory
+
+    /**
+     * 单条查询：历史页 `p0()` 的 `TmdbCache.q(vodName)` 等价物。
+     *
+     * 只在内存里查表（[memory] 首次访问时已同步读完整个 prefs），可以在焦点切换的
+     * 主线程上直接调用，不会产生磁盘 IO。
+     */
+    fun get(posterKey: String): String =
+        if (posterKey.isBlank()) "" else memory[posterKey].orEmpty()
 
     fun save(posterKey: String, logoUrl: String) {
         if (posterKey.isBlank() || logoUrl.isBlank()) return

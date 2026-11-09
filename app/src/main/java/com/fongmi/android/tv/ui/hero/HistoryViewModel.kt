@@ -7,10 +7,13 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModel
 import com.fongmi.android.tv.App
 import com.fongmi.android.tv.bean.History
+import com.fongmi.android.tv.bean.TmdbItem
 import com.fongmi.android.tv.bean.TmdbMatchCache
 import com.fongmi.android.tv.setting.Setting
 import com.fongmi.android.tv.ui.activity.HeroDetailActivity
+import com.fongmi.android.tv.ui.activity.HeroLogoCache
 import com.fongmi.android.tv.ui.activity.VideoActivity
+import com.fongmi.android.tv.ui.activity.heroTmdbKey
 import coil3.SingletonImageLoader
 import coil3.request.ImageRequest
 import com.fongmi.android.tv.utils.HistoryProgressFormatter
@@ -171,11 +174,15 @@ class HistoryViewModel : ViewModel() {
     /**
      * 选中项 Hero 信息（`p0` L457-511 的逐项映射）。
      *
-     * `gd3.*` / `je2.*` 在本工程没有公开等价入口，对应字段直接取 History bean 已解析好的值：
+     * `gd3.*` / `je2.*` 在本工程没有公开等价入口，对应字段直接取 History bean 已解析好的值，
+     * 或取 TMDB 匹配缓存里的同源数据：
      * - `gd3.l(vodName)`（背景）→ TMDB 匹配缓存里的横图（[tmdbBackdrop]，对应 `q0` 的 `TmdbCache.l`）
      * - `gd3.t(vodName)` / `vodPic`（海报）→ `history.vodPic`
-     * - `gd3.q(vodName)`（Logo）→ 无字段，恒空 → 剧名文字常显
-     * - `gd3.s(vodName)`（简介）→ 无字段，恒空 → 简介行隐藏
+     * - `gd3.q(vodName)`（Logo）→ 艺术字缓存 [HeroLogoCache]（[tmdbLogo]）
+     * - `gd3.s(vodName)`（简介）→ TMDB 匹配缓存里的 `overview`（[tmdbItem]）
+     *
+     * 三者都必须来自**同一条** TMDB 缓存记录：`p0` L470-471 的 `TmdbCache.s` / `TmdbCache.q`
+     * 与原版 `q0` 的背景图是同一个条目，混用不同来源会出现「图是 A 剧、字是 B 剧」。
      */
     private fun buildHero(history: History): HeroInfo {
         val name = history.vodName.orEmpty()
@@ -183,10 +190,13 @@ class HistoryViewModel : ViewModel() {
         val position = history.position
         val duration = history.duration
         val showProgress = position > 0 && duration > 0
+        // TMDB 记录整条查一次：背景 / 简介共用，避免同一次焦点切换里做两遍 Gson 之外的查表。
+        val tmdb = tmdbItem(history)
         return HeroInfo(
             name = name,
             meta = HistoryMetaText.build(history),
-            desc = "",
+            // `p0` L470 `d0.j.setText(TmdbCache.s(vodName))`：简介为空时 UI 自己留空占位。
+            desc = tmdb?.overview.orEmpty(),
             pageSite = remarks,
             episode = if (showProgress) HistoryEpisodeLabel.resolve(remarks, name) else "",
             progressText = if (showProgress) progressText(position, duration) else "",
@@ -194,10 +204,25 @@ class HistoryViewModel : ViewModel() {
             showProgress = showProgress,
             // `q0` L514-526：**只认 TMDB 横图**。为空时 `HistoryScreen` 会走
             // 「`heroBg.reset()` + 显示右上角 posterCard」那条分支，绝不拿竖图拉伸铺满全屏。
-            backdropUrl = tmdbBackdrop(history),
+            backdropUrl = tmdb?.backdropUrl.orEmpty(),
             posterUrl = history.vodPic.orEmpty(),
-            logoUrl = "",
+            // `p0` L471-495 `TmdbCache.q(vodName)`：有艺术字就隐藏文字标题，没有就回落文字。
+            logoUrl = tmdbLogo(history),
         )
+    }
+
+    /**
+     * 当前这条历史对应的 TMDB 匹配记录（`TmdbMatchCache`，key = 站点 + vodId）。
+     *
+     * 与 `History.enrichTmdbId()` L1148 / `SubtitleTmdbResolver` 同一套用法。
+     * 缓存对象在 [loadInternal] 的后台线程里整页读一次，这里只做内存查询。
+     */
+    private fun tmdbItem(history: History): TmdbItem? {
+        val cache = tmdbCache ?: return null
+        val siteKey = runCatching { history.siteKey }.getOrNull().orEmpty()
+        val vodId = runCatching { history.vodId }.getOrNull().orEmpty()
+        if (siteKey.isEmpty() || vodId.isEmpty()) return null
+        return runCatching { cache.find(siteKey, vodId, history.vodName.orEmpty()) }.getOrNull()
     }
 
     /**
@@ -206,18 +231,22 @@ class HistoryViewModel : ViewModel() {
      * 原版分支：
      * - 命中横图 → `heroBg.f(url, i, null)`，并隐藏右侧 `posterCard`；
      * - 未命中 → `heroBg.a()`（`reset()`），显示右侧 `posterCard`。
-     *
-     * 本工程的 TMDB 匹配缓存是 [TmdbMatchCache]（key = 站点 + vodId），
-     * 与 `History.enrichTmdbId()` L1148 / `SubtitleTmdbResolver` 同一套用法。
-     * 缓存对象在 [loadInternal] 的后台线程里整页读一次，这里只做内存查询。
      */
-    private fun tmdbBackdrop(history: History): String {
-        val cache = tmdbCache ?: return ""
+    private fun tmdbBackdrop(history: History): String = tmdbItem(history)?.backdropUrl.orEmpty()
+
+    /**
+     * 艺术字 Logo（`p0` L471-495 `TmdbCache.q(vodName)` 的等价实现）。
+     *
+     * `TmdbMatchCache.Entry` 没有 logo 字段（见 `TmdbMatchCache.java`），本工程把 TMDB 艺术字
+     * 单独落在 [HeroLogoCache]（`posterKey → logoUrl`，与首页 / 详情页同一套 key
+     * [heroTmdbKey]）。命中就返回 URL，`p0` 的「隐藏文字标题、显示 heroLogoImg」由 UI 执行；
+     * 未命中返回空串，UI 继续显示 32sp 文字标题，与 `p0` L474-491 的两条分支一一对应。
+     */
+    private fun tmdbLogo(history: History): String {
         val siteKey = runCatching { history.siteKey }.getOrNull().orEmpty()
         val vodId = runCatching { history.vodId }.getOrNull().orEmpty()
         if (siteKey.isEmpty() || vodId.isEmpty()) return ""
-        val item = runCatching { cache.find(siteKey, vodId, history.vodName.orEmpty()) }.getOrNull()
-        return item?.backdropUrl.orEmpty()
+        return HeroLogoCache.get(heroTmdbKey(siteKey, vodId))
     }
 
     /**
@@ -281,7 +310,7 @@ data class HeroInfo(
     val name: String = "",
     /** `heroMetaText`（L111-123）= `pr2.b(vodName, b0(history), vodSiteRemarks)`。 */
     val meta: String = "",
-    /** `heroDescText`（L130-144）= `gd3.s(vodName)`；本工程无来源，恒空。 */
+    /** `heroDescText`（L130-144）= `gd3.s(vodName)`；本工程取 TMDB 匹配缓存的 `overview`。 */
     val desc: String = "",
     /** `pageSite`（L32-47）= `history.vodRemarks`。 */
     val pageSite: String = "",
@@ -297,7 +326,7 @@ data class HeroInfo(
     val backdropUrl: String = "",
     /** `posterCardImg` 回退海报（L60-65）。 */
     val posterUrl: String = "",
-    /** `heroLogoImg`（L103-110）；本工程无来源，恒空。 */
+    /** `heroLogoImg`（L103-110）；非空时隐藏 `heroNameText`，取 [HeroLogoCache]。 */
     val logoUrl: String = "",
 )
 

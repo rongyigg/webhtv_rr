@@ -850,8 +850,14 @@ private final Task.Scope mPersonalRecommendationTasks = new Task.Scope(Task.reco
         }
         if (fullscreenLaunch) {
             // 【强制全屏起播】与 leanback 侧同一约定：不复用任务栈里可能存在的旧播放页，
-            // 也不携带任何 PIP / 悬浮窗参数（本类从未读取过这类 extra）。
-            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+            // 并关掉窗口进出动画（动画期间会先缩放出一块「小窗」）。
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK
+                    | Intent.FLAG_ACTIVITY_CLEAR_TOP
+                    | Intent.FLAG_ACTIVITY_NO_ANIMATION);
+            // 【显式关闭小窗 / 悬浮窗模式】本类从未读取过这类 extra，写死 false 只是把
+            // 「本入口绝不进小窗」变成 Intent 上的既有约定。
+            intent.putExtra("float", false);
+            intent.putExtra("pip", false);
         }
         putIntentPlaybackSelection(intent, playFlag, playFlagKey, playEpisodeName, playEpisodeUrl);
         activity.startActivity(intent);

@@ -2143,7 +2143,7 @@ private fun HeroDetailActionButton(
  * 选集弹窗（终稿）。
  *
  * 版式自上而下（尺寸逐条对照 `ref_docs/`）：
- * 1. 外壳 [HeroDialogShell]：`#E6000000` 深色半透明 + 16dp 大圆角 + 18dp 内边距。
+ * 1. 外壳 [HeroDialogShell]：`#9914171F` 半透明深灰蓝 + 16dp 大圆角 + 18dp 内边距。
  * 2. 「播放线路」：4dp × 16dp 红竖条 + 15sp 加粗标题（不可聚焦），下方 32dp / 14sp 线路按钮。
  *    —— 顶部原来的「选集徽章 + 剧名」整行已删除，弹窗第一行就是播放线路。
  * 3. 「选集」控制栏：**单行** Row，依次为红竖条 + 15sp「选集」（不可聚焦）、少列/多列、
@@ -3416,11 +3416,16 @@ private const val DIALOG_WIDTH_FRACTION = 0.82f
  *
  * Compose `Dialog` 不能像 `Window.setDimAmount()` 那样直接调窗口暗度（项目内也没有
  * `DialogWindowProvider` 先例），所以选集弹窗用这层全屏自绘遮罩代替窗口 dim。
- * 取 50%（`0x80000000`）：与换源弹窗的 `DIM_AMOUNT = 0.5f`、工程既有
+ * 取 50%：与换源弹窗的 `DIM_AMOUNT = 0.5f`、工程既有
  * `TmdbDetailActivity 0.56` / `ChoiceDialog 0.58` 同一量级，背景必须能透出来，
- * 不能再回到 60%（`0x99000000`）那种「纯黑 + 纯红」的刺眼组合。
+ * 不能再回到 60% 那种「纯黑 + 纯红」的刺眼组合。
+ *
+ * 【色相】不再用纯黑 `0x80000000`：纯黑会把背景色相全部压成 0，看起来就是一块死黑。
+ * 改成逆向 ref_docs/shape_dialog_source.xml 的 `#14171F` 同一色相
+ * （面板底色 [HeroCommonUi] 的 `#9914171F` 也是它），亮度下降但色温保留，
+ * 背景透出来的部分仍然是「被压暗的画面」而不是「黑布」。
  */
-private val DIALOG_SCRIM = Color(0x80000000)
+private val DIALOG_SCRIM = Color(0x8014171F)
 
 // 选集弹窗本地偏好（SharedPreferences）：跨剧、退弹窗、杀进程都保持上次的列数与排序
 private const val DIALOG_PREFS_NAME = "hero_detail_ui"

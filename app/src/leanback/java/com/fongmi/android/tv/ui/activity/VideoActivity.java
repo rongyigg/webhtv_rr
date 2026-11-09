@@ -847,9 +847,15 @@ private boolean runtimeSourceOnly;
             // 与 startDirectResolved 一致：Hero UI 起播就是「直达播放」，不进详情增强/融合流程。
             intent.putExtra("detail_mode", Setting.DETAIL_OPEN_DIRECT);
             intent.putExtra(EXTRA_DETAIL_RUNTIME_MODE, Setting.DETAIL_OPEN_DIRECT);
-            // 【强制全屏起播】历史页 / 详情页选集起播统一要求：不复用任务栈里可能存在的旧播放页，
-            // 也不携带任何 PIP / 悬浮窗参数（本类从未读取过这类 extra，这里显式声明不新增）。
-            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+            // 【强制全屏起播】不复用任务栈里可能存在的旧播放页，也不让系统播放窗口进出动画
+            // （动画期间会先缩放出一块「小窗」，正是历史页 / 选集页起播时看到的闪现）。
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK
+                    | Intent.FLAG_ACTIVITY_CLEAR_TOP
+                    | Intent.FLAG_ACTIVITY_NO_ANIMATION);
+            // 【显式关闭小窗 / 悬浮窗模式】本类从未读取过这类 extra，写死 false 只是把
+            // 「本入口绝不进小窗」变成 Intent 上的既有约定，避免以后有人塞 true 复现该问题。
+            intent.putExtra("float", false);
+            intent.putExtra("pip", false);
         }
         if (resumeHistory != null) {
             intent.putExtra(EXTRA_RESUME_HISTORY_CID, resumeHistory.getCid());
@@ -1482,16 +1488,25 @@ private boolean runtimeSourceOnly;
     /**
      * Hero UI 起播：进页就把「左侧小窗 + 右侧选集」的嵌入式首屏切成全屏。
      *
-     * `post` 到首帧之后执行，此时 `mBinding.video` 已有真实布局与焦点，
-     * [enterFullscreen] 里的布局参数 / 焦点处理才是安全的。
+     * 【先藏后切，彻底阻断小窗闪现】只在 `post` 里切全屏是不够的：
+     * 只要 Activity 的首帧已经绘制，用户就会看到一帧「左侧小窗 + 右侧选集」，
+     * 再被硬切成全屏 —— 这就是历史页 / 选集页起播时的「小窗闪现」。
+     * 所以这里在 `initView` 期间（首帧之前）就把整棵内容树置为 INVISIBLE，
+     * 等 `post` 里切完全屏、同一条消息里再恢复可见，中间不会画出任何一帧嵌入式布局。
+     *
+     * 注意：`enterFullscreen()` 内部会 `requestFocus()`，而 `canTakeFocus()` 要求 VISIBLE，
+     * 因此必须先恢复可见、再调 `enterFullscreen()`（同一条消息内，仍然早于下一帧绘制）。
+     *
      * 只有显式带 [EXTRA_START_FULLSCREEN] 的入口（[startDirectFullscreen]）才会走到这里，
      * 原版 `startDirect` / `start` 的行为完全不变。
      */
     private void applyStartFullscreenIfRequested() {
         if (!getIntent().getBooleanExtra(EXTRA_START_FULLSCREEN, false)) return;
+        mBinding.getRoot().setVisibility(View.INVISIBLE);
         mBinding.video.post(() -> {
-            if (isFinishing() || isDestroyed() || isFullscreen()) return;
-            enterFullscreen();
+            if (isFinishing() || isDestroyed()) return;
+            mBinding.getRoot().setVisibility(View.VISIBLE);
+            if (!isFullscreen()) enterFullscreen();
             SpiderDebug.log("video-flow", "start fullscreen on launch key=%s id=%s", getKey(), getId());
         });
     }

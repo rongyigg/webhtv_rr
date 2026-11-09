@@ -74,10 +74,14 @@ internal val HeroFocusBrush: Brush
     )
 
 // ---------------------------------------------------------------------------
-// 统一弹窗外壳（ref_docs/dialog_source.xml）：深色半透明 #E6000000 + 16dp 圆角 + 18dp 内边距。
+// 统一弹窗外壳（ref_docs/dialog_source.xml）：深灰蓝半透明 #9914171F + 16dp 圆角 + 18dp 内边距。
 // 选集弹窗、演员详情弹窗、换源弹窗全部套这一层，保证所有弹窗视觉一致。
+//
+// 【色值变更】原来 #E6000000（90% 纯黑）叠上窗口 dim 0.5 后只剩 5% 背景光，整屏像蒙了黑布；
+// 现在降到 60%（#99）+ 逆向 ref_docs/shape_dialog_source.xml 的色相 #14171F，
+// 面板能透出约 20% 背景，与实机原版一致。与 res/drawable/shape_dialog_source_shell.xml 同值。
 // ---------------------------------------------------------------------------
-private val DIALOG_SHELL_BACKGROUND = Color(0xE6000000)
+private val DIALOG_SHELL_BACKGROUND = Color(0x9914171F)
 private val DIALOG_SHELL_SHAPE = RoundedCornerShape(16.dp)
 private val DIALOG_SHELL_PADDING = 18.dp
 

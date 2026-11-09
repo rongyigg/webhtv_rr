@@ -573,31 +573,39 @@ private fun HeroInfoGroup(hero: HeroInfo) {
             .padding(horizontal = INFO_PADDING_H),
     ) {
         // heroNameText：`invisible` 语义 = 占位但不绘制，这里用固定高度 Box 保持版式。
-        Box(
-            modifier = Modifier
-                .height(HERO_NAME_HEIGHT)
-                .widthIn(max = nameMaxWidth),
-            contentAlignment = Alignment.BottomStart,
-        ) {
-            if (hero.name.isNotEmpty()) {
-                Text(
-                    text = hero.name,
-                    color = Color.White,
-                    fontSize = HERO_NAME_SP.sp,
-                    fontWeight = FontWeight.Bold,
-                    maxLines = 1,
-                    softWrap = false,
-                    overflow = TextOverflow.Clip,
-                    style = TextStyle(shadow = nameShadow),
-                    modifier = Modifier
-                        .widthIn(max = nameMaxWidth)
-                        .basicMarquee(iterations = Int.MAX_VALUE),
-                )
+        //
+        // 【与 heroLogoImg 互斥】`p0` L474 / L476 / L489：
+        // 有艺术字时 `d0.m.setVisibility(8)`（GONE，连 36dp 高度一起让位给 Logo），
+        // 没有艺术字时才按文本是否为空在 4（invisible，占位）/ 0 之间切换。
+        val hasLogo = hero.logoUrl.isNotEmpty()
+        if (!hasLogo) {
+            Box(
+                modifier = Modifier
+                    .height(HERO_NAME_HEIGHT)
+                    .widthIn(max = nameMaxWidth),
+                contentAlignment = Alignment.BottomStart,
+            ) {
+                if (hero.name.isNotEmpty()) {
+                    Text(
+                        text = hero.name,
+                        color = Color.White,
+                        fontSize = HERO_NAME_SP.sp,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                        softWrap = false,
+                        overflow = TextOverflow.Clip,
+                        style = TextStyle(shadow = nameShadow),
+                        modifier = Modifier
+                            .widthIn(max = nameMaxWidth)
+                            .basicMarquee(iterations = Int.MAX_VALUE),
+                    )
+                }
             }
         }
 
-        // heroLogoImg：`gd3.q(vodName)` 在本工程无等价入口 → 恒空 → 剧名文字常显（见待确认清单）。
-        if (hero.logoUrl.isNotEmpty()) {
+        // heroLogoImg（XML L103-110）：72dp 高 / 最宽 720dp / fitStart / 顶对齐。
+        // `p0` L484 `d0.k.setVisibility(0)`：艺术字命中时由它顶替文字标题。
+        if (hasLogo) {
             AsyncImage(
                 model = hero.logoUrl,
                 contentDescription = null,
