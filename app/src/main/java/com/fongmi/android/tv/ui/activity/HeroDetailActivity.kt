@@ -99,12 +99,15 @@ import com.fongmi.android.tv.api.SiteApi
 import com.fongmi.android.tv.api.config.VodConfig
 import com.fongmi.android.tv.bean.Episode
 import com.fongmi.android.tv.bean.Flag
+import com.fongmi.android.tv.bean.Keep
 import com.fongmi.android.tv.bean.Result
 import com.fongmi.android.tv.bean.Site
 import com.fongmi.android.tv.bean.TmdbConfig
 import com.fongmi.android.tv.bean.TmdbItem
 import com.fongmi.android.tv.bean.TmdbPerson
 import com.fongmi.android.tv.bean.Vod
+import com.fongmi.android.tv.db.AppDatabase
+import com.fongmi.android.tv.event.RefreshEvent
 import com.fongmi.android.tv.model.SiteViewModel
 import com.fongmi.android.tv.service.TmdbService
 import com.fongmi.android.tv.setting.Setting
@@ -119,6 +122,7 @@ import com.fongmi.android.tv.ui.hero.HeroImageLoader
 import com.fongmi.android.tv.ui.hero.HeroSectionTitle
 import com.fongmi.android.tv.ui.hero.SourceSelectionStore
 import com.fongmi.android.tv.ui.hero.openHeroDetailOrFolder
+import com.fongmi.android.tv.utils.ImgUtil
 import com.fongmi.android.tv.utils.Notify
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -181,6 +185,14 @@ class HeroDetailActivity : ComponentActivity() {
     private val preSearchVod = mutableStateOf<Vod?>(null)
     private val preSearchSite = mutableStateOf<Site?>(null)
     private val preSearchResults = mutableStateOf<List<Vod>>(emptyList())
+
+    /**
+     * 收藏态刷新脉冲：详情页是纯 Compose 页面，`onResume` 没有现成的重组信号。
+     *
+     * `onResume` 自增一次，Compose 侧用 `LaunchedEffect(keepRefreshTick)` 重查 Keep 表：
+     * 用户去收藏页删掉这条收藏再返回，按钮必须立刻变回「收藏」，而不是停留在「已收藏」。
+     */
+    private val keepRefreshTick = mutableIntStateOf(0)
 
     /** `search` 通道的观察者：一个源回一条结果，第一条就是按钮上要显示的源。 */
     private val preSearchObserver = Observer<Result?> { result -> onPreSearchResult(result) }
@@ -316,6 +328,7 @@ class HeroDetailActivity : ComponentActivity() {
                     firstSearchVod = preSearchVod.value,
                     firstSearchSite = preSearchSite.value,
                     preSearchResults = preSearchResults.value,
+                    keepRefreshTick = keepRefreshTick.intValue,
                 )
             }
         }
@@ -351,6 +364,12 @@ class HeroDetailActivity : ComponentActivity() {
             preSearchVod.value = firstValid
             preSearchSite.value = site
         }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // 让 Compose 侧重读一次 Keep：收藏页 / 其它入口改过数据库，回到本页按钮要跟着变。
+        keepRefreshTick.intValue++
     }
 
     override fun onDestroy() {
@@ -736,6 +755,8 @@ private fun HeroDetailScreen(
     firstSearchSite: Site?,
     /** 后台预搜索的全部结果：点「换源」直接塞进弹窗，跳过弹窗首轮检索。 */
     preSearchResults: List<Vod>,
+    /** 收藏态刷新脉冲：Activity `onResume` 自增，Compose 侧据此重查 Keep 表。 */
+    keepRefreshTick: Int,
 ) {
     val context = LocalContext.current
     // ------------------------------------------------------------------
@@ -1233,6 +1254,66 @@ private fun HeroDetailScreen(
     // 换源弹窗关闭时必须回到「换源」，而不是默认的「播放」。
     var pendingActionFocus by remember { mutableIntStateOf(-1) }
 
+    // ------------------------------------------------------------------
+    // 收藏（本地 Keep 表）
+    // ------------------------------------------------------------------
+    // 唯一键与 `TmdbDetailActivity.getHistoryKey()` 完全一致：siteKey@@@vodId@@@cid
+    //（`AppDatabase.SYMBOL` = "@@@"）。`Keep.find(String)` 内部正是按「当前 cid + 这个 key」查。
+    val keepKey = siteKey + AppDatabase.SYMBOL + vodId + AppDatabase.SYMBOL + VodConfig.getCid()
+    /** 按钮当前是否已收藏：唯一数据源是 Keep 表，不用内存标记猜。 */
+    val keepCheckedState = remember { mutableStateOf(false) }
+
+    /**
+     * 按数据库真实状态刷新收藏按钮（原版 `updateKeepState()`）。
+     *
+     * 主线程同步读：AppDatabase 已开 `allowMainThreadQueries()`，原版
+     * `DetailActivity` / `TmdbDetailActivity` 也是直接同步读 Keep。
+     */
+    fun updateKeepButtonState() {
+        keepCheckedState.value = Keep.find(keepKey) != null
+    }
+
+    /**
+     * 收藏 / 取消收藏（照抄原版 `DetailActivity.onKeep()`）：有则删、无则建，最后刷新按钮态。
+     *
+     * 入库字段只用 Keep 表真实存在的列（`key / siteName / vodName / vodPic / createTime / type / cid`）：
+     * 本仓库没有 `vodRemarks` 字段，不为一条收藏功能改 Room schema。
+     */
+    fun toggleKeep() {
+        if (vodId.isBlank()) {
+            // 旧 adb 入口 / 聚合临时条目没有真实主键：拼出来的 key 是脏数据，直接拒绝。
+            Notify.show("缺少剧集 ID，无法收藏")
+            return
+        }
+        val existing = Keep.find(keepKey)
+        if (existing != null) {
+            existing.delete()
+            Notify.show("已取消收藏")
+        } else {
+            // 收藏卡（`KeepPosterAdapter`）只显示站名 / 剧名 / 海报：
+            // 剧名与海报优先真实详情 `Vod`，空则回落首帧 Intent 数据（口径同 `TmdbDetailActivity.createKeep()`）。
+            val keep = Keep()
+            keep.key = keepKey
+            keep.cid = VodConfig.getCid()
+            keep.vodPic = vod?.pic.orEmpty().ifBlank { page.posterUrl }
+            keep.vodName = vod?.name.orEmpty().ifBlank { page.title }
+            // 站名要单独存：历史页 / 收藏页入口不带 `EXTRA_SITE_NAME`，只能回查站点显示名。
+            keep.siteName = siteName.ifBlank { VodConfig.get().getSite(siteKey).displayName }
+            keep.createTime = System.currentTimeMillis()
+            keep.type = 0
+            keep.save()
+            // 可选：收藏卡用的是 Glide（`ImgUtil`），这里用同一引擎预热海报，进收藏页首帧就有图。
+            ImgUtil.preload(context, keep.vodPic)
+            Notify.show("已加入收藏")
+        }
+        // 点击后立刻改按钮（不等 onResume），再通知收藏页重读数据库。
+        updateKeepButtonState()
+        RefreshEvent.keep()
+    }
+
+    // 进页 + 每次 onResume 都按数据库刷新：别的入口删了这条收藏，回来必须变回「收藏」。
+    LaunchedEffect(keepRefreshTick, keepKey) { updateKeepButtonState() }
+
     // 三个弹窗都关闭后才抢焦点：
     // - 刚关掉演员弹窗 → 回到被点的那位演员（需求：焦点必须回到刚才点击的头像）；
     // - 刚关掉换源弹窗 → 回到「换源」按钮（需求三.3）；
@@ -1399,8 +1480,10 @@ private fun HeroDetailScreen(
                 requesters = actionRequesters,
                 // 「换源 (源名)」：源名来自进页预搜索的第一条结果。
                 changeSourceLabel = changeSourceLabel,
+                // 已收藏：收藏按钮换实心图标 +「已收藏」。
+                keepChecked = keepCheckedState.value,
                 onFocused = { index -> focusedAction = index },
-                // 「播放」拉起选集弹窗；「换源」拉起换源弹窗（收藏仍是占位）。
+                // 「播放」拉起选集弹窗；「换源」拉起换源弹窗；「收藏」直接读写本地 Keep 表。
                 onConfirm = { index ->
                     when (index) {
                         DETAIL_ACTION_PLAY -> {
@@ -1538,6 +1621,8 @@ private fun HeroDetailScreen(
                                 }
                             }
                         }
+                        // 收藏：原版 `DetailActivity.onKeep()` 的语义 —— 已收藏就删、未收藏就建。
+                        DETAIL_ACTION_KEEP -> toggleKeep()
                     }
                 },
                 onMoveLeft = { index -> if (index > 0) focusAction(actionRequesters, index - 1) { focusedAction = it } },
@@ -2071,6 +2156,8 @@ private fun HeroDetailActionRow(
     requesters: List<FocusRequester>,
     /** 换源按钮的动态文案（`换源 (源名)`）：预搜索还没结果时就是「换源」。 */
     changeSourceLabel: String,
+    /** 已收藏：收藏按钮换成实心图标 +「已收藏」。 */
+    keepChecked: Boolean,
     onFocused: (Int) -> Unit,
     onConfirm: (Int) -> Unit,
     onMoveLeft: (Int) -> Unit,
@@ -2079,10 +2166,16 @@ private fun HeroDetailActionRow(
 ) {
     Row(horizontalArrangement = Arrangement.spacedBy(DETAIL_ACTION_GAP)) {
         DETAIL_ACTIONS.forEachIndexed { index, action ->
+            // 收藏按钮是唯一随数据库状态变化的按钮：已收藏 = 实心星 +「已收藏」。
+            val keepOn = index == DETAIL_ACTION_KEEP && keepChecked
             HeroDetailActionButton(
-                action = action,
-                // 只有「换源」允许覆盖文案，其余按钮保持 [DETAIL_ACTIONS] 里的静态文案。
-                label = if (index == DETAIL_ACTION_CHANGE_SOURCE) changeSourceLabel else action.label,
+                action = if (keepOn) action.copy(iconRes = R.drawable.ic_detail_keep_on) else action,
+                // 「换源」显示动态源名，「收藏」显示收藏态，其余按钮保持 [DETAIL_ACTIONS] 里的静态文案。
+                label = when (index) {
+                    DETAIL_ACTION_CHANGE_SOURCE -> changeSourceLabel
+                    DETAIL_ACTION_KEEP -> if (keepOn) "已收藏" else action.label
+                    else -> action.label
+                },
                 requester = requesters[index],
                 onFocused = { onFocused(index) },
                 onConfirm = { onConfirm(index) },
@@ -3330,6 +3423,9 @@ private const val DETAIL_ACTION_PLAY = 0
 
 /** 「换源」在按钮组里的固定下标（关闭换源弹窗后焦点必须回到这里）。 */
 private const val DETAIL_ACTION_CHANGE_SOURCE = 1
+
+/** 「收藏」在按钮组里的固定下标（读写本地 Keep 表）。 */
+private const val DETAIL_ACTION_KEEP = 2
 
 // ---------------------------------------------------------------------------
 // 左下内容区（activity_detail.xml detailTop L62-190）
