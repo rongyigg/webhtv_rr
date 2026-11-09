@@ -551,9 +551,9 @@ class HomeViewActivity : AppCompatActivity() {
      * 以后增删一项也不会把「设置」指到别的页面。
      *
      * 目标页分两类：
-     * - 在 `main` 源集里（搜索 / 历史）：本类可以直接引用，且与已验收的 Compose 首页同一条路由
-     *   （`HeroSearchActivity` / `HistoryViewActivity`），不退回 leanback 的旧页面；
-     * - 只在某个 flavor 里（直播 / 收藏 / 推送 / 设置）：见 [openFlavorActivity]。
+     * - 在 `main` 源集里（搜索 / 历史 / 收藏）：本类可以直接引用，且与已验收的纯 View 页面同一条路由
+     *   （`HeroSearchActivity` / `HistoryViewActivity` / `KeepViewActivity`），不退回 leanback 的旧页面；
+     * - 只在某个 flavor 里（直播 / 推送 / 设置）：见 [openFlavorActivity]。
      *
      * 顶栏第一项是「小房子」图标（`homeBtn`），文字项里**没有「首页」**：
      * 原版 navRecycler 只放 直播 / 搜索 / 历史 / 收藏 / 推送 / 设置。
@@ -565,14 +565,14 @@ class HomeViewActivity : AppCompatActivity() {
             NAV_LIVE -> openFlavorActivity(LIVE_ACTIVITY_CLASS, Context::class.java, label)
             NAV_SEARCH -> HeroSearchActivity.start(this, currentSearchBackdrop())
             NAV_HISTORY -> HistoryViewActivity.start(this)
-            NAV_KEEP -> openFlavorActivity(KEEP_ACTIVITY_CLASS, Activity::class.java, label)
+            NAV_KEEP -> KeepViewActivity.start(this)
             NAV_PUSH -> openFlavorActivity(PUSH_ACTIVITY_CLASS, Activity::class.java, label)
             NAV_SETTINGS -> openFlavorActivity(SETTING_ACTIVITY_CLASS, Activity::class.java, label)
         }
     }
 
     /**
-     * 打开**只存在于某个 flavor** 的页面（直播 / 收藏 / 推送 / 设置）。
+     * 打开**只存在于某个 flavor** 的页面（直播 / 推送 / 设置）。
      *
      * 本类在 `main` 源集、两个变体都要编译，而 `PushActivity` / `SettingActivity` 只在
      * `app/src/leanback/`（mobile 清单里没有声明），直接写类名会让 mobile 变体编译失败。
@@ -580,7 +580,7 @@ class HomeViewActivity : AppCompatActivity() {
      * `start(...)`；失败不崩，只提示。
      *
      * [paramType] 必须与目标类 `start` 的形参**完全一致**：
-     * `LiveActivity.start(Context)`，`KeepActivity` / `PushActivity` / `SettingActivity` 都是 `start(Activity)`。
+     * `LiveActivity.start(Context)`，`PushActivity` / `SettingActivity` 都是 `start(Activity)`。
      */
     private fun openFlavorActivity(className: String, paramType: Class<*>, label: String) {
         runCatching {
@@ -2060,7 +2060,6 @@ class HomeViewActivity : AppCompatActivity() {
         // 顶栏目标页只写类名、不引用类：`PushActivity` / `SettingActivity` 只存在于 leanback，
         // 本类在 `main` 源集里必须对 mobile 变体也能编译（详见 `openFlavorActivity`）。
         private const val LIVE_ACTIVITY_CLASS = "com.fongmi.android.tv.ui.activity.LiveActivity"
-        private const val KEEP_ACTIVITY_CLASS = "com.fongmi.android.tv.ui.activity.KeepActivity"
         private const val PUSH_ACTIVITY_CLASS = "com.fongmi.android.tv.ui.activity.PushActivity"
         private const val SETTING_ACTIVITY_CLASS = "com.fongmi.android.tv.ui.activity.SettingActivity"
 

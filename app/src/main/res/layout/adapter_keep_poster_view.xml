@@ -1,0 +1,101 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    收藏页卡片（纯 View）：照 ref_docs/KeepPosterPresenter.java + adapter_keep_poster.xml 的结构复刻。
+
+    垂直三段（与截图一致）：
+    1. 顶部 18dp：接口站源名（10sp 粗体白字；渐变阴影背景由 KeepPosterAdapter 用
+       GradientDrawable 生成，避免为了一个纯色块再新增 drawable 资源）；
+    2. 中部 120×180：竖版海报（ShapeableImageView + @style/Vod.Grid.Large → 四角 8dp），
+       上面盖两层：焦点红框（适配器画 2dp #FF0000）与编辑态垃圾桶遮罩；
+    3. 底部 34dp：剧名（13sp、单行跑马灯）。
+
+    整卡 120 × 232（18 + 180 + 34），宽高写死：卡片行只按这个尺寸排版，
+    焦点放大（1.08）由适配器在绘制层完成，不参与测量。
+-->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:id="@+id/keepCard"
+    android:layout_width="120dp"
+    android:layout_height="232dp"
+    android:clipChildren="false"
+    android:clipToPadding="false"
+    android:focusable="true"
+    android:focusableInTouchMode="true">
+
+    <LinearLayout
+        android:layout_width="120dp"
+        android:layout_height="232dp"
+        android:clipChildren="false"
+        android:clipToPadding="false"
+        android:orientation="vertical">
+
+        <!-- 接口站源名：空串时 INVISIBLE（保留 18dp，卡片高度对齐，不跳动） -->
+        <com.google.android.material.textview.MaterialTextView
+            android:id="@+id/keepSite"
+            android:layout_width="120dp"
+            android:layout_height="18dp"
+            android:ellipsize="end"
+            android:gravity="start|center_vertical"
+            android:maxLines="1"
+            android:paddingStart="4dp"
+            android:paddingEnd="4dp"
+            android:shadowColor="#cc000000"
+            android:shadowDx="0"
+            android:shadowDy="1"
+            android:shadowRadius="4"
+            android:singleLine="true"
+            android:textColor="@color/white"
+            android:textSize="10sp"
+            android:textStyle="bold"
+            android:visibility="invisible" />
+
+        <!-- 竖版海报 120×180：圆角由 ShapeableImageView 自己绘制（电视端裁剪不可靠） -->
+        <FrameLayout
+            android:id="@+id/keepImageWrapper"
+            android:layout_width="120dp"
+            android:layout_height="180dp"
+            android:clipChildren="false"
+            android:clipToPadding="false">
+
+            <com.google.android.material.imageview.ShapeableImageView
+                android:id="@+id/keepImage"
+                android:layout_width="120dp"
+                android:layout_height="180dp"
+                android:contentDescription="@null"
+                android:scaleType="centerCrop"
+                android:src="@drawable/shape_source_poster_placeholder"
+                app:shapeAppearanceOverlay="@style/Vod.Grid.Large" />
+
+            <!-- 焦点红框：2dp 纯红 / 8dp 圆角，background 在适配器里生成，只切可见性 -->
+            <View
+                android:id="@+id/keepFocusRing"
+                android:layout_width="120dp"
+                android:layout_height="180dp"
+                android:visibility="gone" />
+
+            <!-- 编辑态遮罩：半透明黑底 + ic_vod_delete 垃圾桶，与历史页 HeroPosterCard 同款 -->
+            <ImageView
+                android:id="@+id/keepDelete"
+                android:layout_width="120dp"
+                android:layout_height="180dp"
+                android:background="@color/black_50"
+                android:contentDescription="@null"
+                android:scaleType="center"
+                android:src="@drawable/ic_vod_delete"
+                android:visibility="gone" />
+        </FrameLayout>
+
+        <!-- 剧名：13sp、单行跑马灯（适配器里 isSelected = true 才会滚动） -->
+        <com.google.android.material.textview.MaterialTextView
+            android:id="@+id/keepName"
+            android:layout_width="120dp"
+            android:layout_height="34dp"
+            android:ellipsize="marquee"
+            android:focusable="false"
+            android:gravity="center"
+            android:marqueeRepeatLimit="marquee_forever"
+            android:singleLine="true"
+            android:textColor="@color/white"
+            android:textSize="13sp" />
+    </LinearLayout>
+</FrameLayout>

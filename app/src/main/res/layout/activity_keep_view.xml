@@ -1,0 +1,205 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    收藏页（100% 纯 View，无 Compose）。
+
+    结构照搬已验收的 activity_history_view.xml（同一套 Hero 大图 + 两层遮罩 + 左下信息区），
+    只做两处与收藏语义相关的调整：
+    1. 去掉「查看详情 / 播放进度」行：收藏页没有播放进度，交互是「确定进详情、长按换源、
+       菜单键编辑」，不需要续播按钮；
+    2. 底部卡片行高度 250dp：卡片本身 120×232（站点名 18 + 海报 180 + 剧名 34），
+       再留 18dp 给焦点放大的绘制溢出（卡片继承历史页 1.08 倍焦点缩放）。
+
+    卡片不再复用 HeroPosterCard：结构见 adapter_keep_poster_view.xml（逆向 adapter_keep_poster.xml）。
+-->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:clipChildren="false">
+
+    <!-- 全屏背景大图：下层保底图 + 上层 HeroImageView（与历史页同一套渲染路径） -->
+    <ImageView
+        android:id="@+id/heroBgUnder"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:contentDescription="@null"
+        android:scaleType="centerCrop"
+        android:visibility="gone" />
+
+    <com.fongmi.android.tv.ui.custom.HeroImageView
+        android:id="@+id/heroBg"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:contentDescription="@null"
+        android:scaleType="centerCrop"
+        android:visibility="gone" />
+
+    <!-- 左右 / 底部渐变压暗 -->
+    <View
+        android:id="@+id/maskLeft"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="@drawable/bg_hero_mask_h"
+        android:visibility="gone" />
+
+    <View
+        android:id="@+id/maskBottom"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="@drawable/bg_hero_mask_v"
+        android:visibility="gone" />
+
+    <!-- 左上角站点角标：当前收藏条目所属接口源（空串直接 GONE） -->
+    <com.google.android.material.textview.MaterialTextView
+        android:id="@+id/pageSite"
+        android:layout_width="wrap_content"
+        android:layout_height="26dp"
+        android:layout_gravity="start|top"
+        android:layout_margin="24dp"
+        android:background="@drawable/shape_config_name"
+        android:gravity="center"
+        android:maxLines="1"
+        android:paddingLeft="12dp"
+        android:paddingRight="12dp"
+        android:paddingHorizontal="12dp"
+        android:textColor="@color/white"
+        android:textSize="13sp"
+        android:textStyle="bold"
+        android:visibility="gone" />
+
+    <!-- 右上角竖版海报：只在没有 TMDB 横图时兜底（与历史页规则一致） -->
+    <FrameLayout
+        android:id="@+id/posterCard"
+        android:layout_width="150dp"
+        android:layout_height="210dp"
+        android:layout_gravity="end|top"
+        android:layout_marginTop="72dp"
+        android:layout_marginEnd="80dp"
+        android:background="@drawable/shape_poster_card"
+        android:clipChildren="false"
+        android:clipToOutline="true"
+        android:padding="4dp"
+        android:visibility="gone">
+
+        <androidx.appcompat.widget.AppCompatImageView
+            android:id="@+id/posterCardImg"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:contentDescription="@null"
+            android:scaleType="centerCrop" />
+    </FrameLayout>
+
+    <!-- 底部内容区（loading / empty / content 三态由 ProgressLayout 统一管理） -->
+    <com.fongmi.android.tv.ui.custom.ProgressLayout
+        android:id="@+id/progressLayout"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:clipChildren="false">
+
+        <LinearLayout
+            android:id="@+id/posterContent"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_alignParentBottom="true"
+            android:clipChildren="false"
+            android:clipToPadding="false"
+            android:orientation="vertical"
+            android:visibility="gone">
+
+            <!-- 剧名 / 艺术字 / 元数据 / 简介（简介限 2 行） -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="10dp"
+                android:clipChildren="false"
+                android:clipToPadding="false"
+                android:orientation="vertical"
+                android:paddingStart="24dp"
+                android:paddingEnd="24dp">
+
+                <com.google.android.material.textview.MaterialTextView
+                    android:id="@+id/heroNameText"
+                    android:layout_width="wrap_content"
+                    android:layout_height="36dp"
+                    android:ellipsize="marquee"
+                    android:gravity="bottom"
+                    android:marqueeRepeatLimit="marquee_forever"
+                    android:shadowColor="#cc000000"
+                    android:shadowDx="2"
+                    android:shadowDy="2"
+                    android:shadowRadius="12"
+                    android:singleLine="true"
+                    android:textColor="@color/white"
+                    android:textSize="32sp"
+                    android:textStyle="bold"
+                    android:visibility="invisible" />
+
+                <ImageView
+                    android:id="@+id/heroLogoImg"
+                    android:layout_width="wrap_content"
+                    android:layout_height="72dp"
+                    android:adjustViewBounds="true"
+                    android:maxWidth="720dp"
+                    android:scaleType="fitStart"
+                    android:visibility="gone" />
+
+                <com.google.android.material.textview.MaterialTextView
+                    android:id="@+id/heroMetaText"
+                    android:layout_width="wrap_content"
+                    android:layout_height="20dp"
+                    android:layout_marginTop="2dp"
+                    android:gravity="bottom"
+                    android:shadowColor="#aa000000"
+                    android:shadowDx="1.5"
+                    android:shadowDy="1.5"
+                    android:shadowRadius="8"
+                    android:textColor="#ccffffff"
+                    android:textSize="14sp"
+                    android:visibility="invisible" />
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:orientation="horizontal"
+                    android:weightSum="2">
+
+                    <com.google.android.material.textview.MaterialTextView
+                        android:id="@+id/heroDescText"
+                        android:layout_width="0dp"
+                        android:layout_height="40dp"
+                        android:layout_weight="1"
+                        android:ellipsize="end"
+                        android:lineSpacingExtra="3dp"
+                        android:maxLines="2"
+                        android:shadowColor="#aa000000"
+                        android:shadowDx="1.2"
+                        android:shadowDy="1.2"
+                        android:shadowRadius="6"
+                        android:textColor="#bbffffff"
+                        android:textSize="12sp"
+                        android:visibility="invisible" />
+                </LinearLayout>
+            </LinearLayout>
+
+            <!-- 收藏卡片行：120×232 的新卡片（站点名 / 海报 / 剧名） -->
+            <FrameLayout
+                android:layout_width="match_parent"
+                android:layout_height="250dp"
+                android:clipChildren="false"
+                android:clipToPadding="false">
+
+                <androidx.recyclerview.widget.RecyclerView
+                    android:id="@+id/keepRecycler"
+                    android:layout_width="match_parent"
+                    android:layout_height="250dp"
+                    android:clipChildren="false"
+                    android:clipToPadding="false"
+                    android:paddingStart="24dp"
+                    android:paddingTop="4dp"
+                    android:paddingEnd="24dp"
+                    android:paddingBottom="14dp" />
+            </FrameLayout>
+        </LinearLayout>
+    </com.fongmi.android.tv.ui.custom.ProgressLayout>
+</FrameLayout>

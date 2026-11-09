@@ -18,7 +18,7 @@ import com.fongmi.android.tv.bean.drive.DriveCheckRequest;
 import com.fongmi.android.tv.server.Server;
 import com.fongmi.android.tv.service.DriveCheckService;
 import com.fongmi.android.tv.service.PlaybackService;
-import com.fongmi.android.tv.ui.activity.KeepActivity;
+import com.fongmi.android.tv.ui.activity.KeepViewActivity;
 import com.fongmi.android.tv.ui.activity.LiveActivity;
 import com.fongmi.android.tv.ui.activity.SearchActivity;
 import com.fongmi.android.tv.ui.activity.VideoActivity;
@@ -452,7 +452,7 @@ public class HomeWebBridge {
     }
 
     private String openKeep() {
-        App.post(() -> KeepActivity.start(activity));
+        App.post(() -> KeepViewActivity.start(activity));
         return "{}";
     }
 
