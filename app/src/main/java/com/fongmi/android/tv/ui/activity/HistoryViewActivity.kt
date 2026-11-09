@@ -84,6 +84,12 @@ class HistoryViewActivity : AppCompatActivity() {
     private var selectedIndex = -1
     private var tmdbCache: TmdbMatchCache? = null
 
+    /** 编辑模式（原版 `HistoryFragment.g0`）：长按卡片进入，返回键退出。 */
+    private var isEditMode = false
+
+    /** 删除后强制落在这一条（列表已变，`previousKey` 可能刚好是被删掉的那条）。 */
+    private var pendingFocusIndex: Int? = null
+
     private var currentLogoUrl = ""
 
     /** 上一次真正交给 `ImgUtil` 的竖图地址；`null` = 还没加载过。 */
@@ -126,6 +132,22 @@ class HistoryViewActivity : AppCompatActivity() {
         // posterCard 走 Glide（`ImgUtil`），按视图生命周期释放，与卡片内部加载同一套。
         ImgUtil.clear(posterCardImg)
         super.onDestroy()
+    }
+
+    /**
+     * 编辑态返回键只退出编辑模式，不退出页面（原版 `HistoryActivity` 同语义）。
+     *
+     * 工程已打开 `enableOnBackInvokedCallback`，但本页没有注册任何启用的
+     * `OnBackPressedCallback`；`OnBackPressedDispatcher` 只有在存在启用回调时才向系统
+     * 注册 `OnBackInvokedCallback`，所以系统返回键仍然走 `Activity.onBackPressed()` 虚分派。
+     */
+    @Suppress("DEPRECATION")
+    override fun onBackPressed() {
+        if (isEditMode) {
+            exitEditMode()
+            return
+        }
+        super.onBackPressed()
     }
 
     /** 播放进度回写等 → 重新读库（原版 `o11.onRefreshEvent` 的 `a0()` 分支）。 */
@@ -187,7 +209,11 @@ class HistoryViewActivity : AppCompatActivity() {
         // 海报行：main 源集不能引用 leanback 的 HorizontalGridView，用 RecyclerView + 水平 LayoutManager。
         posterAdapter = HistoryPosterAdapter(
             onFocused = { position -> select(position) },
-            onClick = { position -> items.getOrNull(position)?.let(::openResume) },
+            onClick = { position ->
+                // 原版 `pp.java` case 14：编辑态点击 = 删除该条；否则 = 续播。
+                if (isEditMode) deleteAt(position) else items.getOrNull(position)?.let(::openResume)
+            },
+            onLongPress = { enterEditMode() },
         )
         posterRecycler.apply {
             layoutManager = LinearLayoutManager(this@HistoryViewActivity, RecyclerView.HORIZONTAL, false)
@@ -222,6 +248,9 @@ class HistoryViewActivity : AppCompatActivity() {
         val token = ++loadToken
         val previousKey = if (keepSelection) items.getOrNull(selectedIndex)?.key else null
         val hadFocus = currentFocus != null
+        // 删除后要落的卡片：下标属于删除前的列表，这里先取出，选中时再按新长度收敛。
+        val pending = pendingFocusIndex
+        pendingFocusIndex = null
         Task.execute {
             val cache = runCatching { Setting.getTmdbMatchCache() }.getOrNull()
             val loaded = runCatching {
@@ -233,17 +262,19 @@ class HistoryViewActivity : AppCompatActivity() {
                 items = loaded
                 posterAdapter.submit(loaded)
                 if (loaded.isEmpty()) {
+                    exitEditMode()
                     clearSelection()
                     progressLayout.showEmpty()
                     return@post
                 }
                 val index = when {
+                    pending != null -> pending.coerceIn(0, loaded.size - 1)
                     previousKey == null -> 0
                     else -> loaded.indexOfFirst { it.key == previousKey }.takeIf { it >= 0 } ?: 0
                 }
                 select(index)
                 progressLayout.showContent()
-                if (!hadFocus) {
+                if (pending != null || !hadFocus) {
                     posterRecycler.post { focusPoster(index) }
                 }
             }
@@ -275,6 +306,40 @@ class HistoryViewActivity : AppCompatActivity() {
         btnResume.visibility = View.INVISIBLE
         progressGroup.visibility = View.GONE
         progressBar.setProgress(0f)
+    }
+
+    // ------------------------------------------------------------------
+    // 编辑模式（原版 `HistoryFragment.m0` / `pp.java` case 14）
+    // ------------------------------------------------------------------
+
+    /** 长按任意卡片进入编辑模式；所有卡片一起显示删除角标（适配器级开关）。 */
+    private fun enterEditMode() {
+        if (isEditMode || items.isEmpty()) return
+        isEditMode = true
+        posterAdapter.setEditMode(true)
+    }
+
+    /** 退出编辑模式：只改状态与角标可见性，不动列表、不动焦点。 */
+    private fun exitEditMode() {
+        if (!isEditMode) return
+        isEditMode = false
+        posterAdapter.setEditMode(false)
+    }
+
+    /**
+     * 编辑态点击卡片 = 删除这一条（`pp.java` case 14 → `history.delete()`）。
+     *
+     * 这里用 `deleteDisplayItem()`：列表数据来自 `History.getForDisplay()`（含分季聚合），
+     * 与 leanback / mobile 的 `HistoryActivity.onItemDelete` 同一条删除路径。
+     */
+    private fun deleteAt(position: Int) {
+        val history = items.getOrNull(position) ?: return
+        history.deleteDisplayItem()
+        // 原版 `if (adapter.getItemCount() == 0) setDelete(false)`：删空就退出编辑态。
+        if (items.size <= 1) exitEditMode()
+        // 与 `FocusRestorer.nextPosition` 同义：优先落在原位置（原位置的下一张已经补上）。
+        pendingFocusIndex = position.coerceAtLeast(0)
+        load(keepSelection = true)
     }
 
     // ------------------------------------------------------------------

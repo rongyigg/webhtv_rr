@@ -19,14 +19,23 @@ import kotlin.math.roundToInt
  * - `name`  → [HeroPosterCard.title]；
  * - `image` → [HeroPosterCard.imageUrl]；
  * - `siteTag` / `siteGradient` → [HeroPosterCard.siteTag]（站点名为空时两者一起隐藏）；
- * - `tmdbTag` → [HeroPosterCard.tmdbTag]（`s11.b(history)`，见 [HistoryCardTags]）。
+ * - `tmdbTag` → [HeroPosterCard.tmdbTag]（`s11.b(history)`，见 [HistoryCardTags]）；
+ * - `delete` 覆盖层 / 长按 → [HeroPosterCard.isEditMode] / [HeroPosterCard.onDeleteClick]。
  */
 class HistoryPosterAdapter(
     private val onFocused: (position: Int) -> Unit,
     private val onClick: (position: Int) -> Unit,
+    private val onLongPress: (position: Int) -> Unit,
 ) : RecyclerView.Adapter<HistoryPosterAdapter.ViewHolder>() {
 
     private val items = mutableListOf<History>()
+
+    /**
+     * 编辑模式（适配器级开关，对应原版 `s11.i` + `o11.m0`）：
+     * 为 `true` 时所有卡片的删除覆盖层一起显示，点击卡片 = 删除该条。
+     */
+    var isEditMode: Boolean = false
+        private set
 
     fun submit(next: List<History>) {
         items.clear()
@@ -34,7 +43,19 @@ class HistoryPosterAdapter(
         notifyDataSetChanged()
     }
 
+    override fun getItemCount(): Int = items.size
+
     fun getItem(position: Int): History? = items.getOrNull(position)
+
+    /**
+     * 切换编辑模式。逐条对应原版 `o11.m0(z)`：状态未变直接返回；
+     * 有数据时 `notifyItemRangeChanged(0, size)` 重绑当前可见卡片。
+     */
+    fun setEditMode(enable: Boolean) {
+        if (isEditMode == enable) return
+        isEditMode = enable
+        if (itemCount > 0) notifyItemRangeChanged(0, itemCount)
+    }
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): ViewHolder {
         val density = parent.resources.displayMetrics.density
@@ -48,6 +69,17 @@ class HistoryPosterAdapter(
         }
         val holder = ViewHolder(card)
         card.setOnClickListener {
+            val position = holder.bindingAdapterPosition
+            if (position != RecyclerView.NO_POSITION) onClick(position)
+        }
+        // 长按进入编辑模式：原版 `s11` L122 `relativeLayout.setOnLongClickListener(...)`。
+        card.setOnLongClickListener {
+            val position = holder.bindingAdapterPosition
+            if (position != RecyclerView.NO_POSITION) onLongPress(position)
+            true
+        }
+        // 删除图标覆盖层只在编辑态可见；点它 = 删除这一条（与编辑态点卡片走同一条路径）。
+        card.onDeleteClick = {
             val position = holder.bindingAdapterPosition
             if (position != RecyclerView.NO_POSITION) onClick(position)
         }
@@ -74,7 +106,7 @@ class HistoryPosterAdapter(
         card.imageUrl = history.vodPic.orEmpty()
         card.siteTag = history.siteName.orEmpty().takeIf { it.isNotEmpty() }
         card.tmdbTag = HistoryCardTags.isTmdbTagVisible(history)
-        card.isEditMode = false
+        card.isEditMode = isEditMode
     }
 
     override fun onViewRecycled(holder: ViewHolder) {
