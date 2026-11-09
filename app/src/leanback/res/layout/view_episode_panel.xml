@@ -1,13 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-    播放页底部选集面板（纯 View 实现）：
-    播放线路列表 -> 选集分页 -> 双列选集网格。
+    播放页底部选集面板（纯 View 实现），结构照抄 ref_docs/activity_video.xml 的 episodePanel：
+    红色小竖条 + 15sp 加粗标题 → 播放线路列表 → 选集标题行 + 分页 → 选集网格。
+    顶部操作栏在「选集」标题右侧补齐 少列/多列、原始/紧凑、正序/倒序 三个可点击标签，
+    点击后真实改变下方网格列数、卡片密度与排序，并刷新 Adapter。
 -->
 <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
-    android:background="@drawable/bg_episode_panel"
+    android:background="@drawable/bg_episode_list_bottom"
     android:clickable="true"
     android:focusable="false"
     android:visibility="gone"
@@ -18,19 +20,21 @@
         android:layout_height="wrap_content"
         android:orientation="vertical"
         android:paddingStart="24dp"
-        android:paddingTop="14dp"
+        android:paddingTop="10dp"
         android:paddingEnd="24dp"
-        android:paddingBottom="16dp">
+        android:paddingBottom="14dp">
 
+        <!-- 播放线路标题 -->
         <androidx.appcompat.widget.LinearLayoutCompat
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
+            android:layout_marginBottom="8dp"
             android:gravity="center_vertical"
             android:orientation="horizontal">
 
             <View
                 android:layout_width="4dp"
-                android:layout_height="18dp"
+                android:layout_height="16dp"
                 android:layout_marginEnd="10dp"
                 android:background="@drawable/shape_red_bar" />
 
@@ -39,7 +43,7 @@
                 android:layout_height="wrap_content"
                 android:text="@string/osd_play_line"
                 android:textColor="@color/white"
-                android:textSize="18sp"
+                android:textSize="15sp"
                 android:textStyle="bold" />
 
         </androidx.appcompat.widget.LinearLayoutCompat>
@@ -47,14 +51,14 @@
         <androidx.recyclerview.widget.RecyclerView
             android:id="@+id/osdFlagList"
             android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="10dp"
-            android:layout_marginBottom="16dp"
+            android:layout_height="34dp"
+            android:layout_marginBottom="2dp"
             android:clipChildren="false"
             android:clipToPadding="false"
             android:nestedScrollingEnabled="false"
             android:overScrollMode="never" />
 
+        <!-- 选集标题 + 少列/原始/正序 操作标签 + 分页 -->
         <androidx.appcompat.widget.LinearLayoutCompat
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -63,7 +67,7 @@
 
             <View
                 android:layout_width="4dp"
-                android:layout_height="18dp"
+                android:layout_height="16dp"
                 android:layout_marginEnd="10dp"
                 android:background="@drawable/shape_red_bar" />
 
@@ -72,31 +76,52 @@
                 android:layout_height="wrap_content"
                 android:text="@string/play_episodes"
                 android:textColor="@color/white"
-                android:textSize="18sp"
+                android:textSize="15sp"
                 android:textStyle="bold" />
+
+            <com.google.android.material.textview.MaterialTextView
+                android:id="@+id/osdTabColumn"
+                style="@style/OsdTab"
+                tools:text="多列" />
+
+            <com.google.android.material.textview.MaterialTextView
+                android:id="@+id/osdTabCompact"
+                style="@style/OsdTab"
+                tools:text="紧凑" />
+
+            <com.google.android.material.textview.MaterialTextView
+                android:id="@+id/osdTabSort"
+                style="@style/OsdTab"
+                tools:text="倒序" />
 
             <androidx.recyclerview.widget.RecyclerView
                 android:id="@+id/osdPageList"
                 android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_marginStart="16dp"
+                android:layout_height="34dp"
+                android:layout_marginStart="8dp"
                 android:layout_weight="1"
                 android:clipChildren="false"
                 android:clipToPadding="false"
                 android:nestedScrollingEnabled="false"
-                android:overScrollMode="never" />
+                android:overScrollMode="never"
+                android:paddingStart="8dp"
+                android:paddingEnd="8dp" />
 
         </androidx.appcompat.widget.LinearLayoutCompat>
 
+        <!-- 选集卡片网格：每页 6 集，wrap_content 高度随实际行数变化 -->
         <androidx.recyclerview.widget.RecyclerView
             android:id="@+id/osdEpisodeGrid"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="10dp"
+            android:layout_marginTop="8dp"
             android:clipChildren="false"
             android:clipToPadding="false"
             android:nestedScrollingEnabled="false"
-            android:overScrollMode="never" />
+            android:overScrollMode="never"
+            android:paddingStart="6dp"
+            android:paddingEnd="6dp"
+            tools:itemCount="6" />
 
     </androidx.appcompat.widget.LinearLayoutCompat>
 

@@ -389,7 +389,11 @@ private boolean runtimeSourceOnly;
     private OsdEpisodeAdapter mOsdEpisodeAdapter;
     private final PlaybackSpeedMeter mOsdSpeedMeter = new PlaybackSpeedMeter();
     private int mOsdPageIndex;
-    private String mOsdLogoUrl;
+    private GridLayoutManager mOsdGridLayout;
+    /** 选集面板列数档位：少列 = 2，多列 = 6（少列/多列标签真实切换 GridLayoutManager 的 spanCount）。 */
+    private boolean osdColumnFew = true;
+    /** 选集卡片密度：false = 原始 16sp，true = 紧凑 14sp。 */
+    private boolean osdCompact;
     private PartAdapter mPartAdapter;
     private BackdropAdapter mBackdropAdapter;
     private Map<String, View> mActionButtons;
@@ -4375,7 +4379,6 @@ private boolean runtimeSourceOnly;
     private void syncRepeatSelected() {
         boolean repeat = player().isRepeatOne();
         mBinding.control.action.repeat.setSelected(repeat);
-        mBinding.osdControl.osdRepeat.setSelected(repeat);
     }
 
     private void onPlayParams() {
@@ -4879,7 +4882,6 @@ private boolean runtimeSourceOnly;
      */
     private void setOsdView() {
         mBinding.osdControl.osdPrev.setOnClickListener(guarded(this::checkPrev));
-        mBinding.osdControl.osdPlay.setOnClickListener(guarded(this::checkPlay));
         mBinding.osdControl.osdNext.setOnClickListener(guarded(this::checkNext));
         mBinding.osdControl.osdEpisodes.setOnClickListener(guarded(this::onEpisodePanel));
         mBinding.osdControl.osdKernel.setOnClickListener(guarded(this::onPlayerKernel));
@@ -4887,12 +4889,13 @@ private boolean runtimeSourceOnly;
         mBinding.osdControl.osdDecode.setOnClickListener(guarded(this::onDecode));
         mBinding.osdControl.osdRefresh.setOnClickListener(guarded(this::onRefresh));
         mBinding.osdControl.osdReplay.setOnClickListener(guarded(this::onReplay));
-        mBinding.osdControl.osdRepeat.setOnClickListener(guarded(this::onRepeat));
         mBinding.osdControl.osdSpeed.setOnClickListener(guarded(this::onSpeed));
         mBinding.osdControl.osdSpeed.setOnLongClickListener(view -> onSpeedLong());
         mBinding.osdControl.osdScale.setOnClickListener(guarded(this::onScale));
+        // 字幕 / 音轨 / 视轨分别对应 Media3 的 TEXT / AUDIO / VIDEO 轨道类型。
         mBinding.osdControl.osdText.setOnClickListener(guarded(() -> onTrack(3)));
-        mBinding.osdControl.osdTrack.setOnClickListener(guarded(() -> onTrack(1)));
+        mBinding.osdControl.osdAudio.setOnClickListener(guarded(() -> onTrack(1)));
+        mBinding.osdControl.osdVideo.setOnClickListener(guarded(() -> onTrack(2)));
         mBinding.osdControl.osdOpening.setOnClickListener(guarded(this::onOpening));
         mBinding.osdControl.osdEnding.setOnClickListener(guarded(this::onEnding));
         mBinding.episodePanel.getRoot().setVisibility(View.GONE);
@@ -4900,8 +4903,12 @@ private boolean runtimeSourceOnly;
         mBinding.episodePanel.osdFlagList.setAdapter(mOsdFlagAdapter = new OsdFlagAdapter(this::onOsdFlagClick));
         mBinding.episodePanel.osdPageList.setLayoutManager(new LinearLayoutManager(this, RecyclerView.HORIZONTAL, false));
         mBinding.episodePanel.osdPageList.setAdapter(mOsdPageAdapter = new OsdPageAdapter(this::onOsdPageClick));
-        mBinding.episodePanel.osdEpisodeGrid.setLayoutManager(new GridLayoutManager(this, 2));
+        mBinding.episodePanel.osdEpisodeGrid.setLayoutManager(mOsdGridLayout = new GridLayoutManager(this, getOsdColumn()));
         mBinding.episodePanel.osdEpisodeGrid.setAdapter(mOsdEpisodeAdapter = new OsdEpisodeAdapter(this::onOsdEpisodeClick));
+        mBinding.episodePanel.osdTabColumn.setOnClickListener(guarded(this::toggleOsdColumn));
+        mBinding.episodePanel.osdTabCompact.setOnClickListener(guarded(this::toggleOsdCompact));
+        mBinding.episodePanel.osdTabSort.setOnClickListener(guarded(this::onOsdSort));
+        updateOsdTabs();
     }
 
     /** OSD 显示期间的 1 秒刷新：分辨率、网速、播放状态、内核、解码、倍速等运行态。 */
@@ -4928,10 +4935,8 @@ private boolean runtimeSourceOnly;
         String speed = mOsdSpeedMeter.getText();
         mBinding.osdControl.netSpeed.setText(speed);
         mBinding.osdControl.netSpeed.setVisibility(TextUtils.isEmpty(speed) ? View.GONE : View.VISIBLE);
-        mBinding.osdControl.osdPlayIcon.setImageResource(player.isPlaying() ? androidx.media3.ui.R.drawable.exo_icon_pause : androidx.media3.ui.R.drawable.exo_icon_play);
         mBinding.osdControl.osdKernel.setText(player.getPlayerText());
         mBinding.osdControl.osdDecode.setText(player.getDecodeText());
-        mBinding.osdControl.osdRepeat.setSelected(player.isRepeatOne());
         mBinding.osdControl.osdSpeed.setText(player.getSpeedText());
         mBinding.osdControl.osdScale.setText(ResUtil.getStringArray(R.array.select_scale)[getScale()]);
         mBinding.osdControl.osdText.setVisibility(player.haveTrack(C.TRACK_TYPE_TEXT) || player.isVod() ? View.VISIBLE : View.GONE);
@@ -4941,20 +4946,65 @@ private boolean runtimeSourceOnly;
         syncOsdLogo();
     }
 
-    /** 左下剧集 Logo：没有图片和标题时整块隐藏，不占用 OSD 高度。 */
+    /**
+     * 左下角艺术字：只把 {@link com.fongmi.android.tv.bean.History#getVodName()} 渲染成文字标题，
+     * 永远不加载 {@code getVodPic()} 海报图，标题为空时整块隐藏、不占 OSD 高度。
+     */
     private void syncOsdLogo() {
-        String url = mHistory == null ? "" : mHistory.getVodPic();
-        if (TextUtils.equals(mOsdLogoUrl, url)) return;
-        mOsdLogoUrl = url;
-        ImageView logo = mBinding.osdControl.vodLogo;
+        TextView logo = mBinding.osdControl.vodLogo;
         String name = mHistory == null ? "" : mHistory.getVodName();
-        if (TextUtils.isEmpty(url) && TextUtils.isEmpty(name)) {
-            ImgUtil.clear(logo);
-            logo.setVisibility(View.GONE);
+        if (TextUtils.isEmpty(name)) {
+            if (logo.getVisibility() != View.GONE) {
+                logo.setText("");
+                logo.setVisibility(View.GONE);
+            }
             return;
         }
-        logo.setVisibility(View.VISIBLE);
-        ImgUtil.load(name, url, logo, true, ResUtil.dp2px(132), ResUtil.dp2px(90));
+        if (!TextUtils.equals(name, logo.getText())) logo.setText(name);
+        if (logo.getVisibility() != View.VISIBLE) logo.setVisibility(View.VISIBLE);
+    }
+
+    /** 少列 / 多列：真实改变下方网格的列数。 */
+    private void toggleOsdColumn() {
+        osdColumnFew = !osdColumnFew;
+        applyOsdColumn();
+    }
+
+    private int getOsdColumn() {
+        return osdColumnFew ? 2 : 6;
+    }
+
+    private void applyOsdColumn() {
+        int column = getOsdColumn();
+        if (mOsdGridLayout != null) mOsdGridLayout.setSpanCount(column);
+        if (mOsdEpisodeAdapter != null) mOsdEpisodeAdapter.notifyDataSetChanged();
+        updateOsdTabs();
+    }
+
+    /** 原始 / 紧凑：真实改变卡片字号与行高。 */
+    private void toggleOsdCompact() {
+        osdCompact = !osdCompact;
+        if (mOsdEpisodeAdapter != null) mOsdEpisodeAdapter.setCompact(osdCompact);
+        updateOsdTabs();
+    }
+
+    /** 正序 / 倒序：复用详情页的排序入口，翻完后重新绑定面板。 */
+    private void onOsdSort() {
+        if (mHistory == null) return;
+        onRevSort();
+        bindEpisodePanel(true);
+        focusEpisodePanel();
+    }
+
+    /**
+     * 顶部三个操作标签沿用详情页习惯显示“下一步动作”：
+     * 当前少列 → 显示多列；当前原始 → 显示紧凑；当前正序 → 显示倒序。
+     */
+    private void updateOsdTabs() {
+        if (mBinding == null) return;
+        mBinding.episodePanel.osdTabColumn.setText(osdColumnFew ? R.string.osd_column_many : R.string.osd_column_few);
+        mBinding.episodePanel.osdTabCompact.setText(osdCompact ? R.string.play_scale : R.string.osd_compact);
+        mBinding.episodePanel.osdTabSort.setText(mHistory != null && mHistory.isRevSort() ? R.string.detail_episode_forward : R.string.detail_episode_reverse);
     }
 
     /** 旧控制栏的入口 View 映射到新版 OSD 对应按钮，保持 showControl 的调用点不变。 */
@@ -4995,6 +5045,7 @@ private boolean runtimeSourceOnly;
     private void bindEpisodePanel(boolean resetPage) {
         Flag flag = getFlag();
         List<Episode> episodes = flag == null ? new ArrayList<>() : flag.getEpisodes();
+        updateOsdTabs();
         mOsdFlagAdapter.addAll(mFlagAdapter.getItems());
         if (episodes.isEmpty()) {
             mOsdPageIndex = 0;

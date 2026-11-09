@@ -1,12 +1,17 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 选集分页按钮：当前页红色圆角描边，焦点态红色实底。 -->
+<!--
+    选集面板分页按钮：
+    - 当前页：透明底 + @color/osd_focus 2dp 描边（对齐 ref_docs/player_menu_overlay.png 的当前页胶囊）
+    - 焦点：@color/osd_focus 红渐变
+    - 其余：透明
+-->
 <selector xmlns:android="http://schemas.android.com/apk/res/android">
     <item android:state_focused="true">
         <shape android:shape="rectangle">
-            <solid android:color="#E50914" />
-            <stroke
-                android:width="2dp"
-                android:color="#FFFFFFFF" />
+            <gradient
+                android:angle="270"
+                android:endColor="@color/osd_focus_dark"
+                android:startColor="@color/osd_focus" />
             <corners android:radius="14dp" />
         </shape>
     </item>
@@ -15,7 +20,7 @@
             <solid android:color="@android:color/transparent" />
             <stroke
                 android:width="2dp"
-                android:color="#E50914" />
+                android:color="@color/osd_focus" />
             <corners android:radius="14dp" />
         </shape>
     </item>

@@ -1,27 +1,32 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 线路按钮：当前线路红色描边，焦点态红色实底。 -->
+<!--
+    选集面板线路按钮：
+    - 默认：深色半透明 @color/osd_surface
+    - 当前线路：透明底 + @color/osd_focus 2dp 描边（对齐 ref_docs/player_menu_overlay.png）
+    - 焦点：@color/osd_focus 红渐变
+-->
 <selector xmlns:android="http://schemas.android.com/apk/res/android">
     <item android:state_focused="true">
         <shape android:shape="rectangle">
-            <solid android:color="#E50914" />
-            <stroke
-                android:width="2dp"
-                android:color="#FFFFFFFF" />
+            <gradient
+                android:angle="270"
+                android:endColor="@color/osd_focus_dark"
+                android:startColor="@color/osd_focus" />
             <corners android:radius="4dp" />
         </shape>
     </item>
     <item android:state_selected="true">
         <shape android:shape="rectangle">
-            <solid android:color="#33111111" />
+            <solid android:color="@android:color/transparent" />
             <stroke
                 android:width="2dp"
-                android:color="#E50914" />
+                android:color="@color/osd_focus" />
             <corners android:radius="4dp" />
         </shape>
     </item>
     <item>
         <shape android:shape="rectangle">
-            <solid android:color="#4D2A2A2A" />
+            <solid android:color="@color/osd_surface" />
             <corners android:radius="4dp" />
         </shape>
     </item>

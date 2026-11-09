@@ -2,9 +2,11 @@
 <!--
     播放页 OSD 控制层（纯 View 实现，不使用 Compose）。
     - 左上：分辨率；右上：实时网速
-    - 左下：剧集 Logo（无图时隐藏）
-    - 底部：进度条 + 上一集 / 播放 / 下一集 / 选集 / EXO / 硬解 / 刷新 / 重播 /
-            循环 / 倍速 / 原始 / 字幕 / 轨道 / 片头 / 片尾
+    - 左下：剧集艺术字 vodLogo（只显示标题文字，不加载海报图；为空则整块隐藏）
+    - 底部：进度条 + 严格顺序的按钮行：
+            上一集 → 下一集 → 选集 → EXO → 硬解 → 刷新 → 重播 →
+            倍速 → 画面比例 → 字幕 → 音轨 → 视轨 → 片头 → 片尾
+    说明：中间的播放/暂停大圆键已删除，确认键（DPAD_CENTER）直接接管播放/暂停。
 -->
 <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools"
@@ -58,15 +60,29 @@
         android:paddingEnd="24dp"
         android:paddingBottom="14dp">
 
-        <androidx.appcompat.widget.AppCompatImageView
+        <!--
+            左下角艺术字：只渲染 vodName 生成的文字标题，永不加载 vodPic 海报图，
+            单行 22sp 高度约 26dp，不会顶起 OSD 高度。
+        -->
+        <com.google.android.material.textview.MaterialTextView
             android:id="@+id/vodLogo"
             android:layout_width="wrap_content"
-            android:layout_height="90dp"
-            android:layout_marginBottom="4dp"
-            android:adjustViewBounds="true"
-            android:scaleType="fitStart"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="2dp"
+            android:ellipsize="end"
+            android:includeFontPadding="false"
+            android:letterSpacing="0.04"
+            android:maxWidth="320dp"
+            android:shadowColor="#99000000"
+            android:shadowDx="0"
+            android:shadowDy="2"
+            android:shadowRadius="6"
+            android:singleLine="true"
+            android:textColor="@color/white"
+            android:textSize="22sp"
+            android:textStyle="bold"
             android:visibility="gone"
-            tools:src="@drawable/artwork"
+            tools:text="The Last of Us"
             tools:visibility="visible" />
 
         <com.fongmi.android.tv.ui.custom.CustomSeekView
@@ -89,6 +105,7 @@
                 android:gravity="center_vertical"
                 android:orientation="horizontal">
 
+                <!-- 1. 上一集 -->
                 <androidx.appcompat.widget.AppCompatImageView
                     android:id="@+id/osdPrev"
                     style="@style/OsdIcon"
@@ -96,93 +113,81 @@
                     android:nextFocusUp="@id/osdSeek"
                     android:src="@drawable/exo_icon_previous" />
 
-                <FrameLayout
-                    android:id="@+id/osdPlay"
-                    android:layout_width="52dp"
-                    android:layout_height="52dp"
-                    android:layout_marginStart="6dp"
-                    android:layout_marginEnd="12dp"
-                    android:background="@drawable/selector_osd_play_button"
-                    android:clickable="true"
-                    android:contentDescription="@string/play"
-                    android:focusable="true"
-                    android:focusableInTouchMode="true">
-
-                    <androidx.appcompat.widget.AppCompatImageView
-                        android:id="@+id/osdPlayIcon"
-                        android:layout_width="match_parent"
-                        android:layout_height="match_parent"
-                        android:clickable="false"
-                        android:focusable="false"
-                        android:padding="13dp"
-                        android:src="@drawable/exo_icon_play"
-                        android:tint="@color/white" />
-
-                </FrameLayout>
-
+                <!-- 2. 下一集 -->
                 <androidx.appcompat.widget.AppCompatImageView
                     android:id="@+id/osdNext"
                     style="@style/OsdIcon"
-                    android:layout_marginEnd="14dp"
                     android:contentDescription="@string/play_next"
                     android:src="@drawable/exo_icon_next" />
 
+                <!-- 3. 选集 -->
                 <com.google.android.material.textview.MaterialTextView
                     android:id="@+id/osdEpisodes"
                     style="@style/OsdAction"
                     android:text="@string/play_episodes" />
 
+                <!-- 4. EXO / 播放内核 -->
                 <com.google.android.material.textview.MaterialTextView
                     android:id="@+id/osdKernel"
                     style="@style/OsdAction"
                     android:text="@string/play_exo" />
 
+                <!-- 5. 硬解 -->
                 <com.google.android.material.textview.MaterialTextView
                     android:id="@+id/osdDecode"
                     style="@style/OsdAction"
                     android:text="@string/play_decode" />
 
+                <!-- 6. 刷新 -->
                 <com.google.android.material.textview.MaterialTextView
                     android:id="@+id/osdRefresh"
                     style="@style/OsdAction"
                     android:text="@string/play_reset" />
 
+                <!-- 7. 重播 -->
                 <com.google.android.material.textview.MaterialTextView
                     android:id="@+id/osdReplay"
                     style="@style/OsdAction"
                     android:text="@string/play_replay" />
 
-                <com.google.android.material.textview.MaterialTextView
-                    android:id="@+id/osdRepeat"
-                    style="@style/OsdAction"
-                    android:text="@string/play_repeat" />
-
+                <!-- 8. 倍速 -->
                 <com.google.android.material.textview.MaterialTextView
                     android:id="@+id/osdSpeed"
                     style="@style/OsdAction"
                     android:fontFeatureSettings="tnum"
                     android:text="@string/play_speed" />
 
+                <!-- 9. 画面比例 -->
                 <com.google.android.material.textview.MaterialTextView
                     android:id="@+id/osdScale"
                     style="@style/OsdAction"
                     android:text="@string/play_scale" />
 
+                <!-- 10. 字幕 -->
                 <com.google.android.material.textview.MaterialTextView
                     android:id="@+id/osdText"
                     style="@style/OsdAction"
                     android:text="@string/play_track_text" />
 
+                <!-- 11. 音轨 -->
                 <com.google.android.material.textview.MaterialTextView
-                    android:id="@+id/osdTrack"
+                    android:id="@+id/osdAudio"
                     style="@style/OsdAction"
-                    android:text="@string/play_track" />
+                    android:text="@string/play_track_audio" />
 
+                <!-- 12. 视轨 -->
+                <com.google.android.material.textview.MaterialTextView
+                    android:id="@+id/osdVideo"
+                    style="@style/OsdAction"
+                    android:text="@string/play_track_video" />
+
+                <!-- 13. 片头 -->
                 <com.google.android.material.textview.MaterialTextView
                     android:id="@+id/osdOpening"
                     style="@style/OsdAction"
                     android:text="@string/play_op" />
 
+                <!-- 14. 片尾 -->
                 <com.google.android.material.textview.MaterialTextView
                     android:id="@+id/osdEnding"
                     style="@style/OsdAction"

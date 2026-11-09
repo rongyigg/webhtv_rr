@@ -1,25 +1,28 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- OSD 文字按钮：焦点态用高亮底 + 白色描边，非焦点保持透明不遮挡画面。 -->
+<!--
+    OSD 底部文字按钮：默认完全透明不遮挡画面；
+    焦点态 = @color/osd_focus → @color/osd_focus_dark 的圆角矩形渐变（原版红，不是纯红 #FF0000）。
+-->
 <selector xmlns:android="http://schemas.android.com/apk/res/android">
     <item android:state_focused="true">
         <shape android:shape="rectangle">
-            <solid android:color="#33FFFFFF" />
-            <stroke
-                android:width="2dp"
-                android:color="#FFFFFFFF" />
-            <corners android:radius="6dp" />
+            <gradient
+                android:angle="270"
+                android:endColor="@color/osd_focus_dark"
+                android:startColor="@color/osd_focus" />
+            <corners android:radius="4dp" />
         </shape>
     </item>
     <item android:state_pressed="true">
         <shape android:shape="rectangle">
-            <solid android:color="#4DFFFFFF" />
-            <corners android:radius="6dp" />
+            <solid android:color="@color/osd_surface" />
+            <corners android:radius="4dp" />
         </shape>
     </item>
     <item>
         <shape android:shape="rectangle">
             <solid android:color="@android:color/transparent" />
-            <corners android:radius="6dp" />
+            <corners android:radius="4dp" />
         </shape>
     </item>
 </selector>

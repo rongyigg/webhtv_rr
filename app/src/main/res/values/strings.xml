@@ -756,6 +756,9 @@
     <string name="player_button_up">Up</string>
     <string name="player_button_down">Down</string>
     <string name="play_episodes">Episodes</string>
+    <string name="osd_column_few">Fewer</string>
+    <string name="osd_column_many">More</string>
+    <string name="osd_compact">Compact</string>
     <string name="player_exo_4k_compat">Playback performance</string>
     <string name="player_immersive_audio_mode">Immersive audio mode</string>
     <string name="player_performance">Playback performance</string>

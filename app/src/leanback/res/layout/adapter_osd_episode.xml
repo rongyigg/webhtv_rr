@@ -1,39 +1,54 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 播放页选集面板 - 双列选集按钮：当前集红色高亮并显示播放标记 -->
+<!--
+    播放页底部选集卡片：直接复用逆向数据 ref_docs/adapter_episode.xml 的结构
+    （FrameLayout + MaterialTextView 跑马灯 + LottieAnimationView），组件与尺寸不变：
+    16sp 文字、wrap_content 高度、20x25dp Lottie、-12dp/-9dp 负边距、@raw/equalizer。
+    只做两处校准：
+    1. 卡片背景落在可聚焦的 FrameLayout 上（@drawable/selector_osd_episode：
+       默认 #33FFFFFF，焦点/正在播放为 @color/osd_focus 红渐变），
+       否则焦点态永远不会触发；文字固定白色，避免 @color/text 选中变黄；
+    2. 补 6dp 卡片间距，对齐 ref_docs/player_menu_overlay.png 的卡片留白。
+-->
 <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     xmlns:tools="http://schemas.android.com/tools"
     android:layout_width="match_parent"
-    android:layout_height="52dp"
-    android:layout_marginEnd="12dp"
-    android:layout_marginBottom="8dp"
+    android:layout_height="wrap_content"
+    android:layout_marginEnd="6dp"
+    android:layout_marginBottom="6dp"
     android:background="@drawable/selector_osd_episode"
-    android:clickable="true"
+    android:clipChildren="false"
+    android:clipToPadding="false"
     android:focusable="true"
-    android:focusableInTouchMode="true">
+    android:focusableInTouchMode="true"
+    android:nextFocusDown="@+id/array"
+    android:nextFocusUp="@+id/flag">
 
     <com.google.android.material.textview.MaterialTextView
         android:id="@+id/text"
         android:layout_width="match_parent"
-        android:layout_height="match_parent"
-        android:layout_marginEnd="44dp"
-        android:ellipsize="end"
+        android:layout_height="wrap_content"
+        android:ellipsize="marquee"
+        android:focusable="false"
+        android:focusableInTouchMode="false"
         android:gravity="center"
-        android:includeFontPadding="false"
-        android:paddingStart="16dp"
-        android:paddingEnd="16dp"
+        android:marqueeRepeatLimit="marquee_forever"
+        android:scrollHorizontally="true"
         android:singleLine="true"
         android:textColor="@color/white"
         android:textSize="16sp"
-        tools:text="[1.7GB]S01E01_4K_HDR_60fps.mkv" />
+        tools:text="第20集" />
 
-    <androidx.appcompat.widget.AppCompatImageView
-        android:id="@+id/playing"
-        android:layout_width="16dp"
-        android:layout_height="16dp"
-        android:layout_gravity="end|center_vertical"
-        android:layout_marginEnd="16dp"
-        android:src="@drawable/ic_osd_playing"
+    <com.airbnb.lottie.LottieAnimationView
+        android:id="@+id/lottie"
+        android:layout_width="20dp"
+        android:layout_height="25dp"
+        android:layout_gravity="end|bottom"
+        android:layout_marginEnd="-9dp"
+        android:layout_marginBottom="-12dp"
         android:visibility="gone"
+        app:lottie_loop="true"
+        app:lottie_rawRes="@raw/equalizer"
         tools:visibility="visible" />
 
 </FrameLayout>

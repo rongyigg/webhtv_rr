@@ -109,70 +109,93 @@
         <item name="alertDialogStyle">@style/MaterialAlertDialog.WebHTV.Rounded</item>
     </style>
 
-    <!-- 播放页 OSD 底部文字按钮：默认透明，焦点态高亮底色 + 白边。 -->
+    <!--
+        播放页 OSD 底部文字按钮：默认透明，焦点态是 @color/osd_focus 圆角矩形红渐变。
+        字号 13sp、按钮间距 12dp（含 6dp 内边距，视觉间距约 16dp），对齐 ref_docs/player_down_controls.png。
+    -->
     <style name="OsdAction">
         <item name="android:layout_width">wrap_content</item>
-        <item name="android:layout_height">48dp</item>
-        <item name="android:layout_marginEnd">6dp</item>
+        <item name="android:layout_height">40dp</item>
+        <item name="android:layout_marginEnd">12dp</item>
         <item name="android:background">@drawable/selector_osd_action</item>
         <item name="android:focusable">true</item>
         <item name="android:focusableInTouchMode">true</item>
         <item name="android:gravity">center</item>
         <item name="android:includeFontPadding">false</item>
-        <item name="android:minWidth">48dp</item>
-        <item name="android:paddingStart">14dp</item>
-        <item name="android:paddingEnd">14dp</item>
+        <item name="android:paddingStart">6dp</item>
+        <item name="android:paddingEnd">6dp</item>
         <item name="android:singleLine">true</item>
         <item name="android:textColor">@color/white</item>
-        <item name="android:textSize">18sp</item>
+        <item name="android:textSize">13sp</item>
     </style>
 
-    <!-- 播放页 OSD 图标按钮（上一集）。 -->
+    <!-- 播放页 OSD 图标按钮（上一集 / 下一集）。 -->
     <style name="OsdIcon">
-        <item name="android:layout_width">48dp</item>
-        <item name="android:layout_height">48dp</item>
-        <item name="android:layout_marginEnd">6dp</item>
+        <item name="android:layout_width">40dp</item>
+        <item name="android:layout_height">40dp</item>
+        <item name="android:layout_marginEnd">12dp</item>
         <item name="android:background">@drawable/selector_osd_icon</item>
         <item name="android:focusable">true</item>
         <item name="android:focusableInTouchMode">true</item>
-        <item name="android:padding">12dp</item>
+        <item name="android:padding">10dp</item>
         <item name="android:scaleType">fitCenter</item>
         <item name="android:tint">@color/white</item>
     </style>
 
-    <!-- 选集面板线路按钮。 -->
+    <!-- 选集面板线路按钮（ref_docs/activity_video.xml 的 flag 行高 34dp）。 -->
     <style name="OsdChip">
         <item name="android:layout_width">wrap_content</item>
-        <item name="android:layout_height">40dp</item>
-        <item name="android:layout_marginEnd">10dp</item>
+        <item name="android:layout_height">34dp</item>
+        <item name="android:layout_marginEnd">8dp</item>
         <item name="android:background">@drawable/selector_osd_chip</item>
         <item name="android:ellipsize">end</item>
         <item name="android:focusable">true</item>
         <item name="android:focusableInTouchMode">true</item>
         <item name="android:gravity">center</item>
         <item name="android:maxWidth">280dp</item>
-        <item name="android:paddingStart">16dp</item>
-        <item name="android:paddingEnd">16dp</item>
+        <item name="android:paddingStart">12dp</item>
+        <item name="android:paddingEnd">12dp</item>
         <item name="android:singleLine">true</item>
         <item name="android:textColor">@color/white</item>
-        <item name="android:textSize">16sp</item>
+        <item name="android:textSize">14sp</item>
     </style>
 
-    <!-- 选集面板分页按钮。 -->
+    <!-- 选集面板分页按钮（ref_docs/activity_video.xml 的 array 行高 34dp）。 -->
     <style name="OsdPage">
         <item name="android:layout_width">wrap_content</item>
-        <item name="android:layout_height">36dp</item>
+        <item name="android:layout_height">34dp</item>
         <item name="android:layout_marginEnd">8dp</item>
         <item name="android:background">@drawable/selector_osd_page</item>
         <item name="android:focusable">true</item>
         <item name="android:focusableInTouchMode">true</item>
         <item name="android:gravity">center</item>
-        <item name="android:minWidth">64dp</item>
-        <item name="android:paddingStart">14dp</item>
-        <item name="android:paddingEnd">14dp</item>
+        <item name="android:minWidth">56dp</item>
+        <item name="android:paddingStart">12dp</item>
+        <item name="android:paddingEnd">12dp</item>
         <item name="android:singleLine">true</item>
         <item name="android:textColor">@color/white</item>
-        <item name="android:textSize">16sp</item>
+        <item name="android:textSize">13sp</item>
+    </style>
+
+    <!--
+        选集面板顶部操作标签（少列 / 多列、原始 / 紧凑、正序 / 倒序）。
+        字号 15sp 加粗，和「播放线路 / 选集」标题同一视觉层级。
+    -->
+    <style name="OsdTab">
+        <item name="android:layout_width">wrap_content</item>
+        <item name="android:layout_height">34dp</item>
+        <item name="android:layout_marginStart">14dp</item>
+        <item name="android:background">@drawable/selector_osd_action</item>
+        <item name="android:focusable">true</item>
+        <item name="android:focusableInTouchMode">true</item>
+        <item name="android:gravity">center</item>
+        <item name="android:includeFontPadding">false</item>
+        <item name="android:paddingStart">10dp</item>
+        <item name="android:paddingEnd">10dp</item>
+        <item name="android:singleLine">true</item>
+        <item name="android:textColor">@color/white</item>
+        <item name="android:textSize">15sp</item>
+        <item name="android:textStyle">bold</item>
     </style>
 
 </resources>

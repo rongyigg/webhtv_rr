@@ -80,4 +80,20 @@
     <color name="home_tab_stroke">@color/red</color>
     <color name="home_tab_idle_surface">@color/black_20</color>
     <color name="home_tab_idle_text">#99FFFFFF</color>
+
+    <!--
+        播放页 OSD 全局焦点色（唯一真值，等价于需求里的 `OsdFocusColor`）：
+        取 ref_docs/player_down_controls.png / ref_docs/player_menu_overlay.png 里
+        被选中按钮的红色高亮，是 #E53935 → #C62828 的纵向渐变，不是纯红 #FF0000。
+        后期换色只改这里，禁止在 layout / drawable 里另写红色十六进制。
+    -->
+    <color name="osd_focus">#FFE53935</color>
+    <color name="osd_focus_dark">#FFC62828</color>
+    <!-- 选集卡片默认态：深色半透明（需求指定 #33FFFFFF）。 -->
+    <color name="osd_surface">#33FFFFFF</color>
+    <!-- OSD 底部遮罩：透明 → #CC000000 的两段渐变。 -->
+    <color name="osd_scrim_start">#00000000</color>
+    <color name="osd_scrim_end">#CC000000</color>
+    <!-- 选集面板底部背景（ref_docs/bg_episode_list_bottom）：透明 → #F2000000。 -->
+    <color name="osd_panel_end">#F2000000</color>
 </resources>

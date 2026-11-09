@@ -1,10 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 播放页 OSD 遮罩：顶部完全透明，向下逐渐压暗，保证底部按钮和进度条可读。 -->
+<!--
+    播放页 OSD 遮罩：顶部完全透明，向下压到 #CC000000，保证底部按钮 / 进度条可读。
+    两段渐变（#00000000 → #CC000000），对应需求里的「半透明黑色渐变」。
+-->
 <shape xmlns:android="http://schemas.android.com/apk/res/android"
     android:shape="rectangle">
     <gradient
         android:angle="270"
-        android:centerColor="#59000000"
-        android:endColor="#CC000000"
-        android:startColor="#00000000" />
+        android:endColor="@color/osd_scrim_end"
+        android:startColor="@color/osd_scrim_start" />
 </shape>
