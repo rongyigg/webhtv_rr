@@ -49,10 +49,14 @@ import com.fongmi.android.tv.bean.TmdbMatchCache
 import com.fongmi.android.tv.bean.Vod
 import com.fongmi.android.tv.impl.Callback
 import com.fongmi.android.tv.model.SiteViewModel
+import com.fongmi.android.tv.server.Server
+import com.fongmi.android.tv.service.ManageService
+import com.fongmi.android.tv.service.PlaybackService
 import com.fongmi.android.tv.service.TmdbService
 import com.fongmi.android.tv.setting.Setting
 import com.fongmi.android.tv.setting.SiteBlockSetting
 import com.fongmi.android.tv.setting.TmdbSitePolicy
+import com.fongmi.android.tv.ui.audio.AudioMiniPlayer
 import com.fongmi.android.tv.ui.custom.HeroImageView
 import com.fongmi.android.tv.ui.custom.ProgressLayout
 import com.fongmi.android.tv.ui.helper.TmdbMatcher
@@ -360,14 +364,38 @@ class HomeViewActivity : AppCompatActivity() {
             lastBackPressTime = 0L
             return
         }
-        // 2. 已经停在首页根页：2 秒内连按两次才真正退出 App。
+        // 2. 已经停在首页根页：2 秒内连按两次才真正退出 App（杀进程，不留后台）。
         val currentTime = System.currentTimeMillis()
         if (currentTime - lastBackPressTime < EXIT_CONFIRM_WINDOW_MS) {
-            super.onBackPressed()
+            lastBackPressTime = 0L
+            exitCompletely()
             return
         }
         lastBackPressTime = currentTime
         Toast.makeText(this, R.string.app_exit_confirm, Toast.LENGTH_SHORT).show()
+    }
+
+    /**
+     * 彻底退出：停后台服务 → 清空本应用任务栈 → 杀进程。
+     *
+     * 只 `finish()` / `super.onBackPressed()` 的后果就是用户看到的「退到后台，进程还在」：
+     * 播放服务（支持后台播放）、本地 HTTP 服务、下载 / 推送等后台组件仍然活着，通知栏还能继续播。
+     * 这里先按原版 `AppExitCoordinator.exit` 的同一顺序优雅收尾，再 `killProcess` 保证进程和
+     * 所有后台线程立即结束，下次启动就是真正的冷启动。
+     *
+     * **`killProcess` 必须放最后**：它之后本方法不会再返回，写在它后面的清理永远不会执行。
+     */
+    private fun exitCompletely() {
+        runCatching {
+            val service = Server.get().service
+            AudioMiniPlayer.deactivateForFull(service)
+            App.stopBackgroundServices()
+            ManageService.stop(this)
+            PlaybackService.shutdown(this)
+            Server.get().shutdown()
+        }.onFailure { Log.w(TAG, "退出前清理后台服务失败: ${it.message}") }
+        finishAffinity()
+        android.os.Process.killProcess(android.os.Process.myPid())
     }
 
     // ==================================================================

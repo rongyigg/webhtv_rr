@@ -197,9 +197,6 @@ class HeroDetailActivity : ComponentActivity() {
             systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
         }
         HeroImageLoader.install()
-        // 真实数据入口：首页海报卡 / 换源弹窗会把整条 Vod + Site 的关键字段塞进 Intent。
-        // 只有剧名的旧入口（adb 直接拉起）继续整页回落 DEMO_DETAIL。
-        val detail = readDetail()
         // 真实详情主键：首页海报卡 / 换源弹窗已经把它塞进 Intent；旧入口（只有剧名）为空。
         val rawVodId = intent.getStringExtra(EXTRA_VOD_ID).orEmpty()
         // 原版 `VideoActivity.checkId()`：
@@ -216,6 +213,10 @@ class HeroDetailActivity : ComponentActivity() {
             }
         }
         val siteName = intent.getStringExtra(EXTRA_SITE_NAME).orEmpty()
+        // 真实数据入口：首页海报卡 / 换源弹窗会把整条 Vod + Site 的关键字段塞进 Intent。
+        // 只有剧名的旧入口（adb 直接拉起）继续整页回落 DEMO_DETAIL。
+        // `siteKey` / `vodId` 必须先算好：首帧横图要拿它们在本地 TMDB 缓存里做同步查找。
+        val detail = readDetail(siteKey, vodId)
         // 传下来的整条 Vod：如果它自己已经带 flags（WebHome 内联源 / 聚合结果），就不用再请求。
         val passedVod = readVod()
         val inlinePlayable = passedVod != null && passedVod.hydrateInlineEpisodes()
@@ -373,7 +374,7 @@ class HeroDetailActivity : ComponentActivity() {
      * 才保留假数据用于离线验证。
      * 线路与选集则完全来自 `SiteViewModel.detailContent` 返回的 `Vod.flags`，不再有假数据。
      */
-    private fun readDetail(): HeroDetail {
+    private fun readDetail(siteKey: String, vodId: String): HeroDetail {
         val title = intent.getStringExtra(EXTRA_TITLE).orEmpty().ifBlank { return DEMO_DETAIL }
         val pic = intent.getStringExtra(EXTRA_PIC).orEmpty()
         // 旧 adb 入口 = 「只有剧名」：既没有海报，也没有详情主键（`extra_vod_id`）。
@@ -384,7 +385,15 @@ class HeroDetailActivity : ComponentActivity() {
         // 详情接口只给竖版 `vod.pic`，等它回来再换背景会让首帧从横图硬切成竖图。
         val extraBackdrop = intent.getStringExtra(EXTRA_BACKDROP).orEmpty()
         // 只有「确实和竖图不同」才算横图：同值时仍按源站图处理，行为与改动前完全一致。
-        val wideBackdrop = extraBackdrop.isNotBlank() && extraBackdrop != pic
+        val wideExtra = extraBackdrop.isNotBlank() && extraBackdrop != pic
+        // 【首帧防闪·核心】历史页 / 换源弹窗入口**不带** `extra_backdrop`。改动前这里会退回
+        // `pic`（源站竖图）铺满全屏，用户看到的就是「先进来一张被拉伸的竖图，再被 TMDB 横图换掉」。
+        // 现在同步读一次本地缓存（进程内预取 → 磁盘匹配缓存）拿真横图；拿不到就留空，
+        // 由底层纯黑 Box 兜底 —— 竖图只允许待在右上角小海报里，绝不进全屏背景。
+        val cachedBackdrop = if (wideExtra) extraBackdrop else syncWideBackdrop(siteKey, vodId, title)
+        // 非空且确实不是那张竖图才算数（匹配缓存里偶尔会把竖图写进 backdrop 字段）。
+        val firstBackdrop = cachedBackdrop.takeIf { it.isNotBlank() && it != pic }
+        val wideBackdrop = firstBackdrop != null
         // 首页信息区此刻显示的 TMDB 艺术字 / 简介：一起直出，避免进来先闪一下文字标题与源站简介。
         val extraLogo = intent.getStringExtra(EXTRA_LOGO).orEmpty()
         val extraOverview = intent.getStringExtra(EXTRA_OVERVIEW).orEmpty()
@@ -404,16 +413,17 @@ class HeroDetailActivity : ComponentActivity() {
                 .ifBlank { intent.getStringExtra(EXTRA_CONTENT).orEmpty() }
                 .ifBlank { if (demo) DEMO_DETAIL.synopsis else "" },
             posterUrl = pic,
-            // 详情接口只给竖版图：有首页预取的横图就用横图，否则仍用竖图裁 16:9（改动前行为）。
-            backdropUrl = if (wideBackdrop) extraBackdrop else pic,
+            // 首帧背景：只认真横图。没有就空串（底层黑底），**绝不**再用竖图 `pic` 铺满。
+            backdropUrl = firstBackdrop.orEmpty(),
             // 首帧直接出艺术字：有 Logo 时 `HeroDetailTitle` 走 72dp Logo，否则回落 32sp 文字。
             logoUrl = extraLogo.takeIf { it.isNotBlank() },
             // 【关键·不闪小图】首帧就已经是横图时直接判定「有背景大图」：
             // 否则右上角小海报会先渲染出来、等 TMDB Ready 才消失，正好点进详情时闪一下。
             // 注意判 `wideBackdrop` 而不是 `extraBackdrop != null`：`start()` 永远会 put 这个 extra，
-            // 空串时它非 null 但不是横图，用 null 判断会把「竖图兜底」也误判成大图。
+            // 空串时它非 null 但不是横图，用 null 判断会把「没有横图」也误判成大图。
+            // 现在 `wideBackdrop` 还包含「本地 TMDB 缓存命中」这一路，判它才是真正的「首帧有没有横图」。
             hasTmdbBackdrop = wideBackdrop,
-            // 横图标记：`mergeDetail` 据此拒绝用竖图覆盖，`mergeTmdb` 据此保留更高清的档位。
+            // 横图标记：`mergeDetail` 不再碰背景，`mergeTmdb` 据此保留更高清的档位、不闪小海报。
             hasWideBackdrop = wideBackdrop,
             // 首帧简介已经是 TMDB 译文时，`mergeDetail` 不要再用源站 `vod.content` 盖掉它。
             hasTmdbOverview = extraOverview.isNotBlank(),
@@ -421,6 +431,30 @@ class HeroDetailActivity : ComponentActivity() {
             // 不会出现「真数据 + 10 位假演员」混排；旧 adb 入口（demo）保留假演员。
             cast = if (demo) DEMO_DETAIL.cast else emptyList(),
         )
+    }
+
+    /**
+     * 首帧横图的**同步**来源（按新鲜度排序，命中即返回）：
+     * 1. [HeroTmdbPrefetchCache]：首页刚预取过的条目，横图 / 详情都在内存里，零 IO；
+     * 2. `TmdbMatchCache`：历史页 / 换源入口冷启动时唯一的本地来源（`AppCache` + Gson）。
+     *
+     * **只认 `TmdbItem.backdropUrl`（真横图字段）**，绝不读 `HeroTmdbData.highResBackdrop`：
+     * 它在没有横图时会退回竖版 `posterUrl`，拿它当首帧背景正是「竖图被拉伸铺满」的来源。
+     */
+    private fun syncWideBackdrop(siteKey: String, vodId: String, title: String): String {
+        if (vodId.isBlank()) return ""
+        val prefetched = runCatching {
+            HeroTmdbPrefetchCache.peek(heroTmdbKey(siteKey, vodId))?.item?.backdropUrl.orEmpty()
+        }.getOrDefault("")
+        val cached = prefetched.ifBlank {
+            runCatching {
+                val cache = Setting.getTmdbMatchCache()
+                // 手动匹配优先：与下面 LaunchedEffect 里的读取顺序完全一致。
+                (cache.findManual(siteKey, vodId, title) ?: cache.find(siteKey, vodId, title))?.backdropUrl.orEmpty()
+            }.getOrDefault("")
+        }
+        // 提档到 w1920：与首页 `highResBackdrop` 逐字一致，直接命中首页预热好的磁盘缓存。
+        return upgradeTmdbImage(cached, TMDB_BACKDROP_WIDTH)
     }
 
     /**
@@ -1586,8 +1620,12 @@ private fun HeroDetailScreen(
     }
 }
 
-/** TMDB 图床 `w1920` 档的路径标记：命中就说明这是首页预取 / 提档后的高清横图。 */
-private const val TMDB_HIRES_MARKER = "/w1920/"
+/**
+ * 首帧横图的提档目标：与首页 `highResBackdrop` 同为 `w1920`。
+ *
+ * 逐字一致才能直接命中首页预热好的 Coil 磁盘缓存；换成 `w1280` / `original` 都要重新下载。
+ */
+private const val TMDB_BACKDROP_WIDTH = "w1920"
 
 /**
  * 剧名区：兼容 TMDB 艺术字 Logo。
@@ -3015,8 +3053,9 @@ private data class HeroDetail(
     /**
      * 当前 [backdropUrl] 是否已经是「横图」（首页预取的 `extra_backdrop` 或 TMDB backdrop）。
      *
-     * 为 true 时 [mergeDetail] **绝不**再用源站竖图 `vod.pic` 覆盖它：
-     * 详情接口只给竖图，覆盖会让首帧从 16:9 横图硬切成竖图，还会让 Coil 重新解码一次。
+     * 详情接口回填（[mergeDetail]）不碰背景，只有 TMDB 真横图（[mergeTmdb]）能替换它；
+     * 源站竖图只进右上角小海报。为 true 时 TMDB 没有 backdrop 也不把海报从小海报换成大背景，
+     * 避免第二帧「小海报从无到有」地冒出来。
      */
     val hasWideBackdrop: Boolean = false,
     /**
@@ -3045,7 +3084,6 @@ private data class HeroDetail(
  */
 private fun HeroDetail.mergeDetail(vod: Vod?, siteName: String): HeroDetail {
     if (vod == null || vod.id.isBlank()) return this
-    val currentBackdrop = backdropUrl
     val realMeta = listOf(
         vod.year,
         vod.area,
@@ -3060,20 +3098,12 @@ private fun HeroDetail.mergeDetail(vod: Vod?, siteName: String): HeroDetail {
         // 否则「TMDB 简介 → 源站短简介 → TMDB 简介」会明显闪两次。
         synopsis = if (hasTmdbOverview) synopsis else vod.content.ifBlank { synopsis },
         posterUrl = vod.pic.ifBlank { posterUrl },
-        // 【锁死横图】已经拿到横图（首页 extra_backdrop / TMDB w1920）时，源站详情回来的 `vod.pic`
-        // 是竖图，覆盖它只会让背景从 16:9 硬切成竖图 + Coil 重新解码，用户看到的就是「背景没了」。
+        // 【竖图永不铺满】源站详情回来的 `vod.pic` 是竖版海报，只能进右上角小海报（上一行），
+        // **不能**再写进全屏背景：没有 TMDB 横图时保持现有值（可能是空串，由底层纯黑 Box 兜底）。
         //
-        // 三个分支，顺序不能乱：
-        // 1. 已有横图（标记位或 URL 本身是 w1920）→ 原样保留，竖图一个字都不许改；
-        // 2. 源站给了竖图 → 用它兜底（首帧还没有横图时的正常路径）；
-        // 3. 源站连竖图都没给 → 保留现有背景，**绝不清空**（以前 `vod.pic.ifBlank{}` 在
-        //    pic 为空时会把背景写成空串，详情页整块背景变黑）。
-        backdropUrl = when {
-            currentBackdrop.isNotBlank() &&
-                (hasWideBackdrop || currentBackdrop.contains(TMDB_HIRES_MARKER)) -> currentBackdrop
-            vod.pic.isNotBlank() -> vod.pic
-            else -> currentBackdrop
-        },
+        // 改动前这里会把 `vod.pic` 写成背景，于是「首帧黑底 → 详情回来竖图铺满 → TMDB 回横图」
+        // 要闪两次；现在首帧与详情帧都不碰竖图，只有 TMDB 真横图才会替换背景。
+        // `hasWideBackdrop` 只在首帧 / TMDB 拿到真横图时为 true，`mergeTmdb` 据此继续锁死横图。
         director = vod.director,
         actor = vod.actor,
     )
@@ -3127,7 +3157,7 @@ private fun HeroDetail.mergeTmdb(
         // 首页带来的横图（`hasWideBackdrop`）。后者必须一起认：否则 TMDB 没有 backdrop 时，
         // 第二帧会把小海报从无到有「冒」出来，和进来时的无小海报状态对不上。
         hasTmdbBackdrop = tmdbBackdrop.isNotBlank() || hasWideBackdrop,
-        // 一旦拿到横图（首页 / TMDB），后续 `mergeDetail` 就不能再用竖图把它盖回去。
+        // 一旦拿到横图（首页 / TMDB）就长期为 true：源站详情永远不能用竖图把背景盖回去。
         hasWideBackdrop = hasWideBackdrop || tmdbBackdrop.isNotBlank(),
         // 艺术字 Logo：TMDB `images.logos` 里优先中文，命中就替换 32sp 文字标题；
         // 提取不到（无 logos / 结构异常 / path 为空）返回 null，`?: logoUrl` 保持原来的 null 回落文字。
