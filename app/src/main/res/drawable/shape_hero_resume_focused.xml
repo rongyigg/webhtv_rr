@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-    历史页「查看详情」按钮 · 焦点态（旧 View 版 activity_hero_history.xml 仍在引用）。
+    历史页「查看详情」按钮 · 焦点态（activity_history_view.xml 引用）。
 
-    焦点底色与 Compose 侧 HistoryScreen / HeroFocusBrush 保持一致：
+    焦点底色与首页 HeroFocusBrush 保持一致：
     首页 Tab 栏同源两段渐变 home_tab_focus_start → home_tab_focus_end，不再使用实心纯红。
     圆角 / 内边距与常态完全一致，避免焦点切换时按钮尺寸跳动。
 -->

@@ -430,50 +430,64 @@ class HomeViewActivity : AppCompatActivity() {
     }
 
     private fun setupActions() {
-        // 小房子 = 全局接口源侧边栏（与 Compose 首页 `HeroTopBar.onHomeConfirm` 同一套实现）：
-        // 列出全部可用源（隐藏源 / 用户屏蔽源由 `SiteBlockSetting.filter(…, false)` 过滤），单选模式，
-        // 当前首页源保持选中态并作为默认焦点；`SourceSidebar` 是独立 Dialog 窗口，会自己抢焦点。
-        homeBtn.setOnClickListener {
-            val homeSites = SiteBlockSetting.filter(VodConfig.get().getSites(), false)
-            if (homeSites.isEmpty()) {
-                Notify.show(getString(R.string.play_change_empty))
-                return@setOnClickListener
-            }
-            // 拿到实例才能在回调里「先销毁再切源」：窗口一旦留在屏幕上，后面的 setHome + 重拉首页
-            // 会全部在它背后发生，用户看到的就是弹窗盖在新首页上。
-            var sidebar: SourceSidebar? = null
-            sidebar = SourceSidebar.show(
-                context = this,
-                entries = HeroSourceEntry.of(homeSites),
-                mode = SourceSidebarMode.Single,
-                currentSiteKey = VodConfig.get().getHome().key,
-                onSiteSelected = { site ->
-                    // 1.【绝对第一步】关闭并销毁窗口。`dismiss()` 是真正销毁（Dialog 窗口，不走
-                    //   addView，所以不需要 removeView），且幂等 —— 侧边栏自己在确定键时也先关一次，
-                    //   这里再兜一次，保证任何进入路径都不会留一层窗口盖在首页上。
-                    sidebar?.dismiss()
-                    sidebar = null
-                    val current = VodConfig.get().getHome()
-                    if (site.key == current.key) {
-                        // 选中的就是当前源：不重复发请求，只给个反馈。
-                        Notify.show(getString(R.string.source_sidebar_switched, site.displayName))
-                    } else {
-                        // 2. 切换数据源。
-                        Log.d(TAG, "小房子切换接口源: ${current.key} -> ${site.key}")
-                        VodConfig.get().setHome(site)
-                        // 3. 重新加载数据。`setHome` 只写配置并 post `RefreshEvent.home()`，
-                        //    本页不订阅 EventBus，必须自己再拉一次，否则列表还是旧源的数据。
-                        refreshHome("小房子切换接口源 ${site.displayName}")
-                        Notify.show(getString(R.string.source_sidebar_switched, site.displayName))
-                    }
-                    // 4. 焦点归位：窗口已经销毁，焦点必须显式还给打开它的小房子。
-                    homeBtn.post { homeBtn.requestFocus() }
-                },
-                onClosed = {
-                    // 侧边栏关闭后焦点不会自己回来：显式还给打开它的小房子。
-                    homeBtn.post { homeBtn.requestFocus() }
-                },
-            )
+        // 小房子 / 菜单键共用同一个入口：全局接口源侧边栏。
+        homeBtn.setOnClickListener { openSourceSidebar() }
+    }
+
+    /**
+     * 全局接口源侧边栏（原 Compose 首页 `HeroTopBar.onHomeConfirm` 的同一套实现）。
+     *
+     * 列出全部可用源（隐藏源 / 用户屏蔽源由 `SiteBlockSetting.filter(…, false)` 过滤），单选模式，
+     * 当前首页源保持选中态并作为默认焦点。`SourceSidebar` 是独立 Dialog 窗口，会自己抢焦点。
+     *
+     * 关闭后焦点必须还给首页：优先还原打开前的 `currentFocus`（菜单键可能从海报卡呼出），
+     * 取不到才回落到小房子。单一还原函数保证「选中切换」与「直接关闭」两条路径一致。
+     */
+    private fun openSourceSidebar() {
+        val homeSites = SiteBlockSetting.filter(VodConfig.get().getSites(), false)
+        if (homeSites.isEmpty()) {
+            Notify.show(getString(R.string.play_change_empty))
+            return
+        }
+        val previousFocus: View = currentFocus ?: homeBtn
+        // 拿到实例才能在回调里「先销毁再切源」：窗口一旦留在屏幕上，后面的 setHome + 重拉首页
+        // 会全部在它背后发生，用户看到的就是弹窗盖在新首页上。
+        var sidebar: SourceSidebar? = null
+        sidebar = SourceSidebar.show(
+            context = this,
+            entries = HeroSourceEntry.of(homeSites),
+            mode = SourceSidebarMode.Single,
+            currentSiteKey = VodConfig.get().getHome().key,
+            onSiteSelected = { site ->
+                // 1.【绝对第一步】关闭并销毁窗口。`dismiss()` 是真正销毁（Dialog 窗口，不走
+                //   addView，所以不需要 removeView），且幂等 —— 侧边栏自己在确定键时也先关一次，
+                //   这里再兜一次，保证任何进入路径都不会留一层窗口盖在首页上。
+                sidebar?.dismiss()
+                sidebar = null
+                val current = VodConfig.get().getHome()
+                if (site.key == current.key) {
+                    // 选中的就是当前源：不重复发请求，只给个反馈。
+                    Notify.show(getString(R.string.source_sidebar_switched, site.displayName))
+                } else {
+                    // 2. 切换数据源。
+                    Log.d(TAG, "侧边栏切换接口源: ${current.key} -> ${site.key}")
+                    VodConfig.get().setHome(site)
+                    // 3. 重新加载数据。`setHome` 只写配置并 post `RefreshEvent.home()`，
+                    //    本页不订阅 EventBus，必须自己再拉一次，否则列表还是旧源的数据。
+                    refreshHome("侧边栏切换接口源 ${site.displayName}")
+                    Notify.show(getString(R.string.source_sidebar_switched, site.displayName))
+                }
+                // 4. 焦点归位：窗口已经销毁，焦点必须显式还给打开它的位置。
+                restoreFocus(previousFocus)
+            },
+            onClosed = { restoreFocus(previousFocus) },
+        )
+    }
+
+    /** 侧边栏关闭后把焦点还给首页；目标已不可聚焦时回落到小房子。 */
+    private fun restoreFocus(target: View) {
+        target.post {
+            if (!target.requestFocus()) homeBtn.post { homeBtn.requestFocus() }
         }
     }
 
@@ -489,7 +503,7 @@ class HomeViewActivity : AppCompatActivity() {
      *
      * 目标页分两类：
      * - 在 `main` 源集里（搜索 / 历史）：本类可以直接引用，且与已验收的 Compose 首页同一条路由
-     *   （`HeroSearchActivity` / `HeroHistoryActivity`），不退回 leanback 的旧页面；
+     *   （`HeroSearchActivity` / `HistoryViewActivity`），不退回 leanback 的旧页面；
      * - 只在某个 flavor 里（直播 / 收藏 / 推送 / 设置）：见 [openFlavorActivity]。
      *
      * 顶栏第一项是「小房子」图标（`homeBtn`），文字项里**没有「首页」**：
@@ -501,7 +515,7 @@ class HomeViewActivity : AppCompatActivity() {
         when (label) {
             NAV_LIVE -> openFlavorActivity(LIVE_ACTIVITY_CLASS, Context::class.java, label)
             NAV_SEARCH -> HeroSearchActivity.start(this, currentSearchBackdrop())
-            NAV_HISTORY -> HeroHistoryActivity.start(this)
+            NAV_HISTORY -> HistoryViewActivity.start(this)
             NAV_KEEP -> openFlavorActivity(KEEP_ACTIVITY_CLASS, Activity::class.java, label)
             NAV_PUSH -> openFlavorActivity(PUSH_ACTIVITY_CLASS, Activity::class.java, label)
             NAV_SETTINGS -> openFlavorActivity(SETTING_ACTIVITY_CLASS, Activity::class.java, label)
@@ -1330,6 +1344,14 @@ class HomeViewActivity : AppCompatActivity() {
      * **短按只给确定键**：`KEYCODE_DPAD_DOWN` 的短按只吞事件，绝不跳详情。
      */
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        // 【菜单键】呼出全局接口源侧边栏（与 Compose 首页小房子同一实现）。
+        // DOWN 只认首次按下，避免按住时重复弹窗；UP 一并吞掉，防止落到默认菜单处理。
+        if (event.keyCode == KeyEvent.KEYCODE_MENU) {
+            if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
+                openSourceSidebar()
+            }
+            return true
+        }
         // 【原版硬移植 · 全方法第一条判断】W（isLongPressTriggered）锁：
         // 长按已触发 + 按键连发 → 直接吞掉，任何弹窗判断、任何事件下发之前就结束。
         // 对应 `HomeActivityV2.java`：

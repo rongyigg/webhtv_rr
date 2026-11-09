@@ -11,9 +11,7 @@
     2. `com.fongmi.android.tv.ui.custom.TypingDotsView` → `ProgressBar`
        （项目里没有这个自定义 View，用不定圈圈占位，行为等下一步接数据时再换）。
     3. `@drawable/bg_hero_mask_h` / `@drawable/bg_hero_mask_v` 已按 ref_docs 原文件逐字节补进
-       `res/drawable/`（左 / 下边缘 #ff000000 → 50% 处全透明），首页直接用原版 drawable。
-       历史页旧布局 activity_hero_history.xml 仍用 HeroMaskLeftView / HeroMaskBottomView，
-       那两个自绘类不动。
+       `res/drawable/`（左 / 下边缘 #ff000000 → 50% 处全透明），首页与历史页都直接用原版 drawable。
     4. `@drawable/ic_history_ring` → `@drawable/ic_setting_history`
        （原版图标未导出，项目里现有的同形「回环 + 时钟」白色图标）。
     5. `@drawable/bg_v2_filter_fade` 为本步骤新增的 drawable（同尺寸、同色标渐隐）。

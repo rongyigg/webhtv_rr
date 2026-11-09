@@ -1340,7 +1340,7 @@ private fun HeroHomeScreen(
                 },
                 // 顶栏「历史」→ HeroUI 历史页（View 体系，复用 HeroPosterCard）。
                 // 这里在 HeroHomeScreen 作用域内，`context` 就是上面 LocalContext.current 拿到的那个。
-                onOpenHistory = { HeroHistoryActivity.start(context) },
+                onOpenHistory = { HistoryViewActivity.start(context) },
                 // 顶栏「搜索」→ HeroSearchActivity（Compose 体系，纯 UI 结构 + 假数据）。
                 // 把首页当前这张大图一起带过去：搜索页用它做磨砂背景（同原版模糊首页大图的做法）。
                 // 读的是上面那个稳定 `State`，不是 `heroPoster` —— 见 `searchBackdropUrl` 的注释。
@@ -2689,7 +2689,7 @@ private val HERO_TMDB_YEAR = Regex("(?:19|20)\\d{2}")
 // 顶栏顺序：小房子 | 直播 | 搜索 | 历史 | 收藏 | 推送 | 设置（对照 ref_docs/home_ui.png）。
 private val TOP_BAR_LABELS = listOf("首页", "直播", "搜索", "历史", "收藏", "推送", "设置")
 
-// 顶栏里已接好页面的项：历史 → HeroHistoryActivity（View 体系 + HeroPosterCard）、
+// 顶栏里已接好页面的项：历史 → HistoryViewActivity（View 体系 + HeroPosterCard）、
 // 搜索 → HeroSearchActivity（Compose 体系）、设置 → SettingActivity（仅 leanback，见 openSettings）。
 // 直播 / 收藏 / 推送 等对应页面就绪后再按同一写法接。
 private const val TOP_BAR_HISTORY_LABEL = "历史"

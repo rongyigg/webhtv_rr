@@ -486,24 +486,26 @@ class HeroDetailActivity : ComponentActivity() {
             backdropUrl: String = "",
             logoUrl: String = "",
             overview: String = "",
+            noAnimation: Boolean = false,
         ) {
-            context.startActivity(
-                Intent(context, HeroDetailActivity::class.java)
-                    .putExtra(EXTRA_VOD, vod)
-                    .putExtra(EXTRA_VOD_ID, vod.id)
-                    .putExtra(EXTRA_TITLE, vod.name)
-                    .putExtra(EXTRA_PIC, vod.pic)
-                    .putExtra(EXTRA_BACKDROP, backdropUrl)
-                    .putExtra(EXTRA_LOGO, logoUrl)
-                    .putExtra(EXTRA_OVERVIEW, overview)
-                    .putExtra(EXTRA_YEAR, vod.year)
-                    .putExtra(EXTRA_AREA, vod.area)
-                    .putExtra(EXTRA_TYPE, vod.typeName)
-                    .putExtra(EXTRA_REMARKS, vod.remarks)
-                    .putExtra(EXTRA_CONTENT, vod.content)
-                    .putExtra(EXTRA_SITE_KEY, site.key)
-                    .putExtra(EXTRA_SITE_NAME, site.displayName),
-            )
+            val intent = Intent(context, HeroDetailActivity::class.java)
+                .putExtra(EXTRA_VOD, vod)
+                .putExtra(EXTRA_VOD_ID, vod.id)
+                .putExtra(EXTRA_TITLE, vod.name)
+                .putExtra(EXTRA_PIC, vod.pic)
+                .putExtra(EXTRA_BACKDROP, backdropUrl)
+                .putExtra(EXTRA_LOGO, logoUrl)
+                .putExtra(EXTRA_OVERVIEW, overview)
+                .putExtra(EXTRA_YEAR, vod.year)
+                .putExtra(EXTRA_AREA, vod.area)
+                .putExtra(EXTRA_TYPE, vod.typeName)
+                .putExtra(EXTRA_REMARKS, vod.remarks)
+                .putExtra(EXTRA_CONTENT, vod.content)
+                .putExtra(EXTRA_SITE_KEY, site.key)
+                .putExtra(EXTRA_SITE_NAME, site.displayName)
+            // 历史页要求「查看详情」零转场：只给显式开启的调用方加标记，首页原有转场不变。
+            if (noAnimation) intent.addFlags(Intent.FLAG_ACTIVITY_NO_ANIMATION)
+            context.startActivity(intent)
         }
 
         /**
@@ -528,6 +530,7 @@ class HeroDetailActivity : ComponentActivity() {
             vodPic: String,
             vodRemarks: String,
             vodContent: String,
+            noAnimation: Boolean = false,
         ) {
             val vod = Vod().apply {
                 id = vodId
@@ -537,7 +540,7 @@ class HeroDetailActivity : ComponentActivity() {
                 content = vodContent
             }
             val site = VodConfig.get().getSite(siteKey).takeIf { !it.isEmpty } ?: Site().apply { key = siteKey }
-            start(context, vod, site)
+            start(context, vod, site, noAnimation = noAnimation)
         }
 
         /**
