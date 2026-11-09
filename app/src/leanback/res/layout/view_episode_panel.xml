@@ -2,8 +2,8 @@
 <!--
     播放页底部选集面板（纯 View 实现），结构照抄 ref_docs/activity_video.xml 的 episodePanel：
     红色小竖条 + 15sp 加粗标题 → 播放线路列表 → 选集标题行 + 分页 → 选集网格。
-    顶部操作栏在「选集」标题右侧补齐 少列/多列、原始/紧凑、正序/倒序 三个可点击标签，
-    点击后真实改变下方网格列数、卡片密度与排序，并刷新 Adapter。
+    顶部操作栏在「选集」标题右侧只保留 少列/多列、正序/倒序 两个可点击标签，
+    点击后真实改变下方网格列数与排序并刷新 Adapter（原始/紧凑按钮已彻底删除）。
 -->
 <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools"
@@ -58,7 +58,7 @@
             android:nestedScrollingEnabled="false"
             android:overScrollMode="never" />
 
-        <!-- 选集标题 + 少列/原始/正序 操作标签 + 分页 -->
+        <!-- 选集标题 + 少列/多列、正序/倒序 操作标签 + 分页 -->
         <androidx.appcompat.widget.LinearLayoutCompat
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -83,11 +83,6 @@
                 android:id="@+id/osdTabColumn"
                 style="@style/OsdTab"
                 tools:text="多列" />
-
-            <com.google.android.material.textview.MaterialTextView
-                android:id="@+id/osdTabCompact"
-                style="@style/OsdTab"
-                tools:text="紧凑" />
 
             <com.google.android.material.textview.MaterialTextView
                 android:id="@+id/osdTabSort"

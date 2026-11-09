@@ -393,8 +393,12 @@ private boolean runtimeSourceOnly;
     private GridLayoutManager mOsdGridLayout;
     /** 选集面板列数档位：少列 = 2，多列 = 6（少列/多列标签真实切换 GridLayoutManager 的 spanCount）。 */
     private boolean osdColumnFew = true;
-    /** 选集卡片密度：false = 原始 16sp，true = 紧凑 14sp。 */
-    private boolean osdCompact;
+    /** 当前已解析艺术字的剧名，剧名变化时才重查缓存。 */
+    private String mOsdLogoName;
+    /** HeroLogoCache / TmdbMatchCache 命中的艺术字 URL，空串表示回退文字标题。 */
+    private String mOsdLogoUrl = "";
+    /** 已经加载进 vodLogo 的 URL，避免每秒 syncOsdState 重复发图片请求。 */
+    private String mOsdLogoApplied = "";
     private PartAdapter mPartAdapter;
     private BackdropAdapter mBackdropAdapter;
     private Map<String, View> mActionButtons;
@@ -4914,7 +4918,6 @@ private boolean runtimeSourceOnly;
         mBinding.episodePanel.osdEpisodeGrid.setLayoutManager(mOsdGridLayout = new GridLayoutManager(this, getOsdColumn()));
         mBinding.episodePanel.osdEpisodeGrid.setAdapter(mOsdEpisodeAdapter = new OsdEpisodeAdapter(this::onOsdEpisodeClick));
         mBinding.episodePanel.osdTabColumn.setOnClickListener(guarded(this::toggleOsdColumn));
-        mBinding.episodePanel.osdTabCompact.setOnClickListener(guarded(this::toggleOsdCompact));
         mBinding.episodePanel.osdTabSort.setOnClickListener(guarded(this::onOsdSort));
         updateOsdTabs();
     }
@@ -4934,6 +4937,7 @@ private boolean runtimeSourceOnly;
             mBinding.osdControl.resolution.setText("");
             mBinding.osdControl.resolution.setVisibility(View.GONE);
             mBinding.osdControl.netSpeed.setVisibility(View.GONE);
+            syncOsdLogo();
             return;
         }
         mOsdSpeedMeter.sample(player);
@@ -4955,28 +4959,55 @@ private boolean runtimeSourceOnly;
     }
 
     /**
-     * 左下角艺术字：只把 {@link com.fongmi.android.tv.bean.History#getVodName()} 渲染成文字标题，
-     * 永远不加载 {@code getVodPic()} 海报图，标题为空时整块隐藏、不占 OSD 高度。
+     * 左下角艺术字：严格照抄逆向 VideoActivity.V2() 的取值顺序。
+     *
+     * <p>按 {@link History#getVodName()} 先查本地 art logo 缓存：命中则把 URL 加载到 {@code vodLogo}
+     * 并隐藏文字剧名；查不到则隐藏 {@code vodLogo}、回退显示 {@code vodTitle} 文字。
+     * 选集面板展开期间整块让位，保证左下角元素绝不与面板重叠。</p>
      */
     private void syncOsdLogo() {
-        TextView logo = mBinding.osdControl.vodLogo;
+        if (mBinding == null) return;
+        View box = mBinding.osdControl.vodLogoBox;
+        TextView title = mBinding.osdControl.vodTitle;
         String name = mHistory == null ? "" : mHistory.getVodName();
-        if (TextUtils.isEmpty(name)) {
-            if (logo.getVisibility() != View.GONE) {
-                logo.setText("");
-                logo.setVisibility(View.GONE);
-            }
+        if (TextUtils.isEmpty(name) || isVisible(mBinding.episodePanel.getRoot())) {
+            if (box.getVisibility() != View.GONE) box.setVisibility(View.GONE);
             return;
         }
-        if (!TextUtils.equals(name, logo.getText())) logo.setText(name);
-        if (logo.getVisibility() != View.VISIBLE) logo.setVisibility(View.VISIBLE);
+        if (!TextUtils.equals(name, mOsdLogoName)) {
+            mOsdLogoName = name;
+            mOsdLogoUrl = resolveOsdLogoUrl(name);
+        }
+        if (!TextUtils.equals(name, title.getText())) title.setText(name);
+        boolean logo = !TextUtils.isEmpty(mOsdLogoUrl);
+        title.setVisibility(logo ? View.GONE : View.VISIBLE);
+        mBinding.osdControl.vodLogo.setVisibility(logo ? View.VISIBLE : View.GONE);
+        if (logo && !TextUtils.equals(mOsdLogoUrl, mOsdLogoApplied)) {
+            mOsdLogoApplied = mOsdLogoUrl;
+            ImgUtil.load("", mOsdLogoUrl, mBinding.osdControl.vodLogo, false, ResUtil.dp2px(210), ResUtil.dp2px(84));
+        }
+        if (box.getVisibility() != View.VISIBLE) box.setVisibility(View.VISIBLE);
+    }
+
+    /** 逆向 V2() 的本地缓存查询：先本站 key，再 TMDB 维度 key。 */
+    private String resolveOsdLogoUrl(String name) {
+        if (mHistory == null) return "";
+        String siteKey = mHistory.getSiteKey();
+        String vodId = mHistory.getVodId();
+        if (!TextUtils.isEmpty(siteKey) && !TextUtils.isEmpty(vodId)) {
+            String url = HeroLogoCache.INSTANCE.get(siteKey + "|" + vodId);
+            if (!TextUtils.isEmpty(url)) return url;
+        }
+        TmdbItem item = Setting.getTmdbMatchCache().find(siteKey, vodId, name);
+        if (item == null || item.getTmdbId() <= 0 || TextUtils.isEmpty(item.getMediaType())) return "";
+        return HeroLogoCache.INSTANCE.get("tmdb|" + item.getMediaType().toLowerCase(Locale.ROOT) + "|" + item.getTmdbId());
     }
 
     /** 少列 / 多列：真实改变下方网格的列数。 */
     private void toggleOsdColumn() {
         osdColumnFew = !osdColumnFew;
         applyOsdColumn();
-        refocusTab(mBinding.episodePanel.osdTabColumn);
+        refocusTab(0);
     }
 
     private int getOsdColumn() {
@@ -4990,39 +5021,31 @@ private boolean runtimeSourceOnly;
         updateOsdTabs();
     }
 
-    /** 原始 / 紧凑：真实改变卡片字号与行高。 */
-    private void toggleOsdCompact() {
-        osdCompact = !osdCompact;
-        if (mOsdEpisodeAdapter != null) mOsdEpisodeAdapter.setCompact(osdCompact);
-        updateOsdTabs();
-        refocusTab(mBinding.episodePanel.osdTabCompact);
-    }
-
     /** 正序 / 倒序：复用详情页的排序入口，翻完后重新绑定面板并保留标签焦点。 */
     private void onOsdSort() {
         if (mHistory == null) return;
         onRevSort();
         bindEpisodePanel(true);
-        refocusTab(mBinding.episodePanel.osdTabSort);
+        refocusTab(1);
     }
 
     /**
-     * 顶部三个操作标签沿用详情页习惯显示“下一步动作”：
-     * 当前少列 → 显示多列；当前原始 → 显示紧凑；当前正序 → 显示倒序。
+     * 顶部两个操作标签沿用详情页习惯显示“下一步动作”：当前少列 → 显示多列，当前正序 → 显示倒序。
      */
     private void updateOsdTabs() {
         if (mBinding == null) return;
         mBinding.episodePanel.osdTabColumn.setText(osdColumnFew ? R.string.osd_column_many : R.string.osd_column_few);
-        mBinding.episodePanel.osdTabCompact.setText(osdCompact ? R.string.play_scale : R.string.osd_compact);
         mBinding.episodePanel.osdTabSort.setText(mHistory != null && mHistory.isRevSort() ? R.string.detail_episode_forward : R.string.detail_episode_reverse);
     }
 
     /**
-     * 少列/多列、原始/紧凑、正序/倒序都会触发 notifyDataSetChanged()，RecyclerView 重排时会把焦点吸走。
-     * 用 post 等这一帧布局结束后，把焦点交还给刚刚点击的标签，避免焦点掉进下方集数网格。
+     * 少列/多列、正序/倒序都会触发 notifyDataSetChanged()，RecyclerView 重排时会把焦点吸走。
+     * 先记录当前 Tab 索引（0 = 少列/多列，1 = 正序/倒序），等这一帧布局结束后在 post{} 里让该 Tab
+     * 重新 requestFocus()，避免焦点死锁或掉进下方集数网格。
      */
-    private void refocusTab(View tab) {
-        if (tab == null) return;
+    private void refocusTab(int index) {
+        if (mBinding == null) return;
+        View tab = index == 1 ? mBinding.episodePanel.osdTabSort : mBinding.episodePanel.osdTabColumn;
         tab.post(() -> {
             if (mBinding == null || !isVisible(mBinding.episodePanel.getRoot())) return;
             if (tab.getVisibility() != View.VISIBLE) return;
@@ -5055,12 +5078,14 @@ private boolean runtimeSourceOnly;
         App.removeCallbacks(mR1);
         bindEpisodePanel(true);
         mBinding.episodePanel.getRoot().setVisibility(View.VISIBLE);
+        syncOsdLogo();
         focusEpisodePanel();
     }
 
     private void hideEpisodePanel() {
         if (mBinding == null || !isVisible(mBinding.episodePanel.getRoot())) return;
         mBinding.episodePanel.getRoot().setVisibility(View.GONE);
+        syncOsdLogo();
         PlayerControlFocusHelper.ensureFocus(mBinding.osdControl.getRoot(), mBinding.osdControl.osdEpisodes);
     }
 

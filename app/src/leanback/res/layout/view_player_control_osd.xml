@@ -2,8 +2,9 @@
 <!--
     播放页 OSD 控制层（纯 View 实现，不使用 Compose）。
     - 左上：分辨率；右上：实时网速
-    - 左下：剧集艺术字 vodLogo（只显示标题文字，不加载海报图；为空则整块隐藏）
-    - 底部：进度条 + 严格顺序的按钮行（整行水平居中）：
+    - 左下：剧集艺术字 vodLogo（HeroLogoCache / TmdbMatchCache 命中则加载艺术字并隐藏文字标题，
+            未命中回退文字标题；为空则整块隐藏）
+    - 底部：进度条 + 严格顺序的按钮行（整行靠左 start，禁止居中）：
             上一集 → 下一集 → 选集 → EXO → 硬解 → 刷新 → 重播 →
             倍速 → 画面比例 → 字幕 → 轨道 → 播放参数 → 片头 → 片尾
     说明：中间的播放/暂停大圆键已删除，确认键（DPAD_CENTER）直接接管播放/暂停。
@@ -61,29 +62,50 @@
         android:paddingBottom="14dp">
 
         <!--
-            左下角艺术字：只渲染 vodName 生成的文字标题，永不加载 vodPic 海报图，
-            单行 22sp 高度约 26dp，不会顶起 OSD 高度。
+            左下角艺术字：严格照抄逆向 VideoActivity.V2() 的取图顺序。
+            vodLogo 只放 HeroLogoCache 命中的透明艺术字（逆向 B2() 的 210x84dp 约束），
+            vodTitle 是同一位置的文字回退，二者互斥显示，绝不与选集面板重叠。
         -->
-        <com.google.android.material.textview.MaterialTextView
-            android:id="@+id/vodLogo"
+        <FrameLayout
+            android:id="@+id/vodLogoBox"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginBottom="2dp"
-            android:ellipsize="end"
-            android:includeFontPadding="false"
-            android:letterSpacing="0.04"
-            android:maxWidth="320dp"
-            android:shadowColor="#99000000"
-            android:shadowDx="0"
-            android:shadowDy="2"
-            android:shadowRadius="6"
-            android:singleLine="true"
-            android:textColor="@color/white"
-            android:textSize="22sp"
-            android:textStyle="bold"
+            android:clipChildren="true"
             android:visibility="gone"
-            tools:text="The Last of Us"
-            tools:visibility="visible" />
+            tools:visibility="visible">
+
+            <androidx.appcompat.widget.AppCompatImageView
+                android:id="@+id/vodLogo"
+                android:layout_width="210dp"
+                android:layout_height="84dp"
+                android:layout_gravity="start|bottom"
+                android:scaleType="fitCenter"
+                android:visibility="gone"
+                tools:visibility="visible" />
+
+            <com.google.android.material.textview.MaterialTextView
+                android:id="@+id/vodTitle"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_gravity="start|bottom"
+                android:ellipsize="end"
+                android:includeFontPadding="false"
+                android:letterSpacing="0.04"
+                android:maxWidth="320dp"
+                android:shadowColor="#99000000"
+                android:shadowDx="0"
+                android:shadowDy="2"
+                android:shadowRadius="6"
+                android:singleLine="true"
+                android:textColor="@color/white"
+                android:textSize="22sp"
+                android:textStyle="bold"
+                android:visibility="gone"
+                tools:text="The Last of Us"
+                tools:visibility="visible" />
+
+        </FrameLayout>
 
         <com.fongmi.android.tv.ui.custom.CustomSeekView
             android:id="@+id/osdSeek"
@@ -92,8 +114,8 @@
             android:nextFocusDown="@id/osdPrev" />
 
         <!--
-            居中：fillViewport 让按钮行在内容不足一屏时撑满可视宽度，
-            再由 LinearLayout 的 gravity=center 把按钮居中；layout_gravity 作为兜底。
+            靠左：fillViewport 让按钮行在内容不足一屏时撑满可视宽度，
+            layout_gravity=start + gravity=start 把整行按钮贴左排布，禁止居中。
             内容超过一屏时退化为可横向滚动，不裁切任何按钮。
         -->
         <HorizontalScrollView
@@ -107,8 +129,8 @@
                 android:id="@+id/osdActions"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:layout_gravity="center"
-                android:gravity="center"
+                android:layout_gravity="start"
+                android:gravity="start|center_vertical"
                 android:orientation="horizontal">
 
                 <!-- 1. 上一集 -->

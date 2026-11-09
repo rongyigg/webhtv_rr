@@ -16,17 +16,16 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * 播放页底部选集面板的选集网格。
- * 卡片布局 = 逆向数据 ref_docs/adapter_episode.xml（16sp 跑马灯文字 + 20x25dp Lottie 均衡器），
- * 标题沿用主界面选集按钮的规则（{@link EpisodeAdapter#getNativeTitle(Episode)}），
- * 当前集由 {@link Episode#isSelected()} 决定：只有正在播放的这一集 {@code VISIBLE} 并播放
- * {@code @raw/equalizer}，其余一律 {@code GONE} 且停止动画。
+ * 播放页底部选集网格适配器。
+ * 卡片尺寸 = 逆向 ref_docs/adapter_episode.xml：16sp 单行文字 + 20x25dp Lottie。
+ * 标题复用选集按钮的构造 {@link EpisodeAdapter#getNativeTitle(Episode)}。
+ * 只有当前正在播放的 {@link Episode#isSelected()} 才把 {@code @raw/equalizer} 置为 VISIBLE 并播放，
+ * 其余一律 GONE 且停止动画。
  */
 public class OsdEpisodeAdapter extends RecyclerView.Adapter<OsdEpisodeAdapter.ViewHolder> {
 
     private final OnClickListener listener;
     private final List<Episode> items = new ArrayList<>();
-    private boolean compact;
 
     public OsdEpisodeAdapter(OnClickListener listener) {
         this.listener = listener;
@@ -47,17 +46,6 @@ public class OsdEpisodeAdapter extends RecyclerView.Adapter<OsdEpisodeAdapter.Vi
         return RecyclerView.NO_POSITION;
     }
 
-    public boolean isCompact() {
-        return compact;
-    }
-
-    /** 原始 / 紧凑：只改字号和竖向留白，不新增第二套布局。 */
-    public void setCompact(boolean compact) {
-        if (this.compact == compact) return;
-        this.compact = compact;
-        notifyDataSetChanged();
-    }
-
     @Override
     public int getItemCount() {
         return items.size();
@@ -74,7 +62,7 @@ public class OsdEpisodeAdapter extends RecyclerView.Adapter<OsdEpisodeAdapter.Vi
         Episode item = items.get(position);
         boolean selected = item.isSelected();
         holder.binding.text.setText(EpisodeAdapter.getNativeTitle(item));
-        // 跑马灯只在获得焦点时滚动；TextView 自身不可聚焦，由 itemView 的焦点态驱动。
+        // 文字只在获得焦点时跑马灯，卡片自身用 itemView 的焦点态背景。
         holder.binding.text.setSelected(holder.itemView.hasFocus());
         applyDensity(holder);
         holder.itemView.setActivated(selected);
@@ -96,12 +84,11 @@ public class OsdEpisodeAdapter extends RecyclerView.Adapter<OsdEpisodeAdapter.Vi
         holder.binding.lottie.setVisibility(View.GONE);
     }
 
-    /** 原始 = 16sp / 上下 8dp；紧凑 = 14sp / 上下 4dp，横向留白始终 12dp。 */
+    /** 固定 16sp / 上下 8dp / 左右 12dp 内边距，卡片高度由内容决定。 */
     private void applyDensity(@NonNull ViewHolder holder) {
-        holder.binding.text.setTextSize(TypedValue.COMPLEX_UNIT_SP, compact ? 14f : 16f);
+        holder.binding.text.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f);
         int horizontal = ResUtil.dp2px(12);
-        int vertical = ResUtil.dp2px(compact ? 4 : 8);
-        // 背景挂在 itemView 上，所以留白也必须写在 itemView 上。
+        int vertical = ResUtil.dp2px(8);
         holder.itemView.setPadding(horizontal, vertical, horizontal, vertical);
     }
 
@@ -117,7 +104,7 @@ public class OsdEpisodeAdapter extends RecyclerView.Adapter<OsdEpisodeAdapter.Vi
         ViewHolder(@NonNull AdapterOsdEpisodeBinding binding) {
             super(binding.getRoot());
             this.binding = binding;
-            // text 本身不可聚焦，跑马灯靠 itemView 的焦点态驱动。
+            // text 不自己接焦点，避免覆盖卡片 itemView 的焦点态背景。
             binding.getRoot().setOnFocusChangeListener((view, hasFocus) -> binding.text.setSelected(hasFocus));
         }
     }

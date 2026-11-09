@@ -1,15 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-    OSD 底部文字按钮：默认完全透明不遮挡画面；
-    焦点态 = @color/osd_focus → @color/osd_focus_dark 的 20dp 胶囊渐变（40dp 高的一半，不是方块，也不用 #FF0000）。
+    OSD 底部文字按钮：默认完全透明压在画面上；
+    焦点态 = #FF8A80 → #E53935 水平渐变（angle=0 即从左到右）+ 20dp 圆角胶囊。
+    禁止垂直渐变、禁止纯 #FF0000、禁止方块焦点。
 -->
 <selector xmlns:android="http://schemas.android.com/apk/res/android">
     <item android:state_focused="true">
         <shape android:shape="rectangle">
             <gradient
-                android:angle="270"
-                android:endColor="@color/osd_focus_dark"
-                android:startColor="@color/osd_focus" />
+                android:angle="0"
+                android:endColor="#E53935"
+                android:startColor="#FF8A80" />
             <corners android:radius="20dp" />
         </shape>
     </item>

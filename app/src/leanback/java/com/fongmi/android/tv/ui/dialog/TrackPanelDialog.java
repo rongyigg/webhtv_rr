@@ -54,6 +54,18 @@ public final class TrackPanelDialog extends BaseBottomSheetDialog implements Tra
         show(activity.getSupportFragmentManager(), null);
     }
 
+    /** 底板完全透明：直接铺在视频画面上，不再绘制深色圆角外壳。 */
+    @Override
+    protected boolean transparent() {
+        return true;
+    }
+
+    /** 去掉弹窗遮罩（FLAG_DIM_BEHIND / dimAmount），打开面板时画面保持可见。 */
+    @Override
+    protected boolean stableOverlay() {
+        return true;
+    }
+
     @Override
     protected ViewBinding getBinding(@NonNull LayoutInflater inflater, @Nullable ViewGroup container) {
         return binding = DialogTrackPanelBinding.inflate(inflater, container, false);

@@ -15,7 +15,8 @@ import java.util.List;
 
 /**
  * 轨道面板单列适配器（视频列 / 音频列各一个实例）。
- * 普通项白字，选中项交给 {@code selector_track_panel_text} 显示红字与红色描边胶囊。
+ * 普通项透明背景 + 白字；有焦点是深灰长条 + 白字；已选中是同一深灰长条 + 柔和红字，
+ * 全部交给 {@code selector_track_panel_item} / {@code selector_track_panel_text}。
  */
 public class TrackPanelAdapter extends RecyclerView.Adapter<TrackPanelAdapter.ViewHolder> {
 
