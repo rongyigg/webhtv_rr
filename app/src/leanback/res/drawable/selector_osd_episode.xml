@@ -2,7 +2,9 @@
 <!--
     播放页选集卡片（ref_docs/adapter_episode.xml 里 text 的背景）：
     - 默认：深色半透明 @color/osd_surface（#33FFFFFF）
-    - 焦点 / 正在播放：@color/osd_focus → @color/osd_focus_dark 红渐变，不用纯红
+    - 焦点：@color/osd_focus → @color/osd_focus_dark 红渐变 + 白字
+    - 正在播放但失去焦点（activated）：透明底 + 2dp @color/osd_focus 红描边 + 红字，
+      对应文字色见 @color/selector_osd_episode_text
     - padding 同时承担卡片高度和列间距（原版卡片没有额外 margin）
 -->
 <selector xmlns:android="http://schemas.android.com/apk/res/android">
@@ -25,10 +27,10 @@
     </item>
     <item android:state_activated="true">
         <shape android:shape="rectangle">
-            <gradient
-                android:angle="270"
-                android:endColor="@color/osd_focus_dark"
-                android:startColor="@color/osd_focus" />
+            <solid android:color="@android:color/transparent" />
+            <stroke
+                android:width="2dp"
+                android:color="@color/osd_focus" />
             <corners android:radius="17dp" />
             <padding
                 android:bottom="8dp"

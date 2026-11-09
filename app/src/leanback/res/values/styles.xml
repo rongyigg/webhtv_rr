@@ -110,13 +110,13 @@
     </style>
 
     <!--
-        播放页 OSD 底部文字按钮：默认透明，焦点态是 #FF8A80 → #E53935 水平渐变 20dp 胶囊。
-        字号 13sp、按钮间距统一 24dp，整行贴左排布（禁止居中）。
+        播放页 OSD 底部文字按钮：默认透明，焦点态是 #FF8A80 → #E53935 水平渐变 8dp 圆角矩形。
+        字号 14sp、按钮间距统一 16dp，整行贴左排布（禁止居中、禁止正圆胶囊）。
     -->
     <style name="OsdAction">
         <item name="android:layout_width">wrap_content</item>
         <item name="android:layout_height">40dp</item>
-        <item name="android:layout_marginEnd">24dp</item>
+        <item name="android:layout_marginEnd">16dp</item>
         <item name="android:background">@drawable/selector_osd_action</item>
         <item name="android:focusable">true</item>
         <item name="android:focusableInTouchMode">true</item>
@@ -126,14 +126,14 @@
         <item name="android:paddingEnd">6dp</item>
         <item name="android:singleLine">true</item>
         <item name="android:textColor">@color/white</item>
-        <item name="android:textSize">13sp</item>
+        <item name="android:textSize">14sp</item>
     </style>
 
-    <!-- 播放页 OSD 图标按钮（上一集 / 下一集）：按钮 48dp，与文字按钮共用 24dp 间距。 -->
+    <!-- 播放页 OSD 图标按钮（上一集 / 下一集）：按钮 48dp，焦点 oval 正圆，与文字按钮共用 16dp 间距。 -->
     <style name="OsdIcon">
         <item name="android:layout_width">48dp</item>
         <item name="android:layout_height">48dp</item>
-        <item name="android:layout_marginEnd">24dp</item>
+        <item name="android:layout_marginEnd">16dp</item>
         <item name="android:background">@drawable/selector_osd_icon</item>
         <item name="android:focusable">true</item>
         <item name="android:focusableInTouchMode">true</item>

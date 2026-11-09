@@ -2,7 +2,8 @@
 <!--
     播放页底部选集卡片：沿用逆向 ref_docs/adapter_episode.xml 的结构。
     - 卡片：focusable 的 FrameLayout + @drawable/selector_osd_episode（17dp 圆角）
-    - 文字：16sp 单行居中的 MaterialTextView
+    - 文字：16sp 单行居中的 MaterialTextView，颜色走 selector_osd_episode_text
+      （焦点白字 / 正在播放但失焦红字 / 普通白字）
     - Lottie：20x25dp，约束在卡片内部右侧垂直居中（clipChildren=true，负边距已删除，
       不再掉出卡片）；颜色强制纯白；只有 isSelected 的集数 VISIBLE，其余 GONE。
 -->
@@ -32,7 +33,7 @@
         android:marqueeRepeatLimit="marquee_forever"
         android:scrollHorizontally="true"
         android:singleLine="true"
-        android:textColor="@color/white"
+        android:textColor="@color/selector_osd_episode_text"
         android:textSize="16sp"
         tools:text="第20集" />
 

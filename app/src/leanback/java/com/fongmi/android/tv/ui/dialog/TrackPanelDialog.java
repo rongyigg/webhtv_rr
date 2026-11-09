@@ -1,5 +1,6 @@
 package com.fongmi.android.tv.ui.dialog;
 
+import android.text.TextUtils;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
@@ -10,7 +11,11 @@ import androidx.fragment.app.Fragment;
 import androidx.fragment.app.FragmentActivity;
 import androidx.media3.common.C;
 import androidx.media3.common.Format;
+import androidx.media3.common.Player;
+import androidx.media3.common.TrackSelectionOverride;
+import androidx.media3.common.TrackSelectionParameters;
 import androidx.media3.common.Tracks;
+import androidx.media3.exoplayer.trackselection.DefaultTrackSelector;
 import androidx.media3.ui.DefaultTrackNameProvider;
 import androidx.media3.ui.TrackNameProvider;
 import androidx.recyclerview.widget.RecyclerView;
@@ -24,7 +29,7 @@ import com.fongmi.android.tv.player.PlayerManager;
 import com.fongmi.android.tv.ui.adapter.TrackPanelAdapter;
 
 import java.util.ArrayList;
-import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 
 /**
@@ -83,9 +88,58 @@ public final class TrackPanelDialog extends BaseBottomSheetDialog implements Tra
     @Override
     public void onItemClick(Track item) {
         if (player == null || item == null) return;
-        // 与 TrackDialog 使用同一套持久化 + 原生 track id 切换逻辑。
-        player.setTrack(Arrays.asList(item.key(player.getKey()).save()));
+        Track track = item.key(player.getKey()).save();
+        if (track.getType() == C.TRACK_TYPE_AUDIO || track.getType() == C.TRACK_TYPE_VIDEO) selectAvTrack(track);
+        else player.setTrack(Collections.singletonList(track));
         dismiss();
+    }
+
+    /**
+     * 音视频轨严格按 {@link Tracks.Group#getType()} 分流：只有 group 类型是
+     * {@link C#TRACK_TYPE_AUDIO} 时才写音频 override，视频同理，两条参数绝不混用，
+     * 避免把音频 override 塞给视频渲染器造成切轨无声。命中下标直接由 group 给出，
+     * 不依赖 {@link Track#isSelected()}，避免空 indices 把整条音轨关掉。
+     */
+    private void selectAvTrack(Track track) {
+        Player exo = player.isExo() ? player.getPlayer() : null;
+        if (exo == null) {
+            track.setSelected(true);
+            player.setTrack(Collections.singletonList(track));
+            return;
+        }
+        Tracks.Group target = null;
+        int index = -1;
+        for (Tracks.Group group : exo.getCurrentTracks().getGroups()) {
+            int type = group.getType();
+            if (type != C.TRACK_TYPE_AUDIO && type != C.TRACK_TYPE_VIDEO) continue;
+            if (type != track.getType()) continue;
+            for (int i = 0; i < group.length; i++) {
+                Format format = group.getTrackFormat(i);
+                boolean match = track.getPlayerId() != null && track.getPlayerId().equals(format.id);
+                if (!match && track.getPlayerId() == null) match = TextUtils.equals(track.getFormat(), PlayerHelper.describeFormat(format));
+                if (!match) continue;
+                target = group;
+                index = i;
+                break;
+            }
+            if (target != null) break;
+        }
+        if (target == null || index < 0) {
+            track.setSelected(true);
+            player.setTrack(Collections.singletonList(track));
+            return;
+        }
+        int type = target.getType();
+        if (type != C.TRACK_TYPE_AUDIO && type != C.TRACK_TYPE_VIDEO) return;
+        TrackSelectionParameters.Builder builder = exo.getTrackSelectionParameters().buildUpon();
+        if (builder instanceof DefaultTrackSelector.Parameters.Builder exoBuilder) {
+            exoBuilder.setExceedRendererCapabilitiesIfNecessary(true);
+            exoBuilder.setExceedVideoConstraintsIfNecessary(true);
+            exoBuilder.setExceedAudioConstraintsIfNecessary(true);
+        }
+        builder.setTrackTypeDisabled(type, false);
+        builder.setOverrideForType(new TrackSelectionOverride(target.getMediaTrackGroup(), index));
+        exo.setTrackSelectionParameters(builder.build());
     }
 
     private void refresh() {

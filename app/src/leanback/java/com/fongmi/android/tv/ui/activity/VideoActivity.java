@@ -338,7 +338,6 @@ private int runtimeDetailMode = Setting.getDetailOpenMode();
 private boolean runtimeSourceOnly;
 
     private static final int SHORT_DRAMA_SCALE = 0; // 0=原始(适合TV), 4=裁剪(适合手机)
-    private static final int OSD_PAGE_SIZE = 6;
     private static final long OSD_TICK_INTERVAL = 1000L;
     private static final int TMDB_DETAIL_LOAD_TIMEOUT = 15000;
     private static final int TMDB_CACHED_DETAIL_APPLY_DELAY_MS = 16;
@@ -391,8 +390,8 @@ private boolean runtimeSourceOnly;
     private final PlaybackSpeedMeter mOsdSpeedMeter = new PlaybackSpeedMeter();
     private int mOsdPageIndex;
     private GridLayoutManager mOsdGridLayout;
-    /** 选集面板列数档位：少列 = 2，多列 = 6（少列/多列标签真实切换 GridLayoutManager 的 spanCount）。 */
-    private boolean osdColumnFew = true;
+    /** 选集面板列数档位（照抄逆向 U2()/t3()）：少列 = 2 列 × 6 集/页，多列 = 8 列 × 24 集/页。 */
+    private boolean isFewColumns = false;
     /** 当前已解析艺术字的剧名，剧名变化时才重查缓存。 */
     private String mOsdLogoName;
     /** HeroLogoCache / TmdbMatchCache 命中的艺术字 URL，空串表示回退文字标题。 */
@@ -5003,22 +5002,26 @@ private boolean runtimeSourceOnly;
         return HeroLogoCache.INSTANCE.get("tmdb|" + item.getMediaType().toLowerCase(Locale.ROOT) + "|" + item.getTmdbId());
     }
 
-    /** 少列 / 多列：真实改变下方网格的列数。 */
+    /** 少列 / 多列：真实改变下方网格的列数并重建分页标签（少列 2×6，多列 8×24）。 */
     private void toggleOsdColumn() {
-        osdColumnFew = !osdColumnFew;
+        isFewColumns = !isFewColumns;
         applyOsdColumn();
         refocusTab(0);
     }
 
     private int getOsdColumn() {
-        return osdColumnFew ? 2 : 6;
+        return isFewColumns ? 2 : 8;
+    }
+
+    /** 照抄逆向 U2()：少列每页 6 集，多列每页 24 集。 */
+    private int getOsdPageSize() {
+        return isFewColumns ? 6 : 24;
     }
 
     private void applyOsdColumn() {
-        int column = getOsdColumn();
-        if (mOsdGridLayout != null) mOsdGridLayout.setSpanCount(column);
-        if (mOsdEpisodeAdapter != null) mOsdEpisodeAdapter.notifyDataSetChanged();
-        updateOsdTabs();
+        if (mOsdGridLayout != null) mOsdGridLayout.setSpanCount(getOsdColumn());
+        // 每页容量随列数变化，必须重建分页标签与当前页数据。
+        bindEpisodePanel(true);
     }
 
     /** 正序 / 倒序：复用详情页的排序入口，翻完后重新绑定面板并保留标签焦点。 */
@@ -5034,7 +5037,7 @@ private boolean runtimeSourceOnly;
      */
     private void updateOsdTabs() {
         if (mBinding == null) return;
-        mBinding.episodePanel.osdTabColumn.setText(osdColumnFew ? R.string.osd_column_many : R.string.osd_column_few);
+        mBinding.episodePanel.osdTabColumn.setText(isFewColumns ? R.string.osd_column_many : R.string.osd_column_few);
         mBinding.episodePanel.osdTabSort.setText(mHistory != null && mHistory.isRevSort() ? R.string.detail_episode_forward : R.string.detail_episode_reverse);
     }
 
@@ -5046,7 +5049,8 @@ private boolean runtimeSourceOnly;
     private void refocusTab(int index) {
         if (mBinding == null) return;
         View tab = index == 1 ? mBinding.episodePanel.osdTabSort : mBinding.episodePanel.osdTabColumn;
-        tab.post(() -> {
+        // 必须用 RecyclerView.post 排队：等网格重排这一帧结束后再把焦点还给刚才点击的 Tab。
+        mBinding.episodePanel.osdEpisodeGrid.post(() -> {
             if (mBinding == null || !isVisible(mBinding.episodePanel.getRoot())) return;
             if (tab.getVisibility() != View.VISIBLE) return;
             tab.requestFocus();
@@ -5102,11 +5106,12 @@ private boolean runtimeSourceOnly;
             mOsdEpisodeAdapter.addAll(null);
             return;
         }
-        int pages = (episodes.size() + OSD_PAGE_SIZE - 1) / OSD_PAGE_SIZE;
+        int pageSize = getOsdPageSize();
+        int pages = (episodes.size() + pageSize - 1) / pageSize;
         if (resetPage || mOsdPageIndex >= pages) mOsdPageIndex = getSelectedPageIndex(episodes);
         mOsdPageIndex = Math.max(0, Math.min(mOsdPageIndex, pages - 1));
         List<String> labels = new ArrayList<>(pages);
-        for (int i = 0; i < pages; i++) labels.add((i * OSD_PAGE_SIZE + 1) + "-" + Math.min((i + 1) * OSD_PAGE_SIZE, episodes.size()));
+        for (int i = 0; i < pages; i++) labels.add((i * pageSize + 1) + "-" + Math.min((i + 1) * pageSize, episodes.size()));
         mOsdPageAdapter.addAll(labels);
         mOsdPageAdapter.setSelectedPosition(mOsdPageIndex);
         bindOsdPage(mOsdPageIndex);
@@ -5119,13 +5124,14 @@ private boolean runtimeSourceOnly;
             return;
         }
         List<Episode> episodes = flag.getEpisodes();
-        int start = pageIndex * OSD_PAGE_SIZE;
-        int end = Math.min(start + OSD_PAGE_SIZE, episodes.size());
+        int pageSize = getOsdPageSize();
+        int start = pageIndex * pageSize;
+        int end = Math.min(start + pageSize, episodes.size());
         mOsdEpisodeAdapter.addAll(start >= end ? new ArrayList<>() : new ArrayList<>(episodes.subList(start, end)));
     }
 
     private int getSelectedPageIndex(List<Episode> episodes) {
-        for (int i = 0; i < episodes.size(); i++) if (episodes.get(i).isSelected()) return i / OSD_PAGE_SIZE;
+        for (int i = 0; i < episodes.size(); i++) if (episodes.get(i).isSelected()) return i / getOsdPageSize();
         return 0;
     }
 

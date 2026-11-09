@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
     OSD 底部文字按钮：默认完全透明压在画面上；
-    焦点态 = #FF8A80 → #E53935 水平渐变（angle=0 即从左到右）+ 20dp 圆角胶囊。
-    禁止垂直渐变、禁止纯 #FF0000、禁止方块焦点。
+    焦点态 = #FF8A80 → #E53935 水平渐变（angle=0 即从左到右）+ 8dp 圆角矩形。
+    禁止正圆胶囊、禁止垂直渐变、禁止纯 #FF0000、禁止方块焦点。
 -->
 <selector xmlns:android="http://schemas.android.com/apk/res/android">
     <item android:state_focused="true">
@@ -11,19 +11,19 @@
                 android:angle="0"
                 android:endColor="#E53935"
                 android:startColor="#FF8A80" />
-            <corners android:radius="20dp" />
+            <corners android:radius="8dp" />
         </shape>
     </item>
     <item android:state_pressed="true">
         <shape android:shape="rectangle">
             <solid android:color="@color/osd_surface" />
-            <corners android:radius="20dp" />
+            <corners android:radius="8dp" />
         </shape>
     </item>
     <item>
         <shape android:shape="rectangle">
             <solid android:color="@android:color/transparent" />
-            <corners android:radius="20dp" />
+            <corners android:radius="8dp" />
         </shape>
     </item>
 </selector>

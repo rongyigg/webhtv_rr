@@ -99,7 +99,7 @@
                 android:shadowRadius="6"
                 android:singleLine="true"
                 android:textColor="@color/white"
-                android:textSize="22sp"
+                android:textSize="24sp"
                 android:textStyle="bold"
                 android:visibility="gone"
                 tools:text="The Last of Us"

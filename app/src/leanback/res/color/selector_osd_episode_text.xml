@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    播放页选集卡片文字颜色：
+    - 焦点（卡片自身获得焦点，text 通过 setSelected 同步）：白字
+    - 正在播放但失去焦点（itemView activated）：柔和红字 @color/osd_focus
+    - 普通：白字
+-->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:state_selected="true" android:color="@color/white" />
+    <item android:state_activated="true" android:color="@color/osd_focus" />
+    <item android:color="@color/white" />
+</selector>

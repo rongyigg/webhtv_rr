@@ -1,22 +1,20 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-    OSD 图标按钮（上一集 / 下一集）：与文字按钮同一套焦点态，
-    焦点 = #FF8A80 → #E53935 水平渐变（angle=0）+ 20dp 圆角胶囊，禁止垂直渐变与纯 #FF0000。
+    OSD 图标按钮（上一集 / 下一集）：焦点态使用 oval 正圆，
+    背景 = #FF8A80 → #E53935 水平渐变（angle=0），禁止圆角矩形焦点、禁止垂直渐变与纯 #FF0000。
 -->
 <selector xmlns:android="http://schemas.android.com/apk/res/android">
     <item android:state_focused="true">
-        <shape android:shape="rectangle">
+        <shape android:shape="oval">
             <gradient
                 android:angle="0"
                 android:endColor="#E53935"
                 android:startColor="#FF8A80" />
-            <corners android:radius="20dp" />
         </shape>
     </item>
     <item>
-        <shape android:shape="rectangle">
+        <shape android:shape="oval">
             <solid android:color="@android:color/transparent" />
-            <corners android:radius="20dp" />
         </shape>
     </item>
 </selector>
