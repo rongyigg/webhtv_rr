@@ -57,6 +57,9 @@
     <string name="play_prev">上集</string>
     <string name="play_stop">停止</string>
     <string name="play_repeat">循环</string>
+    <string name="play_replay">重播</string>
+    <string name="play_track">轨道</string>
+    <string name="osd_play_line">播放线路</string>
     <string name="play_forward">→</string>
     <string name="play_backward">←</string>
     <string name="play_speed">1.00</string>

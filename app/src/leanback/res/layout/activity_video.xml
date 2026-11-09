@@ -552,6 +552,23 @@
             android:layout_gravity="bottom"
             android:visibility="gone" />
 
+        <!-- 新版 OSD 控制条：替换旧 control 作为实际显示的控制层 -->
+        <include
+            android:id="@+id/osdControl"
+            layout="@layout/view_player_control_osd"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:visibility="gone" />
+
+        <!-- 底部选集面板：MENU / OSD「选集」打开 -->
+        <include
+            android:id="@+id/episodePanel"
+            layout="@layout/view_episode_panel"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_gravity="bottom"
+            android:visibility="gone" />
+
         <include
             android:id="@+id/progress"
             layout="@layout/view_progress"

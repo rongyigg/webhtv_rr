@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 播放页 OSD 遮罩：顶部完全透明，向下逐渐压暗，保证底部按钮和进度条可读。 -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <gradient
+        android:angle="270"
+        android:centerColor="#59000000"
+        android:endColor="#CC000000"
+        android:startColor="#00000000" />
+</shape>

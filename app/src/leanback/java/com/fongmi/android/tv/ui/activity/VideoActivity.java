@@ -87,6 +87,7 @@ import com.fongmi.android.tv.player.IntroSkipPlayback;
 import com.fongmi.android.tv.player.PlaybackAutoContext;
 import com.fongmi.android.tv.player.PlaybackExperimentPolicy;
 import com.fongmi.android.tv.player.PlaybackResourceClassifier;
+import com.fongmi.android.tv.player.PlaybackSpeedMeter;
 import com.fongmi.android.tv.player.PlayerHelper;
 import com.fongmi.android.tv.player.PlayerManager;
 import com.fongmi.android.tv.service.AiAdDetectionService;
@@ -117,6 +118,9 @@ import com.fongmi.android.tv.ui.adapter.ArrayAdapter;
 import com.fongmi.android.tv.ui.adapter.BackdropAdapter;
 import com.fongmi.android.tv.ui.adapter.EpisodeAdapter;
 import com.fongmi.android.tv.ui.adapter.FlagAdapter;
+import com.fongmi.android.tv.ui.adapter.OsdEpisodeAdapter;
+import com.fongmi.android.tv.ui.adapter.OsdFlagAdapter;
+import com.fongmi.android.tv.ui.adapter.OsdPageAdapter;
 import com.fongmi.android.tv.ui.adapter.ParseAdapter;
 import com.fongmi.android.tv.ui.adapter.PartAdapter;
 import com.fongmi.android.tv.ui.adapter.QualityAdapter;
@@ -333,6 +337,8 @@ private int runtimeDetailMode = Setting.getDetailOpenMode();
 private boolean runtimeSourceOnly;
 
     private static final int SHORT_DRAMA_SCALE = 0; // 0=原始(适合TV), 4=裁剪(适合手机)
+    private static final int OSD_PAGE_SIZE = 6;
+    private static final long OSD_TICK_INTERVAL = 1000L;
     private static final int TMDB_DETAIL_LOAD_TIMEOUT = 15000;
     private static final int TMDB_CACHED_DETAIL_APPLY_DELAY_MS = 16;
     private static final int TMDB_FAST_PLAYBACK_START_DELAY_MS = 16;
@@ -378,6 +384,12 @@ private boolean runtimeSourceOnly;
     private ParseAdapter mParseAdapter;
     private QuickAdapter mQuickAdapter;
     private FlagAdapter mFlagAdapter;
+    private OsdFlagAdapter mOsdFlagAdapter;
+    private OsdPageAdapter mOsdPageAdapter;
+    private OsdEpisodeAdapter mOsdEpisodeAdapter;
+    private final PlaybackSpeedMeter mOsdSpeedMeter = new PlaybackSpeedMeter();
+    private int mOsdPageIndex;
+    private String mOsdLogoUrl;
     private PartAdapter mPartAdapter;
     private BackdropAdapter mBackdropAdapter;
     private Map<String, View> mActionButtons;
@@ -422,6 +434,7 @@ private boolean runtimeSourceOnly;
     private boolean episodeGridMode;
     private Runnable mR1;
     private Runnable mR2;
+    private Runnable mOsdTick;
     private Runnable mSeekProgressFallback;
     private Runnable mTmdbDetailTimeout;
     private Runnable mTmdbEpisodeTimeout;
@@ -1383,7 +1396,7 @@ private boolean runtimeSourceOnly;
 
     @Override
     protected CustomSeekView getSeekView() {
-        return mBinding.control.seek;
+        return mBinding.osdControl.osdSeek;
     }
 
     @Override
@@ -1477,6 +1490,7 @@ private boolean runtimeSourceOnly;
         mBroken = new ArrayList<>();
         mR1 = this::hideControl;
         mR2 = this::updateFocus;
+        mOsdTick = this::syncOsdRuntime;
         mR3 = this::setTraffic;
         mR4 = this::showEmpty;
         mSeekProgressFallback = this::hideSeekProgressIfReady;
@@ -1488,6 +1502,7 @@ private boolean runtimeSourceOnly;
         checkCast();
         SpiderDebug.log("video-flow", "initView preview ready cost=%dms", System.currentTimeMillis() - start);
         setRecyclerView();
+        setOsdView();
         setShortDisplay();
         SpiderDebug.log("video-flow", "initView recycler ready cost=%dms", System.currentTimeMillis() - start);
         setVideoView();
@@ -1525,7 +1540,8 @@ private boolean runtimeSourceOnly;
     }
 
     private void applyPlaybackOverlay() {
-        mBinding.control.getRoot().setBackgroundResource(Setting.isPlaybackOverlayEnabled() ? R.drawable.shape_controller_scrim : R.color.transparent);
+        // 新版 OSD 自带底部渐变压暗，遮罩开关只决定是否启用这层渐变。
+        mBinding.osdControl.getRoot().setBackgroundResource(Setting.isPlaybackOverlayEnabled() ? R.drawable.bg_player_osd_scrim : R.color.transparent);
     }
 
     /**
@@ -1881,12 +1897,12 @@ private boolean runtimeSourceOnly;
         mCustomPortraitButtons.addView(mCustomPortraitButtonRow, new HorizontalScrollView.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         params.setMargins(0, 0, 0, ResUtil.dp2px(8));
-        ((ViewGroup) mBinding.control.getRoot()).addView(mCustomPortraitButtons, 0, params);
+        ((ViewGroup) mBinding.osdControl.osdBottom).addView(mCustomPortraitButtons, 0, params);
     }
 
     private void updateCustomButtonVisibility() {
         updateCustomButtonStates();
-        boolean visible = service() != null && player().isMpv() && isVisible(mBinding.control.getRoot());
+        boolean visible = service() != null && player().isMpv() && isVisible(mBinding.osdControl.getRoot());
         if (mCustomPortraitButtons != null) mCustomPortraitButtons.setVisibility(visible ? View.VISIBLE : View.GONE);
     }
 
@@ -1937,11 +1953,15 @@ private boolean runtimeSourceOnly;
     }
 
     private void setDecode() {
-        mBinding.control.action.decode.setText(player().getDecodeText());
+        String text = player().getDecodeText();
+        mBinding.control.action.decode.setText(text);
+        mBinding.osdControl.osdDecode.setText(text);
     }
 
     private void setPlayerKernel() {
-        mBinding.control.action.player.setText(player().getPlayerText());
+        String text = player().getPlayerText();
+        mBinding.control.action.player.setText(text);
+        mBinding.osdControl.osdKernel.setText(text);
     }
 
     /**
@@ -1993,7 +2013,9 @@ private boolean runtimeSourceOnly;
         if (SiteApi.PUSH.equals(getKey())) PlayerSetting.putScale(scale);
         applyResizeMode(scale);
         mBinding.exo.post(() -> applyResizeMode(scale));
-        mBinding.control.action.scale.setText(ResUtil.getStringArray(R.array.select_scale)[scale]);
+        String text = ResUtil.getStringArray(R.array.select_scale)[scale];
+        mBinding.control.action.scale.setText(text);
+        mBinding.osdControl.osdScale.setText(text);
     }
 
     private void setViewModel() {
@@ -2635,6 +2657,7 @@ private boolean runtimeSourceOnly;
         App.removeCallbacks(mR4);
         if (!checkHistory(item)) return;
         checkFlag(item);
+        refreshEpisodePanelIfVisible();
         checkKeepImg();
         setText(item);
         updateKeep();
@@ -3515,6 +3538,7 @@ private boolean runtimeSourceOnly;
         selectEpisodeSegmentPosition(EpisodeRangePolicy.segmentIndex(size, selectedPosition, segmentSize) + 2);
         updateFocus();
         if (scrollToCurrent) scrollToCurrentEpisode();
+        refreshEpisodePanelIfVisible();
         setR2Callback();
     }
 
@@ -3554,6 +3578,7 @@ private boolean runtimeSourceOnly;
         selectEpisodeSegmentPosition(EpisodeRangePolicy.segmentIndex(size, selectedPosition, segmentSize) + 2);
         updateFocus();
         if (scrollToCurrent) scrollToCurrentEpisode();
+        refreshEpisodePanelIfVisible();
         setR2Callback();
     }
 
@@ -4343,7 +4368,14 @@ private boolean runtimeSourceOnly;
     private void onRepeat() {
         invalidateShortDramaQueue("repeat");
         player().setRepeatOne(!player().isRepeatOne());
-        mBinding.control.action.repeat.setSelected(player().isRepeatOne());
+        syncRepeatSelected();
+    }
+
+    /** 旧控制栏和新版 OSD 共用同一个循环状态，点一次立即同步，不等 1 秒刷新。 */
+    private void syncRepeatSelected() {
+        boolean repeat = player().isRepeatOne();
+        mBinding.control.action.repeat.setSelected(repeat);
+        mBinding.osdControl.osdRepeat.setSelected(repeat);
     }
 
     private void onPlayParams() {
@@ -4361,7 +4393,7 @@ private boolean runtimeSourceOnly;
 
     @Override
     public void onRepeatModeChanged(int repeatMode) {
-        mBinding.control.action.repeat.setSelected(player().isRepeatOne());
+        syncRepeatSelected();
     }
 
     private void checkNext() {
@@ -4571,6 +4603,8 @@ private boolean runtimeSourceOnly;
         if (mBinding == null || mHistory == null) return;
         mBinding.control.action.opening.setText(openingLabel());
         mBinding.control.action.ending.setText(endingLabel());
+        mBinding.osdControl.osdOpening.setText(openingLabel());
+        mBinding.osdControl.osdEnding.setText(endingLabel());
     }
 
     private String openingLabel() {
@@ -4837,8 +4871,229 @@ private boolean runtimeSourceOnly;
         mBinding.control.action.danmaku.setSelected(show);
     }
 
+    // ==================== 播放页 OSD / 底部选集面板 ====================
+
+    /**
+     * 新版 OSD 只负责展示和转发点击，播放内核、选集切换、线路切换全部复用原有流程，
+     * 这样不会影响已有播放行为。
+     */
+    private void setOsdView() {
+        mBinding.osdControl.osdPrev.setOnClickListener(guarded(this::checkPrev));
+        mBinding.osdControl.osdPlay.setOnClickListener(guarded(this::checkPlay));
+        mBinding.osdControl.osdNext.setOnClickListener(guarded(this::checkNext));
+        mBinding.osdControl.osdEpisodes.setOnClickListener(guarded(this::onEpisodePanel));
+        mBinding.osdControl.osdKernel.setOnClickListener(guarded(this::onPlayerKernel));
+        mBinding.osdControl.osdKernel.setOnLongClickListener(view -> onPlayerKernelLong());
+        mBinding.osdControl.osdDecode.setOnClickListener(guarded(this::onDecode));
+        mBinding.osdControl.osdRefresh.setOnClickListener(guarded(this::onRefresh));
+        mBinding.osdControl.osdReplay.setOnClickListener(guarded(this::onReplay));
+        mBinding.osdControl.osdRepeat.setOnClickListener(guarded(this::onRepeat));
+        mBinding.osdControl.osdSpeed.setOnClickListener(guarded(this::onSpeed));
+        mBinding.osdControl.osdSpeed.setOnLongClickListener(view -> onSpeedLong());
+        mBinding.osdControl.osdScale.setOnClickListener(guarded(this::onScale));
+        mBinding.osdControl.osdText.setOnClickListener(guarded(() -> onTrack(3)));
+        mBinding.osdControl.osdTrack.setOnClickListener(guarded(() -> onTrack(1)));
+        mBinding.osdControl.osdOpening.setOnClickListener(guarded(this::onOpening));
+        mBinding.osdControl.osdEnding.setOnClickListener(guarded(this::onEnding));
+        mBinding.episodePanel.getRoot().setVisibility(View.GONE);
+        mBinding.episodePanel.osdFlagList.setLayoutManager(new LinearLayoutManager(this, RecyclerView.HORIZONTAL, false));
+        mBinding.episodePanel.osdFlagList.setAdapter(mOsdFlagAdapter = new OsdFlagAdapter(this::onOsdFlagClick));
+        mBinding.episodePanel.osdPageList.setLayoutManager(new LinearLayoutManager(this, RecyclerView.HORIZONTAL, false));
+        mBinding.episodePanel.osdPageList.setAdapter(mOsdPageAdapter = new OsdPageAdapter(this::onOsdPageClick));
+        mBinding.episodePanel.osdEpisodeGrid.setLayoutManager(new GridLayoutManager(this, 2));
+        mBinding.episodePanel.osdEpisodeGrid.setAdapter(mOsdEpisodeAdapter = new OsdEpisodeAdapter(this::onOsdEpisodeClick));
+    }
+
+    /** OSD 显示期间的 1 秒刷新：分辨率、网速、播放状态、内核、解码、倍速等运行态。 */
+    private void syncOsdRuntime() {
+        if (mBinding == null || !isVisible(mBinding.osdControl.getRoot())) return;
+        syncOsdState();
+        App.removeCallbacks(mOsdTick);
+        App.post(mOsdTick, OSD_TICK_INTERVAL);
+    }
+
+    private void syncOsdState() {
+        if (mBinding == null) return;
+        PlayerManager player = player();
+        if (player == null || !isServiceReady()) {
+            mBinding.osdControl.resolution.setText("");
+            mBinding.osdControl.resolution.setVisibility(View.GONE);
+            mBinding.osdControl.netSpeed.setVisibility(View.GONE);
+            return;
+        }
+        mOsdSpeedMeter.sample(player);
+        String size = player.getSizeText();
+        mBinding.osdControl.resolution.setText(size);
+        mBinding.osdControl.resolution.setVisibility(TextUtils.isEmpty(size) ? View.GONE : View.VISIBLE);
+        String speed = mOsdSpeedMeter.getText();
+        mBinding.osdControl.netSpeed.setText(speed);
+        mBinding.osdControl.netSpeed.setVisibility(TextUtils.isEmpty(speed) ? View.GONE : View.VISIBLE);
+        mBinding.osdControl.osdPlayIcon.setImageResource(player.isPlaying() ? androidx.media3.ui.R.drawable.exo_icon_pause : androidx.media3.ui.R.drawable.exo_icon_play);
+        mBinding.osdControl.osdKernel.setText(player.getPlayerText());
+        mBinding.osdControl.osdDecode.setText(player.getDecodeText());
+        mBinding.osdControl.osdRepeat.setSelected(player.isRepeatOne());
+        mBinding.osdControl.osdSpeed.setText(player.getSpeedText());
+        mBinding.osdControl.osdScale.setText(ResUtil.getStringArray(R.array.select_scale)[getScale()]);
+        mBinding.osdControl.osdText.setVisibility(player.haveTrack(C.TRACK_TYPE_TEXT) || player.isVod() ? View.VISIBLE : View.GONE);
+        mBinding.osdControl.osdOpening.setText(mHistory == null ? getString(R.string.play_op) : openingLabel());
+        mBinding.osdControl.osdEnding.setText(mHistory == null ? getString(R.string.play_ed) : endingLabel());
+        mBinding.osdControl.osdEpisodes.setVisibility(mEpisodeAdapter != null && mEpisodeAdapter.getItemCount() > 1 ? View.VISIBLE : View.GONE);
+        syncOsdLogo();
+    }
+
+    /** 左下剧集 Logo：没有图片和标题时整块隐藏，不占用 OSD 高度。 */
+    private void syncOsdLogo() {
+        String url = mHistory == null ? "" : mHistory.getVodPic();
+        if (TextUtils.equals(mOsdLogoUrl, url)) return;
+        mOsdLogoUrl = url;
+        ImageView logo = mBinding.osdControl.vodLogo;
+        String name = mHistory == null ? "" : mHistory.getVodName();
+        if (TextUtils.isEmpty(url) && TextUtils.isEmpty(name)) {
+            ImgUtil.clear(logo);
+            logo.setVisibility(View.GONE);
+            return;
+        }
+        logo.setVisibility(View.VISIBLE);
+        ImgUtil.load(name, url, logo, true, ResUtil.dp2px(132), ResUtil.dp2px(90));
+    }
+
+    /** 旧控制栏的入口 View 映射到新版 OSD 对应按钮，保持 showControl 的调用点不变。 */
+    private View resolveOsdTarget(View view) {
+        if (view == null) return null;
+        if (PlayerControlFocusHelper.isDescendant(mBinding.osdControl.getRoot(), view)) return view;
+        if (view == mBinding.control.action.opening) return mBinding.osdControl.osdOpening;
+        if (view == mBinding.control.action.ending) return mBinding.osdControl.osdEnding;
+        if (view == mBinding.control.action.next) return mBinding.osdControl.osdNext;
+        if (view == mBinding.control.action.prev) return mBinding.osdControl.osdPrev;
+        return mBinding.osdControl.osdPrev;
+    }
+
+    private void onEpisodePanel() {
+        if (mFlagAdapter == null || mFlagAdapter.getItemCount() == 0) {
+            onEpisodes();
+            return;
+        }
+        if (isVisible(mBinding.episodePanel.getRoot())) {
+            hideEpisodePanel();
+            return;
+        }
+        if (!isVisible(mBinding.osdControl.getRoot())) showControl(mBinding.osdControl.osdEpisodes);
+        // 面板打开期间不允许 OSD 自动隐藏，避免用户正在翻页时整块 UI 消失。
+        App.removeCallbacks(mR1);
+        bindEpisodePanel(true);
+        mBinding.episodePanel.getRoot().setVisibility(View.VISIBLE);
+        focusEpisodePanel();
+    }
+
+    private void hideEpisodePanel() {
+        if (mBinding == null || !isVisible(mBinding.episodePanel.getRoot())) return;
+        mBinding.episodePanel.getRoot().setVisibility(View.GONE);
+        PlayerControlFocusHelper.ensureFocus(mBinding.osdControl.getRoot(), mBinding.osdControl.osdEpisodes);
+    }
+
+    /** 重新绑定线路 / 分页 / 当前页选集；resetPage=false 时保留用户手动切换的页码。 */
+    private void bindEpisodePanel(boolean resetPage) {
+        Flag flag = getFlag();
+        List<Episode> episodes = flag == null ? new ArrayList<>() : flag.getEpisodes();
+        mOsdFlagAdapter.addAll(mFlagAdapter.getItems());
+        if (episodes.isEmpty()) {
+            mOsdPageIndex = 0;
+            mOsdPageAdapter.addAll(new ArrayList<>());
+            mOsdPageAdapter.setSelectedPosition(RecyclerView.NO_POSITION);
+            mOsdEpisodeAdapter.addAll(null);
+            return;
+        }
+        int pages = (episodes.size() + OSD_PAGE_SIZE - 1) / OSD_PAGE_SIZE;
+        if (resetPage || mOsdPageIndex >= pages) mOsdPageIndex = getSelectedPageIndex(episodes);
+        mOsdPageIndex = Math.max(0, Math.min(mOsdPageIndex, pages - 1));
+        List<String> labels = new ArrayList<>(pages);
+        for (int i = 0; i < pages; i++) labels.add((i * OSD_PAGE_SIZE + 1) + "-" + Math.min((i + 1) * OSD_PAGE_SIZE, episodes.size()));
+        mOsdPageAdapter.addAll(labels);
+        mOsdPageAdapter.setSelectedPosition(mOsdPageIndex);
+        bindOsdPage(mOsdPageIndex);
+    }
+
+    private void bindOsdPage(int pageIndex) {
+        Flag flag = getFlag();
+        if (flag == null) {
+            mOsdEpisodeAdapter.addAll(null);
+            return;
+        }
+        List<Episode> episodes = flag.getEpisodes();
+        int start = pageIndex * OSD_PAGE_SIZE;
+        int end = Math.min(start + OSD_PAGE_SIZE, episodes.size());
+        mOsdEpisodeAdapter.addAll(start >= end ? new ArrayList<>() : new ArrayList<>(episodes.subList(start, end)));
+    }
+
+    private int getSelectedPageIndex(List<Episode> episodes) {
+        for (int i = 0; i < episodes.size(); i++) if (episodes.get(i).isSelected()) return i / OSD_PAGE_SIZE;
+        return 0;
+    }
+
+    /** 打开面板后优先把焦点放到当前集，其次当前线路，最后当前分页。 */
+    private void focusEpisodePanel() {
+        if (!isVisible(mBinding.episodePanel.getRoot())) return;
+        int position = mOsdEpisodeAdapter.getSelectedPosition();
+        if (focusRecyclerPosition(mBinding.episodePanel.osdEpisodeGrid, position == RecyclerView.NO_POSITION ? 0 : position)) return;
+        int flag = mOsdFlagAdapter.getSelectedPosition();
+        if (focusRecyclerPosition(mBinding.episodePanel.osdFlagList, flag == RecyclerView.NO_POSITION ? 0 : flag)) return;
+        focusRecyclerPosition(mBinding.episodePanel.osdPageList, mOsdPageIndex);
+    }
+
+    private void refreshEpisodePanelIfVisible() {
+        if (mBinding == null || !isVisible(mBinding.episodePanel.getRoot())) return;
+        bindEpisodePanel(false);
+    }
+
+    private void onOsdFlagClick(Flag item) {
+        if (item == null) return;
+        if (!item.isSelected()) onItemClick(item);
+        bindEpisodePanel(true);
+        focusEpisodePanel();
+    }
+
+    private void onOsdPageClick(int position) {
+        mOsdPageIndex = Math.max(0, position);
+        mOsdPageAdapter.setSelectedPosition(mOsdPageIndex);
+        bindOsdPage(mOsdPageIndex);
+        focusRecyclerPosition(mBinding.episodePanel.osdEpisodeGrid, 0);
+    }
+
+    private void onOsdEpisodeClick(Episode item) {
+        if (item == null) return;
+        hideControl();
+        onItemClick(item);
+    }
+
+    /** OSD 底部按钮行再按一次「下」就把控制栏收起来，和遥控器的开合节奏一致。 */
+    private boolean dispatchOsdDownKey(KeyEvent event) {
+        if (event == null || !KeyUtil.isActionUp(event) || !KeyUtil.isDownKey(event)) return false;
+        if (!PlayerControlFocusHelper.containsFocus(mBinding.osdControl.osdActions)) return false;
+        hideControl();
+        return true;
+    }
+
+    /**
+     * 面板打开后接管焦点导航：只处理方向键/确认键，其余按键（播放暂停、返回等）
+     * 继续走原有播放流程，避免面板把无关按键吞掉。
+     */
+    private boolean dispatchEpisodePanelKey(KeyEvent event) {
+        if (event == null || !isVisible(mBinding.episodePanel.getRoot())) return false;
+        if (!isPanelFocusKey(event)) return false;
+        if (!PlayerControlFocusHelper.containsFocus(mBinding.episodePanel.getRoot())) {
+            if (!KeyUtil.isActionDown(event)) return false;
+            focusEpisodePanel();
+            return true;
+        }
+        return PlayerControlFocusHelper.handleKey(mBinding.episodePanel.getRoot(), null, event);
+    }
+
+    private boolean isPanelFocusKey(KeyEvent event) {
+        return KeyUtil.isUpKey(event) || KeyUtil.isDownKey(event) || KeyUtil.isLeftKey(event) || KeyUtil.isRightKey(event) || KeyUtil.isEnterKey(event);
+    }
+
     private void onToggle() {
-        if (isVisible(mBinding.control.getRoot())) hideControl();
+        if (isVisible(mBinding.osdControl.getRoot())) hideControl();
         else showControl(getFocus2());
     }
 
@@ -4901,28 +5156,40 @@ private boolean runtimeSourceOnly;
     private void showControl(View view) {
         showTopInfo();
         setPlayParamsState();
-        mBinding.control.getRoot().setVisibility(View.VISIBLE);
+        if (isVisible(mBinding.episodePanel.getRoot())) bindEpisodePanel(false);
+        mBinding.osdControl.getRoot().setVisibility(View.VISIBLE);
+        syncOsdState();
         updateCustomButtonVisibility();
         if (mOsd != null) mOsd.setControlsVisible(true);
-        PlayerControlFocusHelper.ensureFocus(mBinding.control.getRoot(), view);
+        PlayerControlFocusHelper.ensureFocus(mBinding.osdControl.getRoot(), resolveOsdTarget(view));
+        App.removeCallbacks(mOsdTick);
+        App.post(mOsdTick, OSD_TICK_INTERVAL);
         setR1Callback();
     }
 
     private void hideControl() {
-        mBinding.control.getRoot().setVisibility(View.GONE);
+        boolean hadFocus = PlayerControlFocusHelper.containsFocus(mBinding.osdControl.getRoot()) || PlayerControlFocusHelper.containsFocus(mBinding.episodePanel.getRoot());
+        mBinding.episodePanel.getRoot().setVisibility(View.GONE);
+        mBinding.osdControl.getRoot().setVisibility(View.GONE);
         updateCustomButtonVisibility();
         if (mOsd != null) mOsd.setControlsVisible(false);
-        if (player().isPlaying()) mBinding.widget.top.setVisibility(View.GONE);
+        PlayerManager player = player();
+        if (player != null && player.isPlaying()) mBinding.widget.top.setVisibility(View.GONE);
         App.removeCallbacks(mR1);
+        App.removeCallbacks(mOsdTick);
+        mOsdSpeedMeter.reset();
+        if (hadFocus) mBinding.video.requestFocus();
     }
 
     private void hideCenter() {
         mBinding.widget.action.setImageResource(R.drawable.ic_widget_play);
         mBinding.widget.center.setVisibility(View.GONE);
-        if (isGone(mBinding.control.getRoot())) mBinding.widget.top.setVisibility(View.GONE);
+        if (isGone(mBinding.osdControl.getRoot())) mBinding.widget.top.setVisibility(View.GONE);
     }
 
     private void setR1Callback() {
+        // 选集面板打开时不自动收起 OSD。
+        if (isVisible(mBinding.episodePanel.getRoot())) return;
         App.post(mR1, Constant.INTERVAL_HIDE);
     }
 
@@ -7452,7 +7719,9 @@ private boolean runtimeSourceOnly;
 
     private void setSpeed() {
         if (mHistory == null) return;
-        mBinding.control.action.speed.setText(player().setSpeed(getPlaybackSpeed()));
+        String text = player().setSpeed(getPlaybackSpeed());
+        mBinding.control.action.speed.setText(text);
+        mBinding.osdControl.osdSpeed.setText(text);
     }
 
     private float getPlaybackSpeed() {
@@ -7744,14 +8013,14 @@ private boolean runtimeSourceOnly;
     }
 
     private View getFocus2() {
-        return mFocus2 == null || mFocus2.getVisibility() != View.VISIBLE || !PlayerControlFocusHelper.isDescendant(mBinding.control.getRoot(), mFocus2) || mFocus2 == mBinding.control.action.opening || mFocus2 == mBinding.control.action.ending ? mBinding.control.action.next : mFocus2;
+        return mFocus2 == null || mFocus2.getVisibility() != View.VISIBLE || !PlayerControlFocusHelper.isDescendant(mBinding.osdControl.getRoot(), mFocus2) || mFocus2 == mBinding.osdControl.osdOpening || mFocus2 == mBinding.osdControl.osdEnding ? mBinding.osdControl.osdPrev : mFocus2;
     }
 
     private boolean dispatchOpeningEndingAdjust(KeyEvent event) {
-        if (!KeyUtil.isActionDown(event) || !isVisible(mBinding.control.getRoot())) return false;
+        if (!KeyUtil.isActionDown(event) || !isVisible(mBinding.osdControl.getRoot())) return false;
         View focus = getCurrentFocus();
-        if (focus == mBinding.control.action.opening) return dispatchOpeningAdjust(event);
-        if (focus == mBinding.control.action.ending) return dispatchEndingAdjust(event);
+        if (focus == mBinding.osdControl.osdOpening) return dispatchOpeningAdjust(event);
+        if (focus == mBinding.osdControl.osdEnding) return dispatchEndingAdjust(event);
         return false;
     }
 
@@ -7781,7 +8050,7 @@ private boolean runtimeSourceOnly;
     protected boolean dispatchDiscMenuKey(KeyEvent event) {
         // Let TV controls own DPAD/ENTER while visible, including the shared
         // PlaybackActivity dispatch performed by super.dispatchKeyEvent().
-        if (isVisible(mBinding.control.getRoot())) return false;
+        if (isVisible(mBinding.osdControl.getRoot()) || isVisible(mBinding.episodePanel.getRoot())) return false;
         return super.dispatchDiscMenuKey(event);
     }
 
@@ -7792,19 +8061,21 @@ private boolean runtimeSourceOnly;
             mKeyDown.releaseSpeed();
         }
         if (isFullscreen() && KeyUtil.isMenuKey(event)) {
-            if (Setting.getFullscreenMenuKey() == 1) onEpisodes();
-            else onToggle();
+            onEpisodePanel();
+            return true;
         }
-        if (isVisible(mBinding.control.getRoot())) {
+        if (dispatchEpisodePanelKey(event)) return true;
+        if (!isVisible(mBinding.episodePanel.getRoot()) && isVisible(mBinding.osdControl.getRoot())) {
             setR1Callback();
             if (dispatchOpeningEndingAdjust(event)) return true;
-            if (PlayerControlFocusHelper.handleKey(mBinding.control.getRoot(), getFocus2(), event)) return true;
-            if (PlayerControlFocusHelper.containsFocus(mBinding.control.getRoot())) mFocus2 = getCurrentFocus();
+            if (dispatchOsdDownKey(event)) return true;
+            if (PlayerControlFocusHelper.handleKey(mBinding.osdControl.getRoot(), getFocus2(), event)) return true;
+            if (PlayerControlFocusHelper.containsFocus(mBinding.osdControl.getRoot())) mFocus2 = getCurrentFocus();
         }
         if (onEpisodeKey(event)) return true;
         if (handleEpisodeLongPress(event)) return true;
-        if (mAudioStageVisible && isGone(mBinding.control.getRoot()) && dispatchAudioStageKey(event)) return true;
-        if (isFullscreen() && isGone(mBinding.control.getRoot()) && mKeyDown.hasEvent(event) && service() != null) return mKeyDown.onKeyDown(event);
+        if (mAudioStageVisible && isGone(mBinding.osdControl.getRoot()) && dispatchAudioStageKey(event)) return true;
+        if (isFullscreen() && isGone(mBinding.osdControl.getRoot()) && mKeyDown.hasEvent(event) && service() != null) return mKeyDown.onKeyDown(event);
         if (KeyUtil.isMediaFastForward(event)) return onSeekForward();
         if (KeyUtil.isMediaRewind(event)) return onSeekBack();
         return super.dispatchKeyEvent(event);
@@ -8072,6 +8343,8 @@ private boolean runtimeSourceOnly;
         super.onStop();
         mKeyDown.releaseSpeed();
         mPlayerUi.onStop();
+        App.removeCallbacks(mOsdTick);
+        mOsdSpeedMeter.reset();
         if (mKaraoke != null) mKaraoke.clear();
         stopAudioCoverRotation();
         if (PlayerSetting.isBackgroundOff()) mClock.stop();
@@ -8081,7 +8354,9 @@ private boolean runtimeSourceOnly;
 
     @Override
     protected void onBackInvoked() {
-        if (isVisible(mBinding.control.getRoot())) {
+        if (isVisible(mBinding.episodePanel.getRoot())) {
+            hideEpisodePanel();
+        } else if (isVisible(mBinding.osdControl.getRoot())) {
             hideControl();
         } else if (isVisible(mBinding.widget.center)) {
             hideCenter();
@@ -9904,7 +10179,9 @@ private void showInitialAudioStage() {
         mBinding.audioStage.setVisibility(View.VISIBLE);
         mBinding.audioStage.bringToFront();
         hideProgress();
-        mBinding.control.getRoot().setVisibility(View.GONE);
+        mBinding.osdControl.getRoot().setVisibility(View.GONE);
+        mBinding.episodePanel.getRoot().setVisibility(View.GONE);
+        App.removeCallbacks(mOsdTick);
         if (mOsd != null) mOsd.setControlsVisible(false);
         App.removeCallbacks(mR1);
         hideInfo();
