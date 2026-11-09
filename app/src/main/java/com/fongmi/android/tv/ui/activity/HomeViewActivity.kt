@@ -19,6 +19,7 @@ import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
+import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.ViewCompositionStrategy
@@ -204,6 +205,14 @@ class HomeViewActivity : AppCompatActivity() {
      */
     private val folderStack = ArrayDeque<FolderDrillState>()
 
+    /**
+     * 首页「双击返回退出」上一次按下返回键的时间戳（毫秒）。
+     *
+     * 只在 [onBackPressed] 里读写：0 = 当前不在确认窗口内。
+     * 目录出栈 / 关闭弹窗这类「消费掉返回键」的操作会把它清零，避免刚退出目录再按一次就误退出。
+     */
+    private var lastBackPressTime = 0L
+
     /** 原版 `u31`：一层目录的整页快照。 */
     private data class FolderDrillState(
         val items: List<HomePosterItem>,
@@ -344,9 +353,21 @@ class HomeViewActivity : AppCompatActivity() {
 
     @Suppress("DEPRECATION")
     override fun onBackPressed() {
-        // 原版：目录里按返回先 `U1()` 出栈回到上一层；只有停在根页时才交给系统退出。
-        if (exitFolder()) return
-        super.onBackPressed()
+        // 1. 目录里按返回：先 `U1()` 出栈回到上一层（原版行为），不算「退出」。
+        //    侧边栏 / 匹配弹窗都是独立 Dialog 窗口，系统返回键先由它们自己消费，
+        //    走不到这里时不需要额外探测。
+        if (exitFolder()) {
+            lastBackPressTime = 0L
+            return
+        }
+        // 2. 已经停在首页根页：2 秒内连按两次才真正退出 App。
+        val currentTime = System.currentTimeMillis()
+        if (currentTime - lastBackPressTime < EXIT_CONFIRM_WINDOW_MS) {
+            super.onBackPressed()
+            return
+        }
+        lastBackPressTime = currentTime
+        Toast.makeText(this, R.string.app_exit_confirm, Toast.LENGTH_SHORT).show()
     }
 
     // ==================================================================
@@ -1989,6 +2010,9 @@ class HomeViewActivity : AppCompatActivity() {
     private companion object {
 
         private const val TAG = "HomeView"
+
+        /** 首页双击返回退出的确认窗口：两次返回间隔小于该值才真正退出。 */
+        private const val EXIT_CONFIRM_WINDOW_MS = 2000L
 
         // 顶栏顺序（对照 ref_docs/activity_home_v2.xml 的 navRecycler + 逆向截图图2）。
         // 第一项是「小房子」图标（homeBtn），文字项里**没有「首页」**：

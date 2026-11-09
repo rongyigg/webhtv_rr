@@ -149,7 +149,8 @@
             android:configChanges="screenSize|smallestScreenSize|screenLayout|orientation|keyboard|keyboardHidden|navigation"
             android:launchMode="singleTop"
             android:parentActivityName=".ui.activity.HomeActivity"
-            android:screenOrientation="sensorLandscape" />
+            android:screenOrientation="sensorLandscape"
+            android:theme="@style/Theme.Video" />
 
         <activity
             android:name=".ui.activity.TmdbDetailActivity"

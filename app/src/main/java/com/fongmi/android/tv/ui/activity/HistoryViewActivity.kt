@@ -495,12 +495,22 @@ class HistoryViewActivity : AppCompatActivity() {
         return runCatching { upgradeTmdbImage(url, TMDB_BACKDROP_WIDTH) }.getOrDefault(url)
     }
 
-    /** 艺术字：`TmdbCache.q(name)` 的等价物（`hero_logo_cache`，key = siteKey|vodId）。 */
+    /**
+     * 艺术字：`TmdbCache.q(name)` 的等价物。三级同步查找（全是内存查表，焦点切换不会卡 IO）：
+     * 1. 进程内详情 [HeroTmdbPrefetchCache]：最新，且一定带 Logo；
+     * 2. 磁盘 `hero_logo_cache`（[HeroLogoCache]，key = siteKey|vodId）：首页 / 详情页写过，冷启动首帧可直接画；
+     * 3. 跨源键 `tmdb|mediaType|tmdbId`：本条目换了接口源、vodId 变了，但 TMDB 身份没变时仍能命中。
+     *
+     * posterKey 与首页 `buildPosterItems` 完全同一套规则：条目 id 为空时退回剧名。
+     */
     private fun tmdbLogo(history: History): String {
         val siteKey = history.siteKey.orEmpty()
+        if (siteKey.isEmpty()) return ""
         val vodId = history.vodId.orEmpty()
-        if (siteKey.isEmpty() || vodId.isEmpty()) return ""
-        return HeroLogoCache.get(heroTmdbKey(siteKey, vodId))
+        val posterKey = heroTmdbKey(siteKey, vodId.ifBlank { history.vodName.orEmpty() })
+        HeroTmdbPrefetchCache.peek(posterKey)?.logoUrl?.takeIf { it.isNotBlank() }?.let { return it }
+        HeroLogoCache.get(posterKey).takeIf { it.isNotBlank() }?.let { return it }
+        return HeroLogoCache.get(tmdbLogoKey(tmdbItem(history)))
     }
 
     /** 预热 ±2 项的海报与横图（`o11.k0` / `q0` L537-552）。 */

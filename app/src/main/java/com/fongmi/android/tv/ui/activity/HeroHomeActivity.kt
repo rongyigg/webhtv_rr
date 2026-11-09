@@ -218,6 +218,9 @@ internal object HeroTmdbPrefetchCache {
         // Logo 再单独落一份极简磁盘缓存：`TmdbMatchCache.Entry` 没有 logo 字段，
         // 冷启动第一帧只能靠这份键值把艺术字直接画出来（详见 [HeroLogoCache]）。
         HeroLogoCache.save(key, data.logoUrl.orEmpty())
+        // 同时落一份与接口源无关的 TMDB 身份键：换源 / 换采集站后 vodId 会变，
+        // 历史页只能拿到 `TmdbItem`，靠它仍能命中同一部作品的艺术字。
+        HeroLogoCache.save(tmdbLogoKey(data.item), data.logoUrl.orEmpty())
     }
 
     /** 取出并删除：详情页用过一次就作废，避免用户手动改过匹配后仍拿到旧条目。 */
@@ -342,6 +345,23 @@ fun clearHeroCaches() {
  * **不能用剧名**：同名不同季 / 重制版会互相覆盖，`Vod.id` 才是站点内唯一键。
  */
 internal fun heroTmdbKey(siteKey: String, vodId: String): String = siteKey + "|" + vodId
+
+/**
+ * 跨接口源的 TMDB 身份键：`tmdb | 媒体类型 | tmdbId`。
+ *
+ * [heroTmdbKey] 是「站点 key | 条目 id」，换一个采集站后同一个作品就是另一个键，
+ * 历史页只能从 `TmdbItem` 拿到 tmdbId / mediaType，查不到任何源头写入的艺术字。
+ * 所以在 [HeroTmdbPrefetchCache.put] 里额外落这一份与源无关的键，供历史页兜底读取。
+ *
+ * 无效条目（无 tmdbId / 无 mediaType）返回空串，[HeroLogoCache] 会直接忽略空键。
+ */
+internal fun tmdbLogoKey(item: TmdbItem?): String {
+    if (item == null) return ""
+    if (item.tmdbId <= 0) return ""
+    val mediaType = item.mediaType.orEmpty().lowercase()
+    if (mediaType.isBlank()) return ""
+    return "tmdb|" + mediaType + "|" + item.tmdbId
+}
 
 /**
  * HeroUI（Compose）全屏沉浸式首页。

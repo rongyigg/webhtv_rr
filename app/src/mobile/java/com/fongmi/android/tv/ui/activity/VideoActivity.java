@@ -374,6 +374,14 @@ private int mAudioBackgroundRandomNonce;
     private static final String EXTRA_TMDB_DETAIL_THEME = "tmdb_detail_theme";
     private static final String EXTRA_IMMERSIVE_AUDIO_CACHE_KEY = "immersive_audio_cache_key";
     private static final String EXTRA_SEARCH_KEYWORD = "search_keyword";
+    /**
+     * 关闭 WebHTV 壁纸：历史页 / Hero 选集页直达全屏起播时带上。
+     *
+     * 播放页加载期内容层是透明的，`BaseActivity` 挂载的壁纸会先露出来（用户看到的「先闪一张
+     * WebHTV 壁纸」）。这个 extra 让 [customWall] 不挂壁纸，加载期只剩纯黑窗口底
+     * （见 `Theme.Video`）。其他入口不传，保持原有首屏壁纸。
+     */
+    private static final String EXTRA_DISABLE_BG = "disable_bg";
     private static final java.util.concurrent.ConcurrentHashMap<String, AudioPlaybackResolver.Resolved> IMMERSIVE_AUDIO_LAUNCHES = new java.util.concurrent.ConcurrentHashMap<>();
     private static final int TMDB_TABLET_PLAYER_MIN_WIDTH_DP = 440;
     private static final int TMDB_TABLET_PLAYER_MAX_WIDTH_DP = 640;
@@ -534,7 +542,9 @@ private final Task.Scope mPersonalRecommendationTasks = new Task.Scope(Task.reco
 
     @Override
     protected boolean customWall() {
-        return true;
+        // 历史页 / Hero 选集页直达全屏起播：Intent 带 `disable_bg`，跳过 WebHTV 壁纸。
+        // 加载期改由 `Theme.Video` 的纯黑窗口底兜底，不会再闪一张应用壁纸。
+        return !getIntent().getBooleanExtra(EXTRA_DISABLE_BG, false);
     }
 
     @Override
@@ -858,6 +868,9 @@ private final Task.Scope mPersonalRecommendationTasks = new Task.Scope(Task.reco
             // 「本入口绝不进小窗」变成 Intent 上的既有约定。
             intent.putExtra("float", false);
             intent.putExtra("pip", false);
+            // 【不挂 WebHTV 壁纸】历史页 / Hero 选集页起播：加载期只露 `Theme.Video` 的纯黑底，
+            // 不再先闪一张应用壁纸。其他入口不传，保持原有首屏壁纸。
+            intent.putExtra(EXTRA_DISABLE_BG, true);
         }
         putIntentPlaybackSelection(intent, playFlag, playFlagKey, playEpisodeName, playEpisodeUrl);
         activity.startActivity(intent);

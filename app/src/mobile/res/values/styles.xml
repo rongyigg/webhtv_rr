@@ -13,6 +13,15 @@
 
     <style name="Theme.App" parent="Theme.Base" />
 
+    <!--
+        播放页专用主题：窗口底色固定纯黑。
+        起播瞬间（Activity 正在创建、内容还没画出来，或播放器还没吐第一帧）只会露黑底，
+        不会再闪一下应用主题色 / 首页壁纸。
+    -->
+    <style name="Theme.Video" parent="Theme.App">
+        <item name="android:windowBackground">@android:color/black</item>
+    </style>
+
     <style name="Theme.Crash" parent="Theme.Base">
         <item name="android:windowDisablePreview">true</item>
         <item name="android:windowBackground">@color/grey_700</item>
