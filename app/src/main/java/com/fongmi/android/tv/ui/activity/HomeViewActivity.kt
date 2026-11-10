@@ -2304,8 +2304,8 @@ private class HomeChipAdapter(
      * 焦点视觉（照抄 Compose 版 `HeroTopBarItem`，L1730-1816）：
      * - 顶栏：常态白 60% + Medium；焦点纯白 + SemiBold（系统 `sans-serif` BOLD）+ 下方红色短横线。
      *   缩放在焦点监听里做，只作用于绘制层，下划线不会跳动。
-     * - 分类 Tab：严格三态 —— 聚焦 = 全局实心焦点样式（红渐变）；选中未聚焦 = 全局细线红框；
-     *   其余 = 深色半透明胶囊底。三种底色都由 [tabBackground] 生成。
+     * - 分类 Tab：严格三态 —— 聚焦 = 全局实心焦点胶囊（红渐变 + 28dp 全圆角）；
+     *   选中未聚焦 = 同形状全局细线红框胶囊；其余 = 深色半透明底。三态都由 [tabBackground] 生成。
      */
     private fun applyVisual(holder: Holder, focused: Boolean, position: Int) {
         val text = holder.text
@@ -2320,9 +2320,9 @@ private class HomeChipAdapter(
                 // position 可能是 NO_POSITION(-1)，必须排除，否则会把 -1 当成「已选中」。
                 val selected = position >= 0 && position == selectedIndex
                 // 三态严格判断，顺序不能换：
-                //   1. hasFocus            → bg_global_focus_solid_red（红渐变实心），白字
-                //   2. 未聚焦 && 已选中     → bg_global_selected_red_border（细线红框），白字
-                //   3. 其余                → 深色半透明胶囊底，暗白字
+                //   1. hasFocus            → bg_global_focus_capsule（红渐变实心胶囊），白字
+                //   2. 未聚焦 && 已选中     → bg_global_selected_capsule_border（同圆角细线红框），白字
+                //   3. 其余                → 深色半透明底，暗白字
                 text.isSelected = selected
                 text.background = tabBackground(focused, selected)
                 text.setTextColor(if (focused || selected) Color.WHITE else tabIdleText)
@@ -2332,14 +2332,14 @@ private class HomeChipAdapter(
 
     /**
      * 分类 Tab 背景 —— 三态唯一的生成入口，焦点 / 选中态全部复用全局 Drawable，代码里不写色值：
-     * - [focused]：`@drawable/bg_global_focus_solid_red`（与播放页 OSD 焦点同一支红渐变）；
-     * - 选中未聚焦：`@drawable/bg_global_selected_red_border`（透明底 + 细线红框 + 4dp 圆角）；
-     * - 其余：`home_tab_idle_surface` 深色半透明小圆角矩形（4dp，原版形状，不是大胶囊）。
+     * - [focused]：`@drawable/bg_global_focus_capsule`（换源弹窗站点标签同款红渐变胶囊，28dp 全圆角）；
+     * - 选中未聚焦：`@drawable/bg_global_selected_capsule_border`（同形状透明底 + 细线红框）；
+     * - 其余：`home_tab_idle_surface` 深色半透明底（未选中态本轮未改动）。
      */
     private fun tabBackground(focused: Boolean, selected: Boolean): Drawable {
         val global = when {
-            focused -> R.drawable.bg_global_focus_solid_red
-            selected -> R.drawable.bg_global_selected_red_border
+            focused -> R.drawable.bg_global_focus_capsule
+            selected -> R.drawable.bg_global_selected_capsule_border
             else -> 0
         }
         if (global != 0) ContextCompat.getDrawable(context, global)?.let { return it }

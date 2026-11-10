@@ -1,23 +1,19 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-    选集面板分页标签（1-6 / 7-12 ...），几何沿用逆向取样：38.5x22dp、1dp 描边、半高圆角。
-    - 焦点：全局实心焦点样式 @drawable/bg_global_focus_solid_red（焦点落到即翻页）
-    - 当前页（失焦选中）：透明底 + 1dp @color/osd_focus 细框
+    选区分页标签（1-6 / 7-12 ...），几何沿用逆向取样：38.5x22dp、半高圆角。
+    - 焦点：全局实心焦点胶囊 @drawable/bg_global_focus_capsule
+      （与换源弹窗站点标签同款红渐变 28dp 胶囊；焦点落到即翻页，交互在 VideoActivity）
+    - 当前页（失焦选中）：全局选中胶囊 @drawable/bg_global_selected_capsule_border
+      （透明底 + 1.5dp 细线红框 + 与焦点态完全一致的 28dp 圆角）
     - 其余：透明
 -->
 <selector xmlns:android="http://schemas.android.com/apk/res/android">
     <item
-        android:drawable="@drawable/bg_global_focus_solid_red"
+        android:drawable="@drawable/bg_global_focus_capsule"
         android:state_focused="true" />
-    <item android:state_selected="true">
-        <shape android:shape="rectangle">
-            <solid android:color="@android:color/transparent" />
-            <stroke
-                android:width="1dp"
-                android:color="@color/osd_focus" />
-            <corners android:radius="11dp" />
-        </shape>
-    </item>
+    <item
+        android:drawable="@drawable/bg_global_selected_capsule_border"
+        android:state_selected="true" />
     <item>
         <shape android:shape="rectangle">
             <solid android:color="@android:color/transparent" />
