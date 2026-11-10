@@ -21,9 +21,14 @@ import java.util.List;
  * 卡片尺寸对齐逆向 App 截图：14sp 单行文字 + 上下 6dp / 左右 12dp 内边距 ≈ 30dp 高，
  * 5dp 圆角改 3dp、卡片间距 8dp（逆向取样：卡片 61px≈30.5dp、行距 16px=8dp）。
  * 标题复用选集按钮的构造 {@link EpisodeAdapter#getNativeTitle(Episode)}。
+ *
+ * 交互约定（与分页标签严格区分）：
+ * - 焦点在卡片间移动只改变焦点与选中红框，**不切集、不播放**；
+ * - 只有按下确定键触发 {@link OnClickListener#onItemClick(Episode)} 才真正切集；
+ * - 跑马灯只在获得焦点的卡片上开，失焦立刻停止。
+ *
  * 只有当前正在播放的 {@link Episode#isSelected()} 才把 {@code @raw/equalizer} 置为 VISIBLE 并播放，
  * 其余一律 GONE 且停止动画。
- * 跑马灯只在获得焦点的卡片上开：同屏多张卡片同时滚动会白耗渲染资源。
  */
 public class OsdEpisodeAdapter extends RecyclerView.Adapter<OsdEpisodeAdapter.ViewHolder> {
 
@@ -49,17 +54,6 @@ public class OsdEpisodeAdapter extends RecyclerView.Adapter<OsdEpisodeAdapter.Vi
         return RecyclerView.NO_POSITION;
     }
 
-    /**
-     * 面板内「焦点即时切集」后只刷新受影响的两张卡片。
-     * 这里必须避开 notifyDataSetChanged：它会重建当前所有子项，遥控器正在移动的焦点
-     * 会被打回第一项，表现为「按一下方向键又跳回开头」。
-     */
-    public void notifySelectionChanged(int oldPosition, int newPosition) {
-        if (oldPosition == newPosition) return;
-        if (oldPosition >= 0 && oldPosition < items.size()) notifyItemChanged(oldPosition);
-        if (newPosition >= 0 && newPosition < items.size()) notifyItemChanged(newPosition);
-    }
-
     @Override
     public int getItemCount() {
         return items.size();
@@ -80,12 +74,8 @@ public class OsdEpisodeAdapter extends RecyclerView.Adapter<OsdEpisodeAdapter.Vi
         // rebind 后按当前焦点状态恢复跑马灯，避免卡片被回收重建后滚动停住。
         applyMarquee(holder, holder.itemView.hasFocus());
         holder.itemView.setOnClickListener(view -> listener.onItemClick(item));
-        // 逆向 App 的行为：焦点一落到某一集就立刻切过去，不用再按确定键。
-        // 这里只回调、不重建列表，焦点才能继续沿方向键移动。
-        holder.itemView.setOnFocusChangeListener((view, hasFocus) -> {
-            applyMarquee(holder, hasFocus);
-            if (hasFocus && !item.isSelected()) listener.onFocus(item);
-        });
+        // 焦点移动只负责跑马灯：绝不在这里切集，切集只能通过上面的点击/确定键。
+        holder.itemView.setOnFocusChangeListener((view, hasFocus) -> applyMarquee(holder, hasFocus));
     }
 
     @Override
@@ -128,10 +118,6 @@ public class OsdEpisodeAdapter extends RecyclerView.Adapter<OsdEpisodeAdapter.Vi
     public interface OnClickListener {
 
         void onItemClick(Episode item);
-
-        /** 焦点落到某一集：立即切集，不需要再按确定键。 */
-        default void onFocus(Episode item) {
-        }
     }
 
     public static class ViewHolder extends RecyclerView.ViewHolder {

@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    全局「实心焦点」样式：播放页选集面板同款横向红渐变
+    @color/osd_accent → @color/osd_accent_light（不写任何十六进制字面量）。
+
+    圆角 15dp = 原有 OSD 动作按钮 30dp 高的一半；22dp / 26dp 高的分页标签与首页分类 Tab
+    使用时会被系统按「短边一半」钳制，自动变成全圆角胶囊，和三处原有几何一致。
+    刻意不带 <padding>：这三处 View 自己设置了内边距，避免换背景时把尺寸改掉。
+-->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+
+    <gradient
+        android:angle="0"
+        android:endColor="@color/osd_accent_light"
+        android:startColor="@color/osd_accent" />
+
+    <corners android:radius="15dp" />
+
+</shape>

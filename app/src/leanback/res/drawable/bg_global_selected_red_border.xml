@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    全局「选中」样式：透明底 + 1.5dp 细线红框（@color/osd_red_end）+ 4dp 轻微圆角。
+    用于首页分类 Tab 的「已选中但未聚焦」态和选集面板集数卡片的焦点态，绝不使用实心红底。
+    刻意不带 <padding>：调用方自己维护内边距，避免换背景时把卡片尺寸改掉。
+-->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+
+    <solid android:color="@android:color/transparent" />
+
+    <stroke
+        android:width="1.5dp"
+        android:color="@color/osd_red_end" />
+
+    <corners android:radius="4dp" />
+
+</shape>

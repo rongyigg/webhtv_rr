@@ -1,29 +1,18 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-    播放页选集卡片（ref_docs/adapter_episode.xml 里 text 的背景）。
-
-    红线：任何状态都不允许「实心大红底」，统一为「透明底 + 细线红框」。
-      - 焦点（遥控器所在）：透明底 + 2dp @color/osd_red_end 细框
+    播放页选集卡片背景。
+      - 焦点（遥控器所在）：全局选中样式 @drawable/bg_global_selected_red_border
+        = 透明底 + 1.5dp 细线红框 + 4dp 圆角，绝无实心红底。
       - 正在播放但失焦（activated）：透明底 + 1dp @color/osd_red_end 细框 + 红字
-        （文字色见 @color/selector_osd_episode_text）
-      - 普通：透明底、无描边（逆向 App 的面板底色是纯黑，卡片本来就没有底色）
-    圆角 4dp（需求指定）；padding 同时承担卡片高度和文字内边距。
+        （文字色见 @color/selector_osd_episode_text）。
+      - 普通：透明底，无描边（面板本身是纯黑）。
+    内边距由 OsdEpisodeAdapter.applyDensity 每次绑定统一设置（14sp / 上下 6dp / 左右 12dp），
+    所以这里刻意不再带 padding，避免焦点态与普通态高度不一致。
 -->
 <selector xmlns:android="http://schemas.android.com/apk/res/android">
-    <item android:state_focused="true">
-        <shape android:shape="rectangle">
-            <solid android:color="@android:color/transparent" />
-            <stroke
-                android:width="2dp"
-                android:color="@color/osd_red_end" />
-            <corners android:radius="4dp" />
-            <padding
-                android:bottom="5dp"
-                android:left="12dp"
-                android:right="12dp"
-                android:top="5dp" />
-        </shape>
-    </item>
+    <item
+        android:drawable="@drawable/bg_global_selected_red_border"
+        android:state_focused="true" />
     <item android:state_activated="true">
         <shape android:shape="rectangle">
             <solid android:color="@android:color/transparent" />
@@ -31,22 +20,12 @@
                 android:width="1dp"
                 android:color="@color/osd_red_end" />
             <corners android:radius="4dp" />
-            <padding
-                android:bottom="5dp"
-                android:left="12dp"
-                android:right="12dp"
-                android:top="5dp" />
         </shape>
     </item>
     <item>
         <shape android:shape="rectangle">
             <solid android:color="@android:color/transparent" />
             <corners android:radius="4dp" />
-            <padding
-                android:bottom="5dp"
-                android:left="12dp"
-                android:right="12dp"
-                android:top="5dp" />
         </shape>
     </item>
 </selector>

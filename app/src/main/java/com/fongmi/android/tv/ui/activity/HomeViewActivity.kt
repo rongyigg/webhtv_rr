@@ -5,6 +5,7 @@ import android.content.Context
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.ColorDrawable
+import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
 import android.os.Handler
@@ -2154,11 +2155,9 @@ private class HomeChipAdapter(
     private val accent = ContextCompat.getColor(context, R.color.hero_accent)
 
     /**
-     * 分类 Tab 三态颜色：**全部**来自 `colors.xml` 的 `home_tab_*`（每个值的取色来源都写在那里的注释里），
-     * 代码里不再出现任何十六进制字面量。
+     * 分类 Tab 三态底色：焦点 / 选中态直接复用全局 Drawable，其余只用到 `home_tab_idle_*` 颜色。
+     * 这里不出现任何十六进制字面量，也不在代码里拼渐变。
      */
-    // 细线红框统一取 @color/osd_red_end（#E53935），与设置项 / 选集卡片的红框同源。
-    private val tabStrokeColor = ContextCompat.getColor(context, R.color.osd_red_end)
     private val tabIdleSurface = ContextCompat.getColor(context, R.color.home_tab_idle_surface)
     private val tabIdleText = ContextCompat.getColor(context, R.color.home_tab_idle_text)
 
@@ -2305,8 +2304,8 @@ private class HomeChipAdapter(
      * 焦点视觉（照抄 Compose 版 `HeroTopBarItem`，L1730-1816）：
      * - 顶栏：常态白 60% + Medium；焦点纯白 + SemiBold（系统 `sans-serif` BOLD）+ 下方红色短横线。
      *   缩放在焦点监听里做，只作用于绘制层，下划线不会跳动。
-     * - 分类 Tab：严格三态 —— 聚焦 = 透明底 + 粗一档细线红框；选中未聚焦 = 透明底 + 细线红框；
-     *   其余 = 深色半透明胶囊底。三种底色都由 [tabBackground] 生成，**不再有任何实心红底**。
+     * - 分类 Tab：严格三态 —— 聚焦 = 全局实心焦点样式（红渐变）；选中未聚焦 = 全局细线红框；
+     *   其余 = 深色半透明胶囊底。三种底色都由 [tabBackground] 生成。
      */
     private fun applyVisual(holder: Holder, focused: Boolean, position: Int) {
         val text = holder.text
@@ -2321,8 +2320,8 @@ private class HomeChipAdapter(
                 // position 可能是 NO_POSITION(-1)，必须排除，否则会把 -1 当成「已选中」。
                 val selected = position >= 0 && position == selectedIndex
                 // 三态严格判断，顺序不能换：
-                //   1. hasFocus            → 透明底 + 2dp 细线红框，白字
-                //   2. 未聚焦 && 已选中     → 透明底 + 1dp 细线红框，白字
+                //   1. hasFocus            → bg_global_focus_solid_red（红渐变实心），白字
+                //   2. 未聚焦 && 已选中     → bg_global_selected_red_border（细线红框），白字
                 //   3. 其余                → 深色半透明胶囊底，暗白字
                 text.isSelected = selected
                 text.background = tabBackground(focused, selected)
@@ -2332,27 +2331,21 @@ private class HomeChipAdapter(
     }
 
     /**
-     * 分类 Tab 背景 —— 三态唯一的生成入口，红框统一用 `@color/osd_red_end`（#E53935）：
-     * - [focused]：**透明底** + [TAB_STROKE_DP] 细线红框（原来的实心红渐变已废弃）；
-     * - 选中未聚焦：**透明底** + [TAB_STROKE_SELECTED_DP] 细线红框（比焦点细一档）；
-     * - 其余：`home_tab_idle_surface` 深色半透明胶囊底。
-     * 圆角照抄 `ref_docs/shape_chip_round_normal.xml` 的 28dp（26dp 高的胶囊被夹成半圆端）。
+     * 分类 Tab 背景 —— 三态唯一的生成入口，焦点 / 选中态全部复用全局 Drawable，代码里不写色值：
+     * - [focused]：`@drawable/bg_global_focus_solid_red`（与播放页 OSD 焦点同一支红渐变）；
+     * - 选中未聚焦：`@drawable/bg_global_selected_red_border`（透明底 + 细线红框 + 4dp 圆角）；
+     * - 其余：`home_tab_idle_surface` 深色半透明胶囊底（26dp 高，28dp 圆角被夹成半圆端）。
      */
-    private fun tabBackground(focused: Boolean, selected: Boolean): GradientDrawable {
-        val radius = dp(TAB_PILL_RADIUS_DP).toFloat()
+    private fun tabBackground(focused: Boolean, selected: Boolean): Drawable {
+        val global = when {
+            focused -> R.drawable.bg_global_focus_solid_red
+            selected -> R.drawable.bg_global_selected_red_border
+            else -> 0
+        }
+        if (global != 0) ContextCompat.getDrawable(context, global)?.let { return it }
         return GradientDrawable().apply {
-            cornerRadius = radius
-            when {
-                focused -> {
-                    setColor(Color.TRANSPARENT)
-                    setStroke(dp(TAB_STROKE_DP), tabStrokeColor)
-                }
-                selected -> {
-                    setColor(Color.TRANSPARENT)
-                    setStroke(dp(TAB_STROKE_SELECTED_DP), tabStrokeColor)
-                }
-                else -> setColor(tabIdleSurface)
-            }
+            cornerRadius = dp(TAB_PILL_RADIUS_DP).toFloat()
+            setColor(tabIdleSurface)
         }
     }
 
@@ -2420,12 +2413,6 @@ private class HomeChipAdapter(
 
         /** 分类 Tab 胶囊圆角：`ref_docs/shape_chip_round_normal.xml` `corners radius=28dp`。 */
         private const val TAB_PILL_RADIUS_DP = 28
-
-        /** 分类 Tab 焦点框宽度：2dp（细线红框，和选集卡片焦点一致）。 */
-        private const val TAB_STROKE_DP = 2
-
-        /** 分类 Tab 选中未聚焦的框宽：1dp，比焦点细一档，保留「焦点 vs 选中」区分度。 */
-        private const val TAB_STROKE_SELECTED_DP = 1
 
         private const val FOCUS_ANIM_MS = 150L
     }

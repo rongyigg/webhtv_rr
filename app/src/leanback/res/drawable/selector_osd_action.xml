@@ -1,20 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-    OSD 底部文字按钮：默认完全透明压在画面上；
-    焦点态 = 左深右浅的水平红渐变 @color/osd_accent → @color/osd_accent_light 胶囊，
-    圆角 15dp 正好是 30dp 按钮高度的一半（原逆向 App 截图里的药丸形焦点框）。
-    禁止垂直渐变、禁止纯 #FF0000、禁止方块焦点。
+    播放页 OSD 底部动作按钮（含选集面板的「少列/多列」「正序/倒序」标签）：
+    - 焦点：统一引用全局实心焦点样式 @drawable/bg_global_focus_solid_red
+      （播放选集面板同款横向红渐变，不再在这里各写一份渐变色）
+    - 按下：半透明浅底
+    - 默认 / 其余：全透明，压在画面上
 -->
 <selector xmlns:android="http://schemas.android.com/apk/res/android">
-    <item android:state_focused="true">
-        <shape android:shape="rectangle">
-            <gradient
-                android:angle="0"
-                android:endColor="@color/osd_accent_light"
-                android:startColor="@color/osd_accent" />
-            <corners android:radius="15dp" />
-        </shape>
-    </item>
+    <item
+        android:drawable="@drawable/bg_global_focus_solid_red"
+        android:state_focused="true" />
     <item android:state_pressed="true">
         <shape android:shape="rectangle">
             <solid android:color="@color/osd_surface" />

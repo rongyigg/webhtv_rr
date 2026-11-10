@@ -1,20 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-    选集面板分页按钮（逆向 App 截图取样：77x44px = 38.5x22dp、1dp 红描边、全圆角 = 高度一半 11dp）：
-    - 当前页：透明底 + @color/osd_focus 1dp 描边（原版描边仅 2px = 1dp）
-    - 焦点：@color/osd_focus 红渐变
+    选集面板分页标签（1-6 / 7-12 ...），几何沿用逆向取样：38.5x22dp、1dp 描边、半高圆角。
+    - 焦点：全局实心焦点样式 @drawable/bg_global_focus_solid_red（焦点落到即翻页）
+    - 当前页（失焦选中）：透明底 + 1dp @color/osd_focus 细框
     - 其余：透明
 -->
 <selector xmlns:android="http://schemas.android.com/apk/res/android">
-    <item android:state_focused="true">
-        <shape android:shape="rectangle">
-            <gradient
-                android:angle="270"
-                android:endColor="@color/osd_focus_dark"
-                android:startColor="@color/osd_focus" />
-            <corners android:radius="11dp" />
-        </shape>
-    </item>
+    <item
+        android:drawable="@drawable/bg_global_focus_solid_red"
+        android:state_focused="true" />
     <item android:state_selected="true">
         <shape android:shape="rectangle">
             <solid android:color="@android:color/transparent" />

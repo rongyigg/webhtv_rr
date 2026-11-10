@@ -4933,19 +4933,7 @@ private boolean runtimeSourceOnly;
             }
         }));
         mBinding.episodePanel.osdEpisodeGrid.setLayoutManager(mOsdGridLayout = new GridLayoutManager(this, getOsdColumn()));
-        mBinding.episodePanel.osdEpisodeGrid.setAdapter(mOsdEpisodeAdapter = new OsdEpisodeAdapter(new OsdEpisodeAdapter.OnClickListener() {
-
-            @Override
-            public void onItemClick(Episode item) {
-                onOsdEpisodeClick(item);
-            }
-
-            /** 焦点一落到卡片就切集，逆向 App 的按键节奏：只移动焦点，不用再按确定。 */
-            @Override
-            public void onFocus(Episode item) {
-                onOsdEpisodeFocus(item);
-            }
-        }));
+        mBinding.episodePanel.osdEpisodeGrid.setAdapter(mOsdEpisodeAdapter = new OsdEpisodeAdapter(this::onOsdEpisodeClick));
         mBinding.episodePanel.osdTabColumn.setOnClickListener(guarded(this::toggleOsdColumn));
         mBinding.episodePanel.osdTabSort.setOnClickListener(guarded(this::onOsdSort));
         updateOsdTabs();
@@ -5195,8 +5183,7 @@ private boolean runtimeSourceOnly;
     private void refreshEpisodePanelIfVisible() {
         if (mBinding == null || !isVisible(mBinding.episodePanel.getRoot())) return;
         // 面板正被遥控器操作时不做整表重建：bindEpisodePanel() 里的 addAll() 是 notifyDataSetChanged，
-        // 会把焦点打回第一项，让「焦点即时切集」一路跳回开头。当前页选中态由
-        // OsdEpisodeAdapter.notifySelectionChanged() 原地刷新，页码/线路由面板自己的操作同步。
+        // 会把焦点打回第一项。面板内的翻页 / 切线路都由面板自己的操作原地同步。
         if (PlayerControlFocusHelper.containsFocus(mBinding.episodePanel.getRoot())) return;
         bindEpisodePanel(false);
     }
@@ -5237,19 +5224,6 @@ private boolean runtimeSourceOnly;
         if (item == null) return;
         hideControl();
         onItemClick(item);
-    }
-
-    /**
-     * 选集面板「焦点即时切集」：焦点移到某一集就直接开始播放，不需要再按确定键。
-     * scroll=false 避免打断遥控器正在进行的焦点移动；面板内只刷新新旧两张卡片的状态，
-     * 不重建列表、不关闭控制栏，焦点才能继续沿方向键走。
-     */
-    private void onOsdEpisodeFocus(Episode item) {
-        if (item == null || item.isSelected()) return;
-        int oldPosition = mOsdEpisodeAdapter.getSelectedPosition();
-        int newPosition = mOsdEpisodeAdapter.indexOf(item);
-        selectEpisode(item, false);
-        mOsdEpisodeAdapter.notifySelectionChanged(oldPosition, newPosition);
     }
 
     /** OSD 底部按钮行再按一次「下」就把控制栏收起来，和遥控器的开合节奏一致。 */
