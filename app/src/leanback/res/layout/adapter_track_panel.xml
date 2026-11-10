@@ -1,10 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-    轨道列表项：
-    - 普通 / 未选中：背景完全透明，文字白色
-    - 有焦点（遥控器选中）：深灰半透明长条 #33FFFFFF，文字白色；禁止红底，禁止半圆胶囊
-    - 已选中（当前生效轨道）：同一深灰长条，文字柔和红色 @color/osd_focus
-    - 圆角最多 4dp；字号 14sp、行高 40dp，保持修长，不做图 1 的胖胶囊
+    轨道面板列表项：
+    - 普通 / 未选中：全透明背景、白字
+    - 有焦点（遥控器选中）：加深长条 @color/white_30、纯白字
+    - 已选中（当前生效的轨道）：长条 @color/white_20、文字用 Paint LinearGradient 红渐变
+    - 绝对直角（selector_track_panel_item 圆角固定 0dp）、字号 14sp、行高 40dp
 -->
 <com.google.android.material.textview.MaterialTextView xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools"

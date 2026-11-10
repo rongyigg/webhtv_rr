@@ -2334,7 +2334,7 @@ private class HomeChipAdapter(
      * 分类 Tab 背景 —— 三态唯一的生成入口，焦点 / 选中态全部复用全局 Drawable，代码里不写色值：
      * - [focused]：`@drawable/bg_global_focus_solid_red`（与播放页 OSD 焦点同一支红渐变）；
      * - 选中未聚焦：`@drawable/bg_global_selected_red_border`（透明底 + 细线红框 + 4dp 圆角）；
-     * - 其余：`home_tab_idle_surface` 深色半透明胶囊底（26dp 高，28dp 圆角被夹成半圆端）。
+     * - 其余：`home_tab_idle_surface` 深色半透明小圆角矩形（4dp，原版形状，不是大胶囊）。
      */
     private fun tabBackground(focused: Boolean, selected: Boolean): Drawable {
         val global = when {
@@ -2344,7 +2344,7 @@ private class HomeChipAdapter(
         }
         if (global != 0) ContextCompat.getDrawable(context, global)?.let { return it }
         return GradientDrawable().apply {
-            cornerRadius = dp(TAB_PILL_RADIUS_DP).toFloat()
+            cornerRadius = dp(TAB_IDLE_RADIUS_DP).toFloat()
             setColor(tabIdleSurface)
         }
     }
@@ -2411,8 +2411,8 @@ private class HomeChipAdapter(
         private val NAV_IDLE_TYPEFACE: Typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
         private val NAV_FOCUS_TYPEFACE: Typeface = Typeface.create("sans-serif", Typeface.BOLD)
 
-        /** 分类 Tab 胶囊圆角：`ref_docs/shape_chip_round_normal.xml` `corners radius=28dp`。 */
-        private const val TAB_PILL_RADIUS_DP = 28
+        /** 分类 Tab 常态小圆角：原版就是矩形/小圆角矩形，禁止做成 28dp 大胶囊。 */
+        private const val TAB_IDLE_RADIUS_DP = 4
 
         private const val FOCUS_ANIM_MS = 150L
     }

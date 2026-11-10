@@ -105,4 +105,6 @@
     <color name="osd_scrim_end">#CC000000</color>
     <!-- 选集面板底部背景（ref_docs/bg_episode_list_bottom）：透明 → #F2000000。 -->
     <color name="osd_panel_end">#F2000000</color>
+    <!-- 全局底部面板遮罩（选集 / 轨道面板共用）：顶部透明 → 底部 #E6000000，透出视频画面。 -->
+    <color name="panel_scrim_end">#E6000000</color>
 </resources>

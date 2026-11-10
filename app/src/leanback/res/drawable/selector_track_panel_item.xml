@@ -1,27 +1,28 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-    轨道列表项背景：
-    - 有焦点：深灰半透明长条 #33FFFFFF，圆角 4dp（绝不准红底、绝不准半圆胶囊）
-    - 已选中（当前生效轨道）：同一深灰长条 #33FFFFFF，圆角 4dp
-    - 普通：完全透明
+    轨道面板列表项背景（状态矩阵严格区分焦点 / 选中）：
+    - 焦点：加深的白色长条 @color/white_30
+    - 选中（正在使用但无焦点）：深色长条 @color/white_20
+    - 普通：全透明
+    绝对直角：所有状态 corners radius 固定 0dp。
 -->
 <selector xmlns:android="http://schemas.android.com/apk/res/android">
     <item android:state_focused="true">
         <shape android:shape="rectangle">
-            <solid android:color="#33FFFFFF" />
-            <corners android:radius="4dp" />
+            <solid android:color="@color/white_30" />
+            <corners android:radius="0dp" />
         </shape>
     </item>
     <item android:state_selected="true">
         <shape android:shape="rectangle">
-            <solid android:color="#33FFFFFF" />
-            <corners android:radius="4dp" />
+            <solid android:color="@color/white_20" />
+            <corners android:radius="0dp" />
         </shape>
     </item>
     <item>
         <shape android:shape="rectangle">
             <solid android:color="@android:color/transparent" />
-            <corners android:radius="4dp" />
+            <corners android:radius="0dp" />
         </shape>
     </item>
 </selector>

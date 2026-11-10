@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    全局底部面板遮罩：选集面板 / 轨道面板共用。
+    - 顶部完全透明 → 底部 @color/panel_scrim_end，始终透出下方视频画面；
+    - 顶部左右各 16dp 圆角，贴合「从屏幕底边升起」的面板形态；
+    - 不写任何十六进制字面量，颜色统一取自 colors.xml。
+-->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+
+    <gradient
+        android:angle="270"
+        android:endColor="@color/panel_scrim_end"
+        android:startColor="@android:color/transparent" />
+
+    <corners
+        android:topLeftRadius="16dp"
+        android:topRightRadius="16dp" />
+
+</shape>
