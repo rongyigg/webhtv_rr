@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    播放页 OSD 底部控制栏的极淡托底渐变（只压在 osdBottom 容器上，不再全屏铺黑）。
+
+    - 顶部 @color/osd_scrim_start（#00000000）完全透明 → 底部 @color/black_20（#33000000）极淡半透明黑。
+      不仔细看几乎看不出来，只隐约给底部按钮 / 进度条 / 时间文字一点点暗色托底。
+    - 因为背景挂在 wrap_content 的 osdBottom 上而不是 match_parent 的根布局，
+      渐变范围只覆盖底部控制栏自身高度，视频画面上半部分（含顶部码率 / 网速标签）完全不受影响。
+    - 颜色全部引用 colors.xml，不写十六进制字面量。
+-->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+
+    <gradient
+        android:angle="270"
+        android:endColor="@color/black_20"
+        android:startColor="@color/osd_scrim_start" />
+
+</shape>

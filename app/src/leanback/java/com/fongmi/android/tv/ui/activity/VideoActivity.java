@@ -1549,7 +1549,7 @@ private boolean runtimeSourceOnly;
 
     private void applyPlaybackOverlay() {
         // 新版 OSD 自带底部渐变压暗，遮罩开关只决定是否启用这层渐变。
-        mBinding.osdControl.getRoot().setBackgroundResource(Setting.isPlaybackOverlayEnabled() ? R.drawable.bg_player_osd_scrim : R.color.transparent);
+        mBinding.osdControl.osdBottom.setBackgroundResource(Setting.isPlaybackOverlayEnabled() ? R.drawable.bg_osd_scrim_gradient : R.color.transparent);
     }
 
     /**
