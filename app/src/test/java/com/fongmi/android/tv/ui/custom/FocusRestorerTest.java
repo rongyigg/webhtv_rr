@@ -97,30 +97,6 @@ public class FocusRestorerTest {
     }
 
     @Test
-    public void leanbackHistoryPageRestoresFocusByItemIdentityAndCancelsOnExit() throws Exception {
-        String source = read(findLeanbackJavaPath().resolve(Path.of(
-                "com", "fongmi", "android", "tv", "ui", "activity", "HistoryActivity.java")));
-        assertTrue("删除单条后必须按网格规则恢复焦点，而不是一维 clamp",
-                source.contains("FocusRestorer.nextPosition(target, mAdapter.getItemCount(), Product.getColumn())"));
-        assertFalse("不能对网格下标做一维 clamp——列删空时会把焦点甩到上一行另一端",
-                source.contains("mAdapter.getItemCount() - 1)"));
-        assertTrue("删除位置必须来自 holder 的绑定下标，而不是重新 indexOf 扫描",
-                source.contains("public void onItemDelete(History item, int position)"));
-        assertTrue("去抖刷新会重排列表，恢复焦点必须按条目身份重新定位",
-                source.contains("indexOf(focused)"));
-        assertTrue("聚焦条目已不在新列表时必须退回原位置，而不是放弃恢复让焦点掉给删除按钮",
-                source.contains("reposition(focused, position)")
-                        && source.contains("if (found >= 0) return found;"));
-        assertTrue("holder 绑定下标失效时必须退回当前聚焦位置",
-                source.contains("position >= 0 ? position : focusedPosition()"));
-        assertTrue("恢复焦点前必须做生命周期守卫",
-                source.contains("if (isFinishing() || isDestroyed()) return;"));
-        assertTrue("退出删除模式、返回与 onStop 都必须取消排队中的恢复",
-                source.contains("mFocusRestorer.cancel();")
-                        && source.contains("protected void onStop()"));
-    }
-
-    @Test
     public void leanbackHistoryAdapterPassesTheBoundPositionOnDelete() throws Exception {
         String source = read(findLeanbackJavaPath().resolve(Path.of(
                 "com", "fongmi", "android", "tv", "ui", "adapter", "HistoryAdapter.java")));

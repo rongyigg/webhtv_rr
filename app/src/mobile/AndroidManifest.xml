@@ -121,11 +121,6 @@
             android:screenOrientation="fullUser" />
 
         <activity
-            android:name=".ui.activity.HistoryActivity"
-            android:configChanges="screenSize|smallestScreenSize|screenLayout"
-            android:screenOrientation="fullUser" />
-
-        <activity
             android:name=".ui.activity.ViewingReportActivity"
             android:configChanges="screenSize|smallestScreenSize|screenLayout"
             android:screenOrientation="fullUser" />

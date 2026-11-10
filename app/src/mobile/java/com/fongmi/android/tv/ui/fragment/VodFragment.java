@@ -42,7 +42,7 @@ import com.fongmi.android.tv.model.SiteViewModel;
 import com.fongmi.android.tv.setting.Setting;
 import com.fongmi.android.tv.setting.AppBranding;
 import com.fongmi.android.tv.ui.activity.HomeActivity;
-import com.fongmi.android.tv.ui.activity.HistoryActivity;
+import com.fongmi.android.tv.ui.activity.HistoryViewActivity;
 import com.fongmi.android.tv.ui.activity.KeepActivity;
 import com.fongmi.android.tv.ui.activity.SearchActivity;
 import com.fongmi.android.tv.ui.adapter.TypeAdapter;
@@ -290,7 +290,7 @@ public class VodFragment extends BaseFragment implements ConfigListener, SiteLis
             else homeContent();
         } else if (item.getItemId() == R.id.keep) KeepActivity.start(requireActivity());
         else if (item.getItemId() == R.id.search) SearchActivity.start(requireActivity());
-        else if (item.getItemId() == R.id.history) HistoryActivity.start(requireActivity());
+        else if (item.getItemId() == R.id.history) HistoryViewActivity.Companion.start(requireActivity());
         else if (item.getItemId() == R.id.sync) OneKeySyncDialog.create().show(requireActivity());
         else if (item.getItemId() == R.id.push_apk) ApkPushDialog.create().listener(this::onApkDeviceSelected).show(requireActivity());
         else if (item.getItemId() == R.id.push_play) PushPlayDialog.create().listener(this::onPushPlayDeviceSelected).show(requireActivity());

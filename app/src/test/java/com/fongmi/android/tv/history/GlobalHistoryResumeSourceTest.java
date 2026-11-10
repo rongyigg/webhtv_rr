@@ -12,10 +12,13 @@ import static org.junit.Assert.assertTrue;
 public class GlobalHistoryResumeSourceTest {
 
     @Test
-    public void allNativeHistoryEntriesUseTheSharedCoordinator() throws Exception {
-        assertContains("app/src/mobile/java/com/fongmi/android/tv/ui/activity/HistoryActivity.java", "HistoryResumeCoordinator.open(this, item)");
-        assertContains("app/src/leanback/java/com/fongmi/android/tv/ui/activity/HistoryActivity.java", "HistoryResumeCoordinator.open(this, item)");
+    public void allNativeHistoryEntriesUseTheSharedPlaybackEntry() throws Exception {
+        // 旧 leanback / mobile HistoryActivity 已删除，历史页统一由纯 View 的 HistoryViewActivity 承担：
+        // 点击记录只走 VideoActivity 的唯一共用入口（内部再按详情模式分流），不再各页各拼一份 Intent。
+        assertContains("app/src/main/java/com/fongmi/android/tv/ui/activity/HistoryViewActivity.kt", "VideoActivity.startFromHistoryFullscreen(this, history)");
         assertContains("app/src/leanback/java/com/fongmi/android/tv/ui/activity/HomeActivity.java", "HistoryResumeCoordinator.open(this, item)");
+        assertContains("app/src/leanback/java/com/fongmi/android/tv/ui/activity/HomeActivity.java", "HistoryViewActivity.Companion.start(this)");
+        assertContains("app/src/mobile/java/com/fongmi/android/tv/ui/fragment/VodFragment.java", "HistoryViewActivity.Companion.start(requireActivity())");
     }
 
     @Test
@@ -63,11 +66,9 @@ public class GlobalHistoryResumeSourceTest {
         assertTrue(history.contains("if (VodConfig.get().getSites().isEmpty()) return \"\";"));
         assertTrue(history.contains("ResUtil.getString(R.string.history_source_unavailable)"));
 
-        for (String mode : new String[]{"mobile", "leanback"}) {
-            String activity = read("app/src/" + mode + "/java/com/fongmi/android/tv/ui/activity/HistoryActivity.java");
-            assertTrue(mode + " history page must observe VOD config completion", activity.contains("public void onConfigEvent(ConfigEvent event)"));
-            assertTrue(mode + " history page must refresh labels only after VOD config events", activity.contains("if (event.isVod() && mAdapter != null) {") && activity.contains("mAdapter.notifyDataSetChanged();"));
-        }
+        String view = read("app/src/main/java/com/fongmi/android/tv/ui/activity/HistoryViewActivity.kt");
+        assertTrue("history page must refresh its rows when the history model changes",
+                view.contains("if (event.type == RefreshEvent.Type.HISTORY) load(keepSelection = true)"));
 
         String defaults = read("app/src/main/res/values/strings.xml");
         String chinese = read("app/src/main/res/values-zh-rCN/strings.xml");

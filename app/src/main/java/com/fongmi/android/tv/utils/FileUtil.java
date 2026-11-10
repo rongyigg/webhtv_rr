@@ -91,7 +91,7 @@ public class FileUtil {
             // Hero 体系另有三份进程内状态：Coil 内存位图、TMDB 详情预取、艺术字 prefs。
             // 磁盘目录（hero_image_cache / app_cache）已被上面一行删掉，但内存实例不清的话，
             // 回到首页仍是旧图 / 旧匹配 —— 用户点「清理缓存」就会觉得没生效。
-            com.fongmi.android.tv.ui.activity.HeroHomeActivityKt.clearHeroCaches();
+            com.fongmi.android.tv.ui.hero.HeroSharedKt.clearHeroCaches();
             App.post(callback::success);
         });
     }

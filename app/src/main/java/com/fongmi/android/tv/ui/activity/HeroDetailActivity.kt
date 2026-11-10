@@ -120,8 +120,13 @@ import com.fongmi.android.tv.ui.hero.HeroDialogShell
 import com.fongmi.android.tv.ui.hero.HeroFocusBrush
 import com.fongmi.android.tv.ui.hero.HeroImageLoader
 import com.fongmi.android.tv.ui.hero.HeroSectionTitle
+import com.fongmi.android.tv.ui.hero.HeroTmdbData
+import com.fongmi.android.tv.ui.hero.HeroTmdbPrefetchCache
 import com.fongmi.android.tv.ui.hero.SourceSelectionStore
+import com.fongmi.android.tv.ui.hero.heroTmdbKey
 import com.fongmi.android.tv.ui.hero.openHeroDetailOrFolder
+import com.fongmi.android.tv.ui.hero.rememberHeroImageModel
+import com.fongmi.android.tv.ui.hero.upgradeTmdbImage
 import com.fongmi.android.tv.utils.ImgUtil
 import com.fongmi.android.tv.utils.Notify
 import kotlinx.coroutines.CancellationException

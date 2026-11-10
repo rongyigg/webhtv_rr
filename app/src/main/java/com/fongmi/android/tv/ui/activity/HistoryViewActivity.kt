@@ -34,9 +34,14 @@ import com.fongmi.android.tv.ui.custom.ProgressLayout
 import com.fongmi.android.tv.ui.hero.HeroHorizontalGapDecoration
 import com.fongmi.android.tv.ui.hero.HeroImageLoader
 import com.fongmi.android.tv.ui.hero.HeroImagePrefetch
+import com.fongmi.android.tv.ui.hero.HeroLogoCache
+import com.fongmi.android.tv.ui.hero.HeroTmdbPrefetchCache
 import com.fongmi.android.tv.ui.hero.HistoryEpisodeLabel
 import com.fongmi.android.tv.ui.hero.HistoryMetaText
 import com.fongmi.android.tv.ui.hero.HistoryPosterAdapter
+import com.fongmi.android.tv.ui.hero.heroTmdbKey
+import com.fongmi.android.tv.ui.hero.tmdbLogoKey
+import com.fongmi.android.tv.ui.hero.upgradeTmdbImage
 import com.fongmi.android.tv.utils.HistoryProgressFormatter
 import com.fongmi.android.tv.utils.ImgUtil
 import com.fongmi.android.tv.utils.Task

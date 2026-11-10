@@ -29,7 +29,6 @@ public class HistoryAdapterTest {
         String presenter = read(findLeanbackJavaPath().resolve(Path.of("com", "fongmi", "android", "tv", "ui", "presenter", "HistoryPresenter.java")));
         String keepAdapter = read(findLeanbackJavaPath().resolve(Path.of("com", "fongmi", "android", "tv", "ui", "adapter", "KeepAdapter.java")));
         String mobileKeepAdapter = read(findMobileJavaPath().resolve(Path.of("com", "fongmi", "android", "tv", "ui", "adapter", "KeepAdapter.java")));
-        String mobileHistoryActivity = read(findMobileJavaPath().resolve(Path.of("com", "fongmi", "android", "tv", "ui", "activity", "HistoryActivity.java")));
         String mobileKeepActivity = read(findMobileJavaPath().resolve(Path.of("com", "fongmi", "android", "tv", "ui", "activity", "KeepActivity.java")));
         String historyBean = read(findMainJavaPath().resolve(Path.of("com", "fongmi", "android", "tv", "bean", "History.java")));
         String tmdbDetailActivity = read(findMainJavaPath().resolve(Path.of("com", "fongmi", "android", "tv", "ui", "activity", "TmdbDetailActivity.java")));
@@ -45,7 +44,6 @@ public class HistoryAdapterTest {
         assertFocusMarquee("TV history page", adapter);
         assertFocusMarquee("TV home recent row", presenter);
         assertFocusMarquee("TV keep page", keepAdapter);
-        assertVisibleMobileMarquee("mobile history page", mobileAdapter, mobileHistoryActivity);
         assertVisibleMobileMarquee("mobile keep page", mobileKeepAdapter, mobileKeepActivity);
         assertPersistsTmdbScrapedHistoryLabels("TMDB detail playback", tmdbDetailActivity);
         assertTrue("History model must format playback time from current position and duration",

@@ -961,7 +961,7 @@ public class HomeActivity extends BaseActivity implements ExitConfirmDialog.List
         else if (item.getResId() == R.string.home_search) SearchActivity.start(this);
         else if (item.getResId() == R.string.home_setting) SettingActivity.start(this);
         else if (item.getResId() == R.string.home_cast) PushActivity.start(this, 3);
-        else if (item.getResId() == R.string.home_history_button) HistoryActivity.start(this);
+        else if (item.getResId() == R.string.home_history_button) HistoryViewActivity.Companion.start(this);
         else if (item.getResId() == R.string.home_custom_csp) openCustomCsp();
     }
 
@@ -1103,7 +1103,7 @@ public class HomeActivity extends BaseActivity implements ExitConfirmDialog.List
             case 1 -> SiteDialog.create().action().show(this);
             case 2 -> HistoryDialog.create().vod().show(this);
             case 3 -> LiveActivity.start(this);
-            case 4 -> HistoryActivity.start(this);
+            case 4 -> HistoryViewActivity.Companion.start(this);
             case 5 -> SearchActivity.start(this);
             case 6 -> PushActivity.start(this);
             case 7 -> PushActivity.start(this, 3);

@@ -3266,9 +3266,8 @@ public class VideoActivityLayoutTest {
 
     @Test
     public void mobileHistoryEntryRespectsDetailModeAndPreservesExactPlaybackSelection() throws Exception {
-        Path historyPath = findMobileJavaPath().resolve(Path.of("com", "fongmi", "android", "tv", "ui", "activity", "HistoryActivity.java"));
+        String history = new String(Files.readAllBytes(findMainJavaPath().resolve(Path.of("com", "fongmi", "android", "tv", "ui", "activity", "HistoryViewActivity.kt"))), StandardCharsets.UTF_8);
         Path videoPath = findMobileJavaPath().resolve(Path.of("com", "fongmi", "android", "tv", "ui", "activity", "VideoActivity.java"));
-        String history = new String(Files.readAllBytes(historyPath), StandardCharsets.UTF_8);
         String video = new String(Files.readAllBytes(videoPath), StandardCharsets.UTF_8);
         String compactHistory = history.replaceAll("\\s+", " ");
         int historyStart = video.indexOf("static void startFromHistory(Activity activity, History item)");
@@ -3276,7 +3275,7 @@ public class VideoActivityLayoutTest {
         String historyStartBody = historyStart >= 0 && historyStartEnd > historyStart ? video.substring(historyStart, historyStartEnd).replaceAll("\\s+", " ") : "";
 
         assertTrue("history clicks must use the history-aware playback entry point",
-                compactHistory.contains("HistoryResumeCoordinator.open(this, item)"));
+                compactHistory.contains("VideoActivity.startFromHistoryFullscreen(this, history)"));
         assertTrue("history playback must respect the configured standalone detail mode",
                 historyStartBody.contains("if (shouldOpenLegacyTmdbDetail(item.getSiteKey(), item.getVodId()))"));
         assertTrue("standalone detail mode must use the normal detail-aware start path",
@@ -3289,9 +3288,8 @@ public class VideoActivityLayoutTest {
 
     @Test
     public void leanbackHistoryEntryRespectsDetailModeAndPreservesExactPlaybackSelection() throws Exception {
-        Path historyPath = findLeanbackJavaPath().resolve(Path.of("com", "fongmi", "android", "tv", "ui", "activity", "HistoryActivity.java"));
+        String history = new String(Files.readAllBytes(findMainJavaPath().resolve(Path.of("com", "fongmi", "android", "tv", "ui", "activity", "HistoryViewActivity.kt"))), StandardCharsets.UTF_8);
         Path videoPath = findLeanbackJavaPath().resolve(Path.of("com", "fongmi", "android", "tv", "ui", "activity", "VideoActivity.java"));
-        String history = new String(Files.readAllBytes(historyPath), StandardCharsets.UTF_8);
         String video = new String(Files.readAllBytes(videoPath), StandardCharsets.UTF_8);
         String compactHistory = history.replaceAll("\\s+", " ");
         int historyStart = video.indexOf("static void startFromHistory(Activity activity, History item)");
@@ -3299,7 +3297,7 @@ public class VideoActivityLayoutTest {
         String historyStartBody = historyStart >= 0 && historyStartEnd > historyStart ? video.substring(historyStart, historyStartEnd).replaceAll("\\s+", " ") : "";
 
         assertTrue("TV history clicks must use the history-aware playback entry point",
-                compactHistory.contains("HistoryResumeCoordinator.open(this, item)"));
+                compactHistory.contains("VideoActivity.startFromHistoryFullscreen(this, history)"));
         assertTrue("TV history playback must respect the configured standalone detail mode",
                 historyStartBody.contains("if (shouldOpenLegacyTmdbDetail(item.getSiteKey(), item.getVodId(), false))"));
         assertTrue("TV standalone detail mode must use the normal detail-aware start path",

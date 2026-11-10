@@ -34,7 +34,12 @@ import com.fongmi.android.tv.ui.hero.ChangeSourceDialog
 import com.fongmi.android.tv.ui.hero.HeroHorizontalGapDecoration
 import com.fongmi.android.tv.ui.hero.HeroImageLoader
 import com.fongmi.android.tv.ui.hero.HeroImagePrefetch
+import com.fongmi.android.tv.ui.hero.HeroLogoCache
+import com.fongmi.android.tv.ui.hero.HeroTmdbPrefetchCache
 import com.fongmi.android.tv.ui.hero.KeepPosterAdapter
+import com.fongmi.android.tv.ui.hero.heroTmdbKey
+import com.fongmi.android.tv.ui.hero.tmdbLogoKey
+import com.fongmi.android.tv.ui.hero.upgradeTmdbImage
 import com.fongmi.android.tv.utils.ImgUtil
 import com.fongmi.android.tv.utils.Task
 import com.fongmi.android.tv.utils.Util

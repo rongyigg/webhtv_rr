@@ -199,11 +199,6 @@
             android:screenOrientation="sensorLandscape" />
 
         <activity
-            android:name=".ui.activity.HistoryActivity"
-            android:configChanges="screenSize|smallestScreenSize|screenLayout|orientation"
-            android:screenOrientation="sensorLandscape" />
-
-        <activity
             android:name=".ui.activity.ViewingReportActivity"
             android:configChanges="screenSize|smallestScreenSize|screenLayout|orientation"
             android:screenOrientation="sensorLandscape" />

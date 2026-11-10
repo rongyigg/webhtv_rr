@@ -249,6 +249,7 @@ import com.fongmi.android.tv.ui.dialog.QuickSearchDialog;
 import com.fongmi.android.tv.ui.dialog.SubtitleDialog;
 import com.fongmi.android.tv.ui.dialog.TitleDialog;
 import com.fongmi.android.tv.ui.dialog.TimerDialog;
+import com.fongmi.android.tv.ui.hero.HeroLogoCache;
 import com.fongmi.android.tv.utils.Traffic;
 import com.google.android.material.bottomsheet.BottomSheetBehavior;
 import com.google.android.material.bottomsheet.BottomSheetDialog;

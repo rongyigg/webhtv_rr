@@ -66,10 +66,14 @@ import com.fongmi.android.tv.ui.hero.HeroImageLoader
 import com.fongmi.android.tv.ui.hero.HeroPosterAdapter
 import com.fongmi.android.tv.ui.hero.HeroPosterCard
 import com.fongmi.android.tv.ui.hero.HeroSourceEntry
+import com.fongmi.android.tv.ui.hero.HeroTmdbData
+import com.fongmi.android.tv.ui.hero.HeroTmdbPrefetchCache
 import com.fongmi.android.tv.ui.hero.HomePosterItem
 import com.fongmi.android.tv.ui.hero.SourceSidebar
 import com.fongmi.android.tv.ui.hero.SourceSidebarMode
+import com.fongmi.android.tv.ui.hero.heroTmdbKey
 import com.fongmi.android.tv.ui.hero.openHeroDetailOrFolder
+import com.fongmi.android.tv.ui.hero.upgradeTmdbImage
 import com.fongmi.android.tv.utils.Notify
 import com.fongmi.android.tv.utils.Util
 import kotlinx.coroutines.CancellationException
@@ -986,9 +990,9 @@ class HomeViewActivity : AppCompatActivity() {
     /**
      * 艺术字 Logo 的本地缓存：`posterKey → logoUrl`。
      *
-     * 与 `HeroHomeActivity.kt` 里的私有 `HeroLogoCache` 读同一份 prefs（名字 `hero_logo_cache`）
-     * —— 那个 object 是 file-private，外部不可见，而本步不允许修改 `HeroHomeActivity.kt`。
-     * 这里只读不写；写入仍由已有首页 / 详情页负责。若那边改了 prefs 名，这里要同步。
+     * 与 `HeroShared.kt` 里的 `HeroLogoCache` 读同一份 prefs（名字都是 `hero_logo_cache`）。
+     * 那个 object 负责首页 / 详情页的写入，本页只读，所以这里单独拼一份只读映射，
+     * 但 prefs 名必须与它保持一致；那边改名这里要同步。
      */
     private fun readLogoCache(): Map<String, String> = runCatching {
         App.get().getSharedPreferences(LOGO_CACHE_PREFS, Context.MODE_PRIVATE).all
@@ -2120,7 +2124,7 @@ class HomeViewActivity : AppCompatActivity() {
         /** 横向背景图提档目标：w1920（TMDB 实测支持的档位）。 */
         private const val TMDB_BACKDROP_WIDTH = "w1920"
 
-        /** 与 `HeroLogoCache`（HeroHomeActivity.kt 内私有 object）共用同一份 prefs。 */
+        /** 与 `HeroLogoCache`（`HeroShared.kt`）共用同一份 prefs。 */
         private const val LOGO_CACHE_PREFS = "hero_logo_cache"
 
         private const val HOME_TAB_PREFIX = "home:"
