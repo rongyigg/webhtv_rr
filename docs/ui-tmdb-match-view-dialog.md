@@ -145,3 +145,20 @@ n40 说明：`n40` 在 R8 后没有独立类（`ref_docs` 无原件），按唯�
 **RecyclerView 排查结论**：`HomeViewActivity` 的 `recycler` 没有任何 `setOnKeyListener` / `setOnKeyDown` 覆写，Adapter 也不消费按键；`descendantFocusability` 只控制焦点可达性。因此不存在"RecyclerView 私自截胡"，无需改动（红线 2）。
 
 第 6 轮验证：`HomeViewActivity` 花括号 315/315、圆括号 1063/1063；`TmdbMatchViewDialog` 花括号 144/144、圆括号 570/570；`tmdbDialogSerial` 只在 `showTmdbManualMatch()` 内读写；未编译（按用户要求只出 diff）。
+
+## 第 7 轮：抢焦点加固、KeyTest 日志清理、旧入口下架
+
+| 项 | 改动 | 位置 |
+|---|---|---|
+| 根布局可聚焦 | 最外层 `LinearLayout` 增加 `android:focusable="true"` / `android:focusableInTouchMode="true"` | `dialog_tmdb_match_view.xml` |
+| 强制夺焦 | `show()` 之后 `clearFlags(FLAG_NOT_FOCUSABLE)` + `DecorView.setFocusableInTouchMode(true)` + `requestFocus()` | `TmdbMatchViewDialog.show()` |
+| 延迟二次抢焦 | 100ms 后 DecorView 与 `keyword` 各再 `requestFocus()` 一次；关窗时移除任务 | `TmdbMatchViewDialog.scheduleRefocus()` |
+| 输入法 | 仍由 `FLAG_ALT_FOCUSABLE_IM` + `SOFT_INPUT_STATE_ALWAYS_HIDDEN` 屏蔽 | `configureWindow()` |
+| 调试日志 | 删除全部 `Log.d("KeyTest", ...)`（6 处） | `HomeViewActivity` |
+| 旧入口 | 主清单删除 `.ui.activity.HeroHomeActivity` 条目（无 intent-filter、无任何启动方），契约测试改为断言 `HomeViewActivity` 为唯一 LAUNCHER 且清单不再含 HeroHomeActivity | `AndroidManifest.xml` / `AppBrandingContractTest` |
+
+**未删除（红线 2 核查结论）**：`HeroHomeActivity.kt` 与 `HistoryActivity` 本轮不删。
+- `HeroHomeActivity.kt` 仍承载共享 API：`HeroTmdbData` / `HeroTmdbPrefetchCache` / `HeroLogoCache` / `heroTmdbKey` / `tmdbLogoKey` / `upgradeTmdbImage` / `rememberHeroImageModel` / `clearHeroCaches`，被 `HomeViewActivity`、`HeroDetailActivity`、`HistoryViewActivity`、`KeepViewActivity`、leanback `VideoActivity`、`FileUtil` 直接引用；文件内还有约 3300 行 Compose 首页实现。删除必须先抽出共享 API（改文件名会连带改 Java 侧 `HeroHomeActivityKt.clearHeroCaches()`），属于跨模块重构，需要一次真实编译验证。
+- `HistoryActivity`（leanback + mobile）仍是 flavor 首页 `HomeActivity` 与 mobile `VodFragment` 的历史页；`HomeActivity` 又被 `VideoActivity` / `LiveActivity` / `TmdbDetailActivity` 的 `isTaskRoot()` 回退分支启动，仍然可达。`HistoryViewActivity` 只接管了 `HomeViewActivity` 这条入口。
+
+第 7 轮验证：两个 XML `[xml]` 解析通过；`HomeViewActivity` 花括号 306/306、圆括号 1056/1056；`TmdbMatchViewDialog` 花括号 154/154、圆括号 609/609；`"KeyTest"` 字符串零残留；主清单无 `HeroHomeActivity`；未编译（按用户要求只出 diff）。

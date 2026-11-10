@@ -1420,7 +1420,6 @@ class HomeViewActivity : AppCompatActivity() {
         // 【TMDB 手动匹配弹窗 · 终极防线】弹窗显示期间，所有按键一律吞掉。
         // 弹窗自身已有 setOnKeyListener + DecorView 抢焦点，这里再兜第一行，
         // 保证任何情况下都绝不让焦点漏到底层海报列表。
-        Log.d("KeyTest", "HomeViewActivity dispatchKeyEvent: ${event.keyCode}, isTmdbShowing=$isTmdbShowing")
         if (isTmdbShowing) return true
         // 【菜单键】呼出全局接口源侧边栏（与 Compose 首页小房子同一实现）。
         // DOWN 只认首次按下，避免按住时重复弹窗；UP 一并吞掉，防止落到默认菜单处理。
@@ -1435,7 +1434,6 @@ class HomeViewActivity : AppCompatActivity() {
         // 对应 `HomeActivityV2.java`：
         //   if (keyEvent.getAction() == KeyEvent.ACTION_DOWN && this.W && keyEvent.getRepeatCount() > 0) return true;
         if (event.action == KeyEvent.ACTION_DOWN && isLongPressTriggered && event.repeatCount > 0) {
-            Log.d("KeyTest", "W-lock swallow: key=${event.keyCode} repeat=${event.repeatCount}")
             return true
         }
         // 【强制日志 · 第一步】每条按键都必须在这里留痕，用来判断「事件到底死在哪」：
@@ -1444,11 +1442,6 @@ class HomeViewActivity : AppCompatActivity() {
         //  - 有日志 focus=true  → 事件与焦点都正常，问题只可能在定时器 / 弹窗那一步。
         val posterFocused = ::recycler.isInitialized &&
             (recycler.findFocus() != null || recycler.hasFocus())
-        Log.d(
-            "KeyTest",
-            "Activity: action=${event.action} key=${event.keyCode} " +
-                "repeat=${event.repeatCount} focus=${::recycler.isInitialized && recycler.findFocus() != null}",
-        )
         val key = event.keyCode
         // 海报行只接管「下键 / 确定键」。
         val isPosterKey = key == KeyEvent.KEYCODE_DPAD_DOWN ||
@@ -1470,7 +1463,6 @@ class HomeViewActivity : AppCompatActivity() {
                 ?: focusedIndex
             // 只拦第 0 张：NO_POSITION(-1) / 其它下标一律放行，行内左右移动保持原样。
             if (position == 0) {
-                Log.d("KeyTest", "poster-left at head: swallow action=${event.action}")
                 return true
             }
         }
@@ -1485,7 +1477,6 @@ class HomeViewActivity : AppCompatActivity() {
                 ?: focusedIndex
             // 只拦最后一列；中间列继续走默认的左右移动。
             if (position == items.lastIndex) {
-                Log.d("KeyTest", "poster-right at tail: swallow action=${event.action}")
                 return true
             }
         }
@@ -1549,7 +1540,6 @@ class HomeViewActivity : AppCompatActivity() {
         // 【强制日志 · 第二步】定时器真的到点了才会打这一条。
         //  - 有 `Activity: ... repeat=0` 但从来没有这条 → 定时器没跑（条件没过 / 被 removeCallbacks 了）；
         //  - 这条出现却不弹窗 → 问题在弹窗本身，不在按键。
-        Log.d("KeyTest", "LongPress Triggered: key=$key")
         isLongPressTriggered = true
         val item = items.getOrNull(focusedIndex) ?: return
         when (key) {

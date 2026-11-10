@@ -96,16 +96,6 @@
             </intent-filter>
         </activity>
 
-        <!-- HeroUI（Compose）首页：启动入口已交给 HomeViewActivity，这里**保留类与清单条目**以便回滚
-             （回滚 = 把上面的 intent-filter 整块移回本节点）。不声明 exported，桌面不会出现第二个图标。 -->
-        <activity
-            android:name=".ui.activity.HeroHomeActivity"
-            android:configChanges="screenSize|smallestScreenSize|screenLayout|orientation"
-            android:exported="false"
-            android:label="Hero UI"
-            android:screenOrientation="sensorLandscape"
-            android:theme="@style/Theme.App" />
-
         <!-- HeroUI（Compose）详情页骨架：假数据阶段，仅用于验证结构与焦点流转。 -->
         <activity
             android:name=".ui.activity.HeroDetailActivity"

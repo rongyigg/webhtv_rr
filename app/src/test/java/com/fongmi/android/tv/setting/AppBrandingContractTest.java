@@ -173,13 +173,15 @@ public class AppBrandingContractTest {
     }
 
     @Test
-    public void mainManifestOwnsTheTemporaryHeroLauncherEntry() throws Exception {
+    public void mainManifestOwnsTheViewLauncherEntry() throws Exception {
         String main = read("app/src/main/AndroidManifest.xml");
 
-        assertTrue(main.contains(".ui.activity.HeroHomeActivity"));
+        assertTrue(main.contains(".ui.activity.HomeViewActivity"));
         assertTrue(main.contains("android.intent.action.MAIN"));
         assertTrue(main.contains("android.intent.category.LAUNCHER"));
         assertTrue(main.contains("android.intent.category.LEANBACK_LAUNCHER"));
+        // 临时 Hero 首页已退役：清单里不再保留 HeroHomeActivity 条目，回滚改由 git 历史承担。
+        assertFalse(main.contains(".ui.activity.HeroHomeActivity"));
     }
 
     private static void assertBrandingAliases(String manifest) {

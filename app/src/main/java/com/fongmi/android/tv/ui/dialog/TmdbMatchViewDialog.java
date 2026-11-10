@@ -87,6 +87,8 @@ public class TmdbMatchViewDialog {
     private static final int SUGGEST_LIMIT = 10;
     /** 输入停顿多久再去拉在线建议，避免每个字母打一次网络请求。 */
     private static final long SUGGEST_DEBOUNCE_MS = 260;
+    /** 二次抢焦延迟：足够窗口 attach + 输入法状态稳定，又不会让用户感到延迟。 */
+    private static final long REFOCUS_DELAY_MS = 100;
     private static final Pattern YEAR_PATTERN = Pattern.compile("(19|20)\\d{2}");
     private static final Pattern SEASON_PATTERN = Pattern.compile("第?\\s*([一二三四五六七八九十百0-9]+)\\s*季|(?i)\\bseason\\s*(\\d{1,2})\\b|(?i)\\bs(\\d{1,2})\\b");
 
@@ -97,6 +99,8 @@ public class TmdbMatchViewDialog {
     private final List<Word.Data> iqiyiWords = new ArrayList<>();
     private final List<Word.Data> tencentWords = new ArrayList<>();
     private final Handler suggestHandler = new Handler(Looper.getMainLooper());
+    /** 二次抢焦专用 Handler：不能复用建议词的 Handler，否则 removeCallbacks 会互相影响。 */
+    private final Handler uiHandler = new Handler(Looper.getMainLooper());
     private final List<TmdbItem> results = new ArrayList<>();
 
     private AlertDialog dialog;
@@ -116,6 +120,8 @@ public class TmdbMatchViewDialog {
     private Listener listener;
     private DismissListener dismissListener;
     private Runnable pendingSuggest;
+    /** 在途的二次抢焦任务；关窗时必须取消，避免对已销毁的窗口 requestFocus。 */
+    private Runnable pendingRefocus;
     private int suggestSeq;
     private boolean searching;
 
@@ -160,6 +166,9 @@ public class TmdbMatchViewDialog {
             // 关窗即作废在途的联想词请求，避免回调打到已销毁的 View 上。
             suggestSeq++;
             if (pendingSuggest != null) suggestHandler.removeCallbacks(pendingSuggest);
+            // 关窗即取消在途的二次抢焦：窗口已经没了，再 requestFocus 只会拿到已销毁的 DecorView。
+            if (pendingRefocus != null) uiHandler.removeCallbacks(pendingRefocus);
+            pendingRefocus = null;
             if (dismissListener != null) dismissListener.onDismiss();
         });
         // 严格照抄逆向 F()：super.F(); dialog.setOnKeyListener(new n40(this, 3));
@@ -192,11 +201,18 @@ public class TmdbMatchViewDialog {
         });
         dialog.show();
         configureWindow();
-        // 抢焦点（对应旧版 Window 配置）：本弹窗**没有** FLAG_NOT_FOCUSABLE，
-        // 只有 FLAG_ALT_FOCUSABLE_IM（仅屏蔽输入法，不影响窗口/按键焦点）。
-        // show() 之后立刻让 DecorView 持有窗口焦点，底层 Activity 就再也拿不到按键。
+        // 【强制夺焦】日志已证实 isTmdbShowing=true 时系统仍报 no window has focus：
+        // 说明事件还落在 Activity 窗口上，弹窗自己的窗口没抢到焦点。
+        // 这里在 show() 之后立刻再清一次 FLAG_NOT_FOCUSABLE，把 DecorView 设为可触摸聚焦并 requestFocus()。
         Window window = dialog.getWindow();
-        if (window != null) window.getDecorView().requestFocus();
+        if (window != null) {
+            window.clearFlags(WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE);
+            window.getDecorView().setFocusableInTouchMode(true);
+            window.getDecorView().requestFocus();
+        }
+        // 【延迟二次抢焦】show() 的窗口 attach 与首次焦点申请在下一帧 traversal 才完成，
+        // 这期间可能被系统窗口 / 输入法抢走；100ms 后再各要一次（DecorView + 输入框）。
+        scheduleRefocus();
         setupSuggestions();
         setupKeyboard();
         setupCandidate();
@@ -207,6 +223,26 @@ public class TmdbMatchViewDialog {
             keyword.requestFocus();
             if (keyword.getText() != null && keyword.getText().length() > 0) search();
         });
+    }
+
+    /**
+     * 延迟二次抢焦：{@code show()} 之后窗口的第一次焦点授予要等下一帧 traversal 完成，
+     * 这段时间里系统窗口 / 输入法可能先把焦点拿走（日志里的 {@code no window has focus}）。
+     * 100ms 后对 DecorView 和输入框各要一次，保证遥控器按键一定落在弹窗上。
+     */
+    private void scheduleRefocus() {
+        if (pendingRefocus != null) uiHandler.removeCallbacks(pendingRefocus);
+        pendingRefocus = () -> {
+            pendingRefocus = null;
+            if (dialog == null || !dialog.isShowing()) return;
+            Window window = dialog.getWindow();
+            if (window == null) return;
+            window.clearFlags(WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE);
+            window.getDecorView().setFocusableInTouchMode(true);
+            window.getDecorView().requestFocus();
+            if (keyword != null) keyword.requestFocus();
+        };
+        uiHandler.postDelayed(pendingRefocus, REFOCUS_DELAY_MS);
     }
 
     public void dismiss() {
