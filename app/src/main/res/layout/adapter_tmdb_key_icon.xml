@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 手动 TMDB 匹配弹窗：虚拟键盘功能键（确认 / 左移 / 右移 / 退格，30dp x 30dp） -->
+<androidx.appcompat.widget.AppCompatImageView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/icon"
+    android:layout_width="30dp"
+    android:layout_height="30dp"
+    android:background="@drawable/selector_tmdb_key"
+    android:focusable="true"
+    android:focusableInTouchMode="true"
+    android:scaleType="center" />

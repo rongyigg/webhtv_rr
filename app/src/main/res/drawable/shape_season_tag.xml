@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 手动 TMDB 匹配弹窗：右上角「第 N 季」胶囊标签 -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <corners android:radius="999dp" />
+    <solid android:color="@color/white_20" />
+    <stroke
+        android:width="1dp"
+        android:color="@color/osd_accent" />
+</shape>

@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 手动 TMDB 匹配弹窗：输入框默认态（半透明深底 + 1dp 细边） -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <solid android:color="@color/black_20" />
+    <corners android:radius="6dp" />
+    <stroke
+        android:width="1dp"
+        android:color="@color/white_20" />
+</shape>

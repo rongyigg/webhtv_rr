@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 手动 TMDB 匹配弹窗：放大镜按钮两态 -->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <item
+        android:drawable="@drawable/shape_tmdb_search_focused"
+        android:state_focused="true" />
+    <item android:drawable="@drawable/shape_tmdb_search_normal" />
+</selector>

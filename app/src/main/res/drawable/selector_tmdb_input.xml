@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 手动 TMDB 匹配弹窗：输入框两态（形状完全一致，只换描边颜色，聚焦不跳形） -->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <item
+        android:drawable="@drawable/shape_tmdb_input_focused"
+        android:state_focused="true" />
+    <item android:drawable="@drawable/shape_tmdb_input_normal" />
+</selector>

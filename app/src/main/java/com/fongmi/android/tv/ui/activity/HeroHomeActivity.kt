@@ -137,7 +137,7 @@ import com.fongmi.android.tv.ui.hero.HeroPosterCard
 import com.fongmi.android.tv.ui.hero.HeroSourceEntry
 import com.fongmi.android.tv.ui.hero.SourceSidebar
 import com.fongmi.android.tv.ui.hero.SourceSidebarMode
-import com.fongmi.android.tv.ui.hero.TmdbMatchDialog
+import com.fongmi.android.tv.ui.dialog.TmdbMatchViewHost
 import com.fongmi.android.tv.ui.hero.openHeroDetailOrFolder
 import com.fongmi.android.tv.utils.Notify
 import com.fongmi.android.tv.utils.PushParser
@@ -1463,7 +1463,7 @@ private fun HeroHomeScreen(
         // 真实数据可能为空（切到空源 / 请求失败），此时没有剧名可匹配，弹窗直接不渲染。
         val tmdbPoster = heroPoster
         if (showTmdbDialog && tmdbPoster != null) {
-            TmdbMatchDialog(
+            TmdbMatchViewHost(
                 initialKeyword = tmdbPoster.title,
                 // 真实搜索要带上这条目的源站身份：`TmdbMatcher.search(keyword, vod)` 用它取年份、
                 // 季号与备注来排序候选，和自动匹配完全是同一套规则。

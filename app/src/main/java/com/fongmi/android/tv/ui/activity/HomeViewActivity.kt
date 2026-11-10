@@ -70,7 +70,7 @@ import com.fongmi.android.tv.ui.hero.HeroSourceEntry
 import com.fongmi.android.tv.ui.hero.HomePosterItem
 import com.fongmi.android.tv.ui.hero.SourceSidebar
 import com.fongmi.android.tv.ui.hero.SourceSidebarMode
-import com.fongmi.android.tv.ui.hero.TmdbMatchDialog
+import com.fongmi.android.tv.ui.dialog.TmdbMatchViewHost
 import com.fongmi.android.tv.ui.hero.openHeroDetailOrFolder
 import com.fongmi.android.tv.utils.Notify
 import com.fongmi.android.tv.utils.Util
@@ -1580,7 +1580,7 @@ class HomeViewActivity : AppCompatActivity() {
             layoutParams = ViewGroup.LayoutParams(0, 0)
         }
         host.setContent {
-            TmdbMatchDialog(
+            TmdbMatchViewHost(
                 initialKeyword = item.title,
                 vod = item.vod,
                 onConfirm = { tmdbItem ->

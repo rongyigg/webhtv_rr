@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    手动 TMDB 匹配弹窗：右侧海报卡片（照抄逆向 adapter_tmdb_match.xml）。
+    110dp 宽、102x153 海报、12sp 标题、10sp 副标题；焦点态由 TmdbMatchViewDialog 做 1.08 缩放 + translationZ，
+    与逆向 g0() 完全一致，因此这里不写 selector 背景（避免圆角框和外框叠加跳形）。
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="110dp"
+    android:layout_height="wrap_content"
+    android:background="@null"
+    android:clipChildren="false"
+    android:clipToPadding="false"
+    android:defaultFocusHighlightEnabled="false"
+    android:focusable="true"
+    android:focusableInTouchMode="true"
+    android:gravity="center_horizontal"
+    android:nextFocusUp="@id/keyboard"
+    android:orientation="vertical"
+    android:padding="4dp"
+    android:stateListAnimator="@null">
+
+    <FrameLayout
+        android:id="@+id/imageWrapper"
+        android:layout_width="102dp"
+        android:layout_height="153dp"
+        android:clipChildren="false"
+        android:clipToPadding="false"
+        android:duplicateParentState="true">
+
+        <com.google.android.material.imageview.ShapeableImageView
+            android:id="@+id/image"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:background="@color/black_20"
+            android:contentDescription="@null"
+            android:scaleType="centerCrop"
+            app:shapeAppearanceOverlay="@style/Vod.Grid.Large" />
+    </FrameLayout>
+
+    <com.google.android.material.textview.MaterialTextView
+        android:id="@+id/title"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="5dp"
+        android:ellipsize="marquee"
+        android:gravity="center"
+        android:singleLine="true"
+        android:textColor="@color/white"
+        android:textSize="12sp"
+        tools:text="嫁金钗" />
+
+    <com.google.android.material.textview.MaterialTextView
+        android:id="@+id/meta"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:alpha="0.4"
+        android:ellipsize="marquee"
+        android:gravity="center"
+        android:singleLine="true"
+        android:textColor="@color/white"
+        android:textSize="10sp"
+        tools:text="2024 · TV" />
+</LinearLayout>

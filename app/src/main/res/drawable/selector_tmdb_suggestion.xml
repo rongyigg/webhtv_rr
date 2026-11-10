@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 手动 TMDB 匹配弹窗：顶部联想词胶囊两态 -->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <item
+        android:drawable="@drawable/shape_tmdb_suggestion_focused"
+        android:state_focused="true" />
+    <item android:drawable="@drawable/shape_tmdb_suggestion" />
+</selector>
