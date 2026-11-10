@@ -191,10 +191,12 @@
     <!--
         选集面板顶部操作标签（少列 / 多列、正序 / 倒序）。
         字号 14sp，与下方集数网格和分页标签同一档，且小于「播放线路 / 选集」标题的 15sp；保留加粗。
+        高度压到 26dp（原 34dp）：焦点实心红胶囊 / 选中红框都被钳制成 13dp 圆角的扁平长条，
+        不再圆滚滚；上下不留 padding，文字靠 gravity=center 居中。
     -->
     <style name="OsdTab">
         <item name="android:layout_width">wrap_content</item>
-        <item name="android:layout_height">34dp</item>
+        <item name="android:layout_height">26dp</item>
         <item name="android:layout_marginStart">14dp</item>
         <item name="android:background">@drawable/selector_osd_action</item>
         <item name="android:focusable">true</item>

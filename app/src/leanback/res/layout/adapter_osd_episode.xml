@@ -1,21 +1,22 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-    播放页底部选集卡片（对齐 ref_docs/adapter_episode.xml 的结构）。
+    播放页底部选集卡片，结构参考 ref_docs/adapter_episode.xml。
     - 卡片：focusable 的 FrameLayout + @drawable/selector_osd_episode
-      真实状态全为「透明底 + 细线红框」，4dp 圆角；不再使用实心红底。
-    - 文字：14sp 单行居中 MaterialTextView，颜色走 selector_osd_episode_text
-      （焦点白 / 正在播放但失焦红字 / 普通白字）。
-      跑马灯由 OsdEpisodeAdapter.applyMarquee 动态切换：只有焦点卡片才是 MARQUEE，
-      这里默认 END，避免同屏多张卡片同时滚动。
-    - Lottie：20x25dp，靠卡片内右侧垂直居中，clipChildren=true；只在 isSelected 时 VISIBLE。
-    - 方向键：面板内的上下左右由 VideoActivity.dispatchEpisodePanelEdgeKey 统一接管，
-      这里不写 nextFocusUp/Down，避免布局容器与 @id/flag、@id/array 互相抢焦点。
+      （焦点实心红 / 选中细线红框 / 普通半透明长条，圆角一律 4dp，绝不用胶囊）。
+    - 尺寸：高度固定 38dp（对齐逆向 VideoActivity 的行高），长条形；圆角 4dp。
+    - 字体：16sp（对齐 ref_docs/adapter_episode.xml 的 textSize），颜色走
+      selector_osd_episode_text（普通 / 正在播放的失焦 / 焦点三态）。
+    - 跑马灯：由 OsdEpisodeAdapter.applyMarquee 动态切换，只有焦点卡片开 MARQUEE，
+      失焦默认 END，保证同一时刻只有一张卡片在滚。
+    - Lottie：20x25dp，贴在卡片右侧垂直居中，clipChildren=true，只有 isSelected 时 VISIBLE。
+    - 左右边界翻页：由 VideoActivity.dispatchEpisodePanelEdgeKey 统一接管，
+      这里不写 nextFocusUp/Down，避免布局里引用 @id/flag、@id/array 抢焦点。
 -->
 <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     xmlns:tools="http://schemas.android.com/tools"
     android:layout_width="match_parent"
-    android:layout_height="wrap_content"
+    android:layout_height="38dp"
     android:layout_marginEnd="8dp"
     android:layout_marginBottom="8dp"
     android:background="@drawable/selector_osd_episode"
@@ -28,6 +29,7 @@
         android:id="@+id/text"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
+        android:layout_gravity="center"
         android:ellipsize="end"
         android:focusable="false"
         android:focusableInTouchMode="false"
@@ -36,7 +38,7 @@
         android:scrollHorizontally="true"
         android:singleLine="true"
         android:textColor="@color/selector_osd_episode_text"
-        android:textSize="14sp"
+        android:textSize="16sp"
         tools:text="第20集" />
 
     <com.airbnb.lottie.LottieAnimationView

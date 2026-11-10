@@ -18,8 +18,8 @@ import java.util.List;
 
 /**
  * 播放页底部选集网格适配器。
- * 卡片尺寸对齐逆向 App 截图：14sp 单行文字 + 上下 6dp / 左右 12dp 内边距 ≈ 30dp 高，
- * 5dp 圆角改 3dp、卡片间距 8dp（逆向取样：卡片 61px≈30.5dp、行距 16px=8dp）。
+ * 卡片尺寸对齐逆向 App：高度固定 38dp（adapter_osd_episode.xml 的 layout_height），
+ * 16sp 单行文字（对齐 ref_docs/adapter_episode.xml），左右 12dp 内边距，卡片间距 8dp。
  * 标题复用选集按钮的构造 {@link EpisodeAdapter#getNativeTitle(Episode)}。
  *
  * 交互约定（与分页标签严格区分）：
@@ -107,12 +107,14 @@ public class OsdEpisodeAdapter extends RecyclerView.Adapter<OsdEpisodeAdapter.Vi
         }
     }
 
-    /** 固定 14sp / 上下 6dp / 左右 12dp 内边距，卡片高度由内容决定（逆向实测 30.5dp）。 */
+    /**
+     * 固定 16sp / 左右 12dp 内边距；卡片高度由 adapter_osd_episode.xml 固定为 38dp，
+     * 上下内边距给 0，让文字在 38dp 长条里垂直居中（文字 View 自身 layout_gravity=center）。
+     */
     private void applyDensity(@NonNull ViewHolder holder) {
-        holder.binding.text.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f);
+        holder.binding.text.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f);
         int horizontal = ResUtil.dp2px(12);
-        int vertical = ResUtil.dp2px(6);
-        holder.itemView.setPadding(horizontal, vertical, horizontal, vertical);
+        holder.itemView.setPadding(horizontal, 0, horizontal, 0);
     }
 
     public interface OnClickListener {

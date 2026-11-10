@@ -1,12 +1,25 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-    底部选集面板背景：顶部透明过渡，主体近黑。
-    对应 ref_docs/activity_video.xml 的 android:background="@drawable/bg_episode_list_bottom"。
+    选集面板第 1 层背景（托底）：面板整体渐变遮罩，对应逆向
+    ref_docs/activity_video.xml 的 android:background="@drawable/bg_episode_list_bottom"。
+
+    - 顶部完全透明 @color/osd_scrim_start → 底部 @color/panel_scrim_end；
+      面板浮在视频上时，顶部不遮挡画面，底部文字有足够的对比度。
+    - 顶部左右各 16dp 圆角，贴合「从屏幕底边升起」的面板形态。
+    - 第 2 层是每个集数卡片自己的半透明长条（selector_osd_episode 的默认态），
+      两层叠加才让卡片在纯黑视频上也看得出轮廓。
+    - 颜色全部引用 colors.xml，不写十六进制字面量。
 -->
 <shape xmlns:android="http://schemas.android.com/apk/res/android"
     android:shape="rectangle">
+
     <gradient
         android:angle="270"
-        android:endColor="@color/osd_panel_end"
+        android:endColor="@color/panel_scrim_end"
         android:startColor="@color/osd_scrim_start" />
+
+    <corners
+        android:topLeftRadius="16dp"
+        android:topRightRadius="16dp" />
+
 </shape>
