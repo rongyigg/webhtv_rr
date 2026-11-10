@@ -112,12 +112,14 @@
     <!--
         播放页 OSD 底部文字按钮：默认透明，焦点态是 #E50914 → #FD7D83 的水平红渐变胶囊。
         尺寸照抄原逆向 App 截图：高 30dp、左右内边距 12dp（两字按钮约 52dp 宽），
-        圆角 15dp 即高度的一半；字号 14sp、按钮间距统一 16dp，整行贴左排布（禁止居中）。
+        圆角 15dp 即高度的一半；字号 14sp，整行贴左排布（禁止居中）。
+        间距 8dp：逆向截图量得相邻按钮文字墨迹间隙 67px ≈ 33.5dp，
+        正好等于 paddingEnd 12dp + 间距 8dp + paddingStart 12dp；16dp 时间隙达 84px 且整行溢出。
     -->
     <style name="OsdAction">
         <item name="android:layout_width">wrap_content</item>
         <item name="android:layout_height">30dp</item>
-        <item name="android:layout_marginEnd">16dp</item>
+        <item name="android:layout_marginEnd">8dp</item>
         <item name="android:background">@drawable/selector_osd_action</item>
         <item name="android:focusable">true</item>
         <item name="android:focusableInTouchMode">true</item>
@@ -130,11 +132,11 @@
         <item name="android:textSize">14sp</item>
     </style>
 
-    <!-- 播放页 OSD 图标按钮（上一集 / 下一集）：按钮 48dp，焦点 oval 正圆，与文字按钮共用 16dp 间距。 -->
+    <!-- 播放页 OSD 图标按钮（上一集 / 下一集）：按钮 48dp，焦点 oval 正圆，与文字按钮共用 8dp 间距。 -->
     <style name="OsdIcon">
         <item name="android:layout_width">48dp</item>
         <item name="android:layout_height">48dp</item>
-        <item name="android:layout_marginEnd">16dp</item>
+        <item name="android:layout_marginEnd">8dp</item>
         <item name="android:background">@drawable/selector_osd_icon</item>
         <item name="android:focusable">true</item>
         <item name="android:focusableInTouchMode">true</item>
@@ -143,10 +145,13 @@
         <item name="android:tint">@color/white</item>
     </style>
 
-    <!-- 选集面板线路按钮（ref_docs/activity_video.xml 的 flag 行高 34dp）。 -->
+    <!--
+        选集面板线路按钮：逆向截图取样 88x56px = 44x28dp、1dp 描边、约 4dp 小圆角，
+        文字 14sp，左右内边距 8dp（两字线路名宽度 27.5dp + 16dp ≈ 44dp，与逆向一致）。
+    -->
     <style name="OsdChip">
         <item name="android:layout_width">wrap_content</item>
-        <item name="android:layout_height">34dp</item>
+        <item name="android:layout_height">28dp</item>
         <item name="android:layout_marginEnd">8dp</item>
         <item name="android:background">@drawable/selector_osd_chip</item>
         <item name="android:ellipsize">end</item>
@@ -154,25 +159,28 @@
         <item name="android:focusableInTouchMode">true</item>
         <item name="android:gravity">center</item>
         <item name="android:maxWidth">280dp</item>
-        <item name="android:paddingStart">12dp</item>
-        <item name="android:paddingEnd">12dp</item>
+        <item name="android:paddingStart">8dp</item>
+        <item name="android:paddingEnd">8dp</item>
         <item name="android:singleLine">true</item>
         <item name="android:textColor">@color/white</item>
         <item name="android:textSize">14sp</item>
     </style>
 
-    <!-- 选集面板分页按钮（ref_docs/activity_video.xml 的 array 行高 34dp）。 -->
+    <!--
+        选集面板分页按钮：逆向截图取样 77x44px = 38.5x22dp、1dp 描边、全圆角（高度的一半 11dp），
+        文字 13sp，最小宽 38dp（单页「1-6」宽度与逆向一致）。
+    -->
     <style name="OsdPage">
         <item name="android:layout_width">wrap_content</item>
-        <item name="android:layout_height">34dp</item>
+        <item name="android:layout_height">22dp</item>
         <item name="android:layout_marginEnd">8dp</item>
         <item name="android:background">@drawable/selector_osd_page</item>
         <item name="android:focusable">true</item>
         <item name="android:focusableInTouchMode">true</item>
         <item name="android:gravity">center</item>
-        <item name="android:minWidth">56dp</item>
-        <item name="android:paddingStart">12dp</item>
-        <item name="android:paddingEnd">12dp</item>
+        <item name="android:minWidth">38dp</item>
+        <item name="android:paddingStart">9dp</item>
+        <item name="android:paddingEnd">9dp</item>
         <item name="android:singleLine">true</item>
         <item name="android:textColor">@color/white</item>
         <item name="android:textSize">13sp</item>

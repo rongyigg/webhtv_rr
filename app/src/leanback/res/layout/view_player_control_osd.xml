@@ -32,7 +32,7 @@
         android:shadowDy="1"
         android:shadowRadius="3"
         android:textColor="@color/white"
-        android:textSize="20sp"
+        android:textSize="16sp"
         tools:text="3840 x 2160" />
 
     <com.google.android.material.textview.MaterialTextView
@@ -48,7 +48,7 @@
         android:shadowDy="1"
         android:shadowRadius="3"
         android:textColor="@color/white"
-        android:textSize="20sp"
+        android:textSize="16sp"
         tools:text="2.2 MB/s" />
 
     <androidx.appcompat.widget.LinearLayoutCompat

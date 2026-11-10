@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-    选集面板分页按钮：
-    - 当前页：透明底 + @color/osd_focus 2dp 描边（对齐 ref_docs/player_menu_overlay.png 的当前页胶囊）
+    选集面板分页按钮（逆向 App 截图取样：77x44px = 38.5x22dp、1dp 红描边、全圆角 = 高度一半 11dp）：
+    - 当前页：透明底 + @color/osd_focus 1dp 描边（原版描边仅 2px = 1dp）
     - 焦点：@color/osd_focus 红渐变
     - 其余：透明
 -->
@@ -12,22 +12,22 @@
                 android:angle="270"
                 android:endColor="@color/osd_focus_dark"
                 android:startColor="@color/osd_focus" />
-            <corners android:radius="17dp" />
+            <corners android:radius="11dp" />
         </shape>
     </item>
     <item android:state_selected="true">
         <shape android:shape="rectangle">
             <solid android:color="@android:color/transparent" />
             <stroke
-                android:width="2dp"
+                android:width="1dp"
                 android:color="@color/osd_focus" />
-            <corners android:radius="17dp" />
+            <corners android:radius="11dp" />
         </shape>
     </item>
     <item>
         <shape android:shape="rectangle">
             <solid android:color="@android:color/transparent" />
-            <corners android:radius="17dp" />
+            <corners android:radius="11dp" />
         </shape>
     </item>
 </selector>
