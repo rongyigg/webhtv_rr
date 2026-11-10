@@ -1,20 +1,35 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-    全局底部面板遮罩：选集面板 / 轨道面板共用。
-    - 顶部完全透明 → 底部 @color/panel_scrim_end，始终透出下方视频画面；
-    - 顶部左右各 16dp 圆角，贴合「从屏幕底边升起」的面板形态；
-    - 不写任何十六进制字面量，颜色统一取自 colors.xml。
+    全局底部面板底色（选集面板 / 轨道面板共用）。
+    两层叠加，解决「视频背景纯黑时面板完全隐形」的问题：
+      1) 底层：@color/panel_scrim_base 半透明深灰实心底（alpha 80%），
+         让面板在纯黑画面上也有明确边界，但仍有 alpha，不会完全挡住视频；
+      2) 上层：顶部透明 → 底部 @color/panel_scrim_end 的竖向渐变，
+         叠在深灰底上做出「上浅下深」的层次，越靠底越压暗。
+    两层都带 16dp 顶部圆角，面板从屏幕底边升起的外形不变。
+    不写任何十六进制字面量，颜色统一取自 colors.xml。
 -->
-<shape xmlns:android="http://schemas.android.com/apk/res/android"
-    android:shape="rectangle">
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <gradient
-        android:angle="270"
-        android:endColor="@color/panel_scrim_end"
-        android:startColor="@android:color/transparent" />
+    <item>
+        <shape android:shape="rectangle">
+            <solid android:color="@color/panel_scrim_base" />
+            <corners
+                android:topLeftRadius="16dp"
+                android:topRightRadius="16dp" />
+        </shape>
+    </item>
 
-    <corners
-        android:topLeftRadius="16dp"
-        android:topRightRadius="16dp" />
+    <item>
+        <shape android:shape="rectangle">
+            <gradient
+                android:angle="270"
+                android:endColor="@color/panel_scrim_end"
+                android:startColor="@android:color/transparent" />
+            <corners
+                android:topLeftRadius="16dp"
+                android:topRightRadius="16dp" />
+        </shape>
+    </item>
 
-</shape>
+</layer-list>

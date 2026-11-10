@@ -1,16 +1,24 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-    播放页 OSD 上一集 / 下一集图标按钮：焦点态用椭圆红渐变，其余全透明。
-    颜色引用全局资源（@color/osd_accent_light → @color/osd_red_end），不写十六进制字面量。
+    播放页 OSD 上一集 / 下一集图标按钮：焦点态是圆角实心红，其余全透明。
+    按钮触摸区仍是 48dp（OsdIcon 样式），这里用 5dp inset 把红圆缩到 38dp，
+    比原来 48dp 满铺的实心圆小一档，图标白 24dp 不变；形状保持正圆（oval），严禁改成方形。
+    颜色全部引用全局资源（@color/osd_accent_light → @color/osd_red_end），不写十六进制字面量。
 -->
 <selector xmlns:android="http://schemas.android.com/apk/res/android">
     <item android:state_focused="true">
-        <shape android:shape="oval">
-            <gradient
-                android:angle="0"
-                android:endColor="@color/osd_red_end"
-                android:startColor="@color/osd_accent_light" />
-        </shape>
+        <inset
+            android:insetBottom="5dp"
+            android:insetLeft="5dp"
+            android:insetRight="5dp"
+            android:insetTop="5dp">
+            <shape android:shape="oval">
+                <gradient
+                    android:angle="0"
+                    android:endColor="@color/osd_red_end"
+                    android:startColor="@color/osd_accent_light" />
+            </shape>
+        </inset>
     </item>
     <item>
         <shape android:shape="oval">

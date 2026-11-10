@@ -1,14 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
     播放页 OSD 底部动作按钮（含选集面板的「少列/多列」「正序/倒序」标签）：
-    - 焦点：统一引用全局实心焦点样式 @drawable/bg_global_focus_solid_red
-      （播放选集面板同款横向红渐变，不再在这里各写一份渐变色）
+    - 焦点：全局实心焦点胶囊 @drawable/bg_global_focus_capsule
+      （换源弹窗同款红渐变 + 28dp 全圆角；30dp / 34dp 高的按钮被钳制成满高胶囊，禁止改成方形）
     - 按下：半透明浅底
     - 默认 / 其余：全透明，压在画面上
 -->
 <selector xmlns:android="http://schemas.android.com/apk/res/android">
     <item
-        android:drawable="@drawable/bg_global_focus_solid_red"
+        android:drawable="@drawable/bg_global_focus_capsule"
         android:state_focused="true" />
     <item android:state_pressed="true">
         <shape android:shape="rectangle">

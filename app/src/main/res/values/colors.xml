@@ -107,4 +107,6 @@
     <color name="osd_panel_end">#F2000000</color>
     <!-- 全局底部面板遮罩（选集 / 轨道面板共用）：顶部透明 → 底部 #E6000000，透出视频画面。 -->
     <color name="panel_scrim_end">#E6000000</color>
+    <!-- 底部面板（选集 / 轨道）的半透明深灰底：视频纯黑时面板也要能看出边界，同时不完全遮挡画面。 -->
+    <color name="panel_scrim_base">#CC222222</color>
 </resources>

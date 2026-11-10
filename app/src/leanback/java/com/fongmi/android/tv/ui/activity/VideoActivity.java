@@ -5303,7 +5303,8 @@ private boolean runtimeSourceOnly;
 
     /**
      * 选集面板纵向焦点闭环：网格首行「上」→ 操作标签行，操作标签行/分页行「上」→ 播放线路，
-     * 播放线路「下」→ 操作标签行。网格内部的行间移动继续交给系统 focusSearch。
+     * 播放线路「下」→ 操作标签行，**分页/操作标签行「下」→ 正在播放的那一集**（固定落点，不看几何）。
+     * 网格内部的行间移动继续交给系统 focusSearch。
      * 不能依赖 adapter_osd_episode 里的 nextFocus*：逆向布局的 @id/flag、@id/array 在本工程
      * 指向嵌入页（非全屏）的同名控件，全屏面板取不到，网格首行按「上」会被 handleKey 直接吞掉，
      * 表现为只能一路往左再按左才回得到上面。
@@ -5315,8 +5316,24 @@ private boolean runtimeSourceOnly;
             if (hasOsdTabRowFocus()) return focusOsdFlag();
             return false;
         }
-        if (KeyUtil.isDownKey(event) && PlayerControlFocusHelper.containsFocus(mBinding.episodePanel.osdFlagList)) return focusOsdTabRow();
+        if (KeyUtil.isDownKey(event)) {
+            if (PlayerControlFocusHelper.containsFocus(mBinding.episodePanel.osdFlagList)) return focusOsdTabRow();
+            // 分页标签行往下：绝不让系统按几何位置 focusSearch，强制落到正在播放的那一集。
+            if (hasOsdTabRowFocus()) return focusOsdPlayingEpisode();
+        }
         return false;
+    }
+
+    /**
+     * 分页标签行按下键的固定落点：当前正在播放的那一集；本页没有正在播放的集时落到本页第一集。
+     * 分页标签的 x 坐标和网格列没有任何几何对应关系，交给系统 focusSearch 会落到屏幕外的随机卡片，
+     * 所以这里显式按 adapter position 指定目标，不依赖几何。
+     */
+    private boolean focusOsdPlayingEpisode() {
+        if (mOsdEpisodeAdapter == null) return false;
+        int position = mOsdEpisodeAdapter.getSelectedPosition();
+        if (position < 0) position = 0;
+        return focusRecyclerPosition(mBinding.episodePanel.osdEpisodeGrid, position);
     }
 
     /** 当前焦点是否落在选集网格的第一行（少列 2 列 / 多列 8 列）。 */
