@@ -226,3 +226,24 @@ n40 说明：`n40` 在 R8 后没有独立类（`ref_docs` 无原件），按唯�
 ### 第 8 轮验证
 
 `TmdbMatchViewDialog.java` 花括号 154/154、圆括号 622/622；`import android.view.Gravity` 与 `Log` 均被使用；`DialogTest` 日志 3 处；`configureWindow()` 调用点（idx 8452）在 `dialog.show()`（idx 8479）之前；未编译（按用户要求只出 diff）。
+
+## 第 9 轮：长按下键呼出时的连发封锁（`blockUntilKeyUp`）
+
+**现象**：长按下键呼出弹窗时手指还按着，InputDispatcher 会把那次长按遗留的 `ACTION_DOWN(repeatCount > 0)` 继续投给新窗口，方向键在胶囊 / 结果卡 / 键盘之间乱跳，甚至把焦点顶回底层首页。
+
+**改动**（只动按键拦截，不动布局与焦点流转）：
+
+| 项 | 改动 |
+|---|---|
+| 新字段 | `private boolean blockUntilKeyUp = true;` |
+| 每次弹出重置 | `show()` 第一行（finishing/destroyed 守卫之后）`blockUntilKeyUp = true;`，不把上一次的解锁状态带过来 |
+| 锁死分支 | `dialog.setOnKeyListener` 顶部：`event == null` → `false`；锁死期间 `ACTION_UP` → 解锁并吞掉；其余（**含全部 `repeatCount > 0`**）→ `return true` |
+| 安全阀 | `ACTION_DOWN && repeatCount == 0` 视为"全新按下"，解锁后继续走下面的正常逻辑 |
+
+**为什么挂在 Dialog 级**：`Dialog.dispatchKeyEvent()` 第一句就查 `mOnKeyListener`，早于 `DecorView` / 根布局，所以封锁与"当前焦点在弹窗内哪个 View"无关；根布局的 `handleRootKey` 只在根自身持焦点时才触发，只是第二道防线。
+
+**安全阀的理由**：如果长按的 `ACTION_UP` 因为焦点问题被 Activity 吃掉，锁会永远解不开——弹窗"完全没反应"，症状与上一轮的焦点 bug 无法区分。`repeatCount == 0` 的下降沿只可能是新一轮按下（长按遗留的下降沿在弹窗出现前就已经投给 Activity 了），所以这条解锁不会削弱"`repeatCount > 0` 绝对拦截"。要退回字面版行为，只需删掉 listener 里那个 `ACTION_DOWN && repeatCount == 0` 分支。
+
+**未改动**：布局、焦点流转、`HomeViewActivity.isTmdbShowing` 兜底（6 处引用原样保留，`dispatchKeyEvent` 里 `if (isTmdbShowing) return true` 仍在）。
+
+**第 9 轮验证**：花括号 158/158、圆括号 630/630；`blockUntilKeyUp` 共 5 处（声明 1 + `show()` 重置 1 + listener 3）；未编译（按红线只出 diff）。

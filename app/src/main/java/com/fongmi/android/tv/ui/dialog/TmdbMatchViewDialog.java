@@ -125,6 +125,12 @@ public class TmdbMatchViewDialog {
     private Runnable pendingRefocus;
     private int suggestSeq;
     private boolean searching;
+    /**
+     * 长按下键呼出弹窗时的"连发封锁"。弹窗出现的瞬间手指还按在遥控器上，InputDispatcher 会把
+     * 那次长按遗留的 ACTION_DOWN(repeatCount &gt; 0) 继续投给这个新窗口，方向键会在胶囊 /
+     * 结果卡 / 键盘之间乱跳，甚至把焦点顶回底层首页。默认锁死，只认抬手。
+     */
+    private boolean blockUntilKeyUp = true;
 
     public static TmdbMatchViewDialog create(Activity activity) {
         return new TmdbMatchViewDialog(activity);
@@ -156,6 +162,8 @@ public class TmdbMatchViewDialog {
 
     public void show() {
         if (activity == null || activity.isFinishing() || activity.isDestroyed()) return;
+        // 每次弹出都重新上锁：上一个弹窗可能是按确认/返回关掉的，解锁状态绝不能带到下一次。
+        blockUntilKeyUp = true;
         View root = LayoutInflater.from(activity).inflate(R.layout.dialog_tmdb_match_view, null, false);
         bindViews(root);
         // 【最后一道闸】根布局按键监听：能冒到根布局，说明弹窗内所有可聚焦控件都拒绝了这个方向
@@ -181,8 +189,24 @@ public class TmdbMatchViewDialog {
         dialog.setOnKeyListener((d, keyCode, event) -> {
             // 判定性日志：出现 = 按键确实进到 Dialog 的窗口（焦点在弹窗这边）；
             // 不出现 = 按键还留在下面的 HomeViewActivity 窗口（焦点没交给弹窗）。
+            if (event == null) return false;
             Log.d("DialogTest", "Dialog received: " + keyCode
-                    + " action=" + (event == null ? -1 : event.getAction()));
+                    + " action=" + event.getAction() + " repeat=" + event.getRepeatCount());
+            // 【终极防线】刚呼出（或刚接管按键）时锁死：
+            // 长按遗留的那个下降沿 + 全部 repeatCount > 0 的连发一律吞掉，绝不漏给底层首页，
+            // 也不让它们在胶囊 / 结果卡 / 键盘之间把焦点顶飞；只认抬手来解锁。
+            if (blockUntilKeyUp) {
+                if (event.getAction() == KeyEvent.ACTION_UP) {
+                    blockUntilKeyUp = false;
+                    return true;
+                }
+                if (event.getAction() == KeyEvent.ACTION_DOWN && event.getRepeatCount() == 0) {
+                    // 全新按下（非长按连发）＝上一轮按键已经结束，解锁后按下面正常逻辑处理。
+                    blockUntilKeyUp = false;
+                } else {
+                    return true;
+                }
+            }
             // 返回键：照抄 n40 的"关窗并吞掉"，不再依赖 Dialog.onKeyDown 的默认分支。
             // 抬键才关（与系统行为一致），按下 / 抬起都返回 true，保证没有任何一帧漏到底层。
             if (keyCode == KeyEvent.KEYCODE_BACK) {
