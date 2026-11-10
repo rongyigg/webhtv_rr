@@ -107,3 +107,23 @@
 n40 说明：`n40` 在 R8 后没有独立类（`ref_docs` 无原件），按唯一可观测行为复刻；若无条件 `return true`，方向键会被一并吞掉，弹窗内键盘与候选卡片将完全无法操作，因此保留导航键放行。
 
 第 4 轮验证：两个 XML 解析通过；`foreground` 只出现在 `imageWrapper`；间距 8dp / `paddingStart` 8dp / 两个 `clip* = false` 均已就位；Java 括号平衡；改动全部落在声明路径。
+
+## 第 5 轮：终局收尾（抢焦点 + 删旧 Compose 弹窗）
+
+| 项 | 改动 | 位置 |
+|---|---|---|
+| 抢焦点 | `show()` 之后 `dialog.getWindow().getDecorView().requestFocus()`；确认窗口只有 `FLAG_ALT_FOCUSABLE_IM`（仅屏蔽输入法），**没有** `FLAG_NOT_FOCUSABLE` | `TmdbMatchViewDialog.show()` |
+| 首页拦截 | `isTmdbShowing`：呼出前置 true，dismiss 回调置 false；`dispatchKeyEvent` 第一行 `if (isTmdbShowing) return true` | `HomeViewActivity` / `HeroHomeActivity` |
+| 直调弹窗 | 删除 0×0 `ComposeView` + `setContent` 桥接，改 `TmdbMatchViewDialog.create(this).keyword().vod().listener().dismissListener().show()` | `HomeViewActivity.showTmdbManualMatch()` |
+| Hero 直调 | 删掉 `if (showTmdbDialog) { TmdbMatchViewHost(...) }`，改在 `LaunchedEffect(tmdbPoster.posterKey)` 里直接建弹窗 | `HeroHomeActivity.HeroHomeScreen` |
+| 生命周期 | 两个 Activity 的 `onDestroy` 先 `dismiss()` 再复位标志，避免 WindowLeaked 与残留吞键 | 两个 Activity |
+| 删除文件 | `ui/hero/TmdbMatchDialog.kt`（旧 Compose 弹窗）、`ui/dialog/TmdbMatchViewHost.kt`（桥接） | — |
+
+`HeroHomeActivity` 的两个弹窗状态（`tmdbMatchDialog` / `isTmdbShowing`）放在**文件级 private**：`HeroHomeScreen` 是顶层 Composable，拿不到 Activity 的 `this`，而 `private` 成员对顶层函数不可见；文件级只在本文件可见，等价于本 Activity 的私有字段。
+`Context.findActivity()` 同步从成员扩展提升为文件级私有函数，供 Composable 与 `launchPlayback` 共用。
+
+未改动（红线 1）：`dialog_tmdb_match_view.xml` / `adapter_tmdb_match_card.xml` / `TmdbKeyboardAdapter` / 联想词逻辑 / `candidate` 的焦点流转一律零改动。
+
+保留说明：`ui/hero/HeroKeyboard.kt` 仍被 `HeroSearchActivity` 使用，未删除；其中一处 KDoc 仍提到类名 `TmdbMatchDialog`，仅是注释，不影响编译。
+
+第 5 轮验证：全仓 `TmdbMatchViewHost` 零引用；`ui.hero.TmdbMatchDialog` 零引用；两个 Kotlin 文件花括号 314/314、594/594；`TmdbMatchViewDialog` 花括号 139/139；删除的两个文件已由 git 记录为删除；改动全部落在声明路径。

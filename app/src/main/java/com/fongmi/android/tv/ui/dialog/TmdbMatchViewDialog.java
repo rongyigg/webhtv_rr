@@ -179,6 +179,11 @@ public class TmdbMatchViewDialog {
         });
         dialog.show();
         configureWindow();
+        // 抢焦点（对应旧版 Window 配置）：本弹窗**没有** FLAG_NOT_FOCUSABLE，
+        // 只有 FLAG_ALT_FOCUSABLE_IM（仅屏蔽输入法，不影响窗口/按键焦点）。
+        // show() 之后立刻让 DecorView 持有窗口焦点，底层 Activity 就再也拿不到按键。
+        Window window = dialog.getWindow();
+        if (window != null) window.getDecorView().requestFocus();
         setupSuggestions();
         setupKeyboard();
         setupCandidate();

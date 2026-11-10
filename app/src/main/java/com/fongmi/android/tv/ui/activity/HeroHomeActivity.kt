@@ -137,7 +137,7 @@ import com.fongmi.android.tv.ui.hero.HeroPosterCard
 import com.fongmi.android.tv.ui.hero.HeroSourceEntry
 import com.fongmi.android.tv.ui.hero.SourceSidebar
 import com.fongmi.android.tv.ui.hero.SourceSidebarMode
-import com.fongmi.android.tv.ui.dialog.TmdbMatchViewHost
+import com.fongmi.android.tv.ui.dialog.TmdbMatchViewDialog
 import com.fongmi.android.tv.ui.hero.openHeroDetailOrFolder
 import com.fongmi.android.tv.utils.Notify
 import com.fongmi.android.tv.utils.PushParser
@@ -153,6 +153,42 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.withContext
+
+/*
+ * ============================================================================================
+ * TMDB 手动匹配弹窗（纯 View）的页面级状态
+ * ============================================================================================
+ *
+ * 本文件同时包含 [HeroHomeActivity] 与顶层 Composable `HeroHomeScreen`。
+ * Composable 里没有 Activity 的 `this`，而 `private` 成员对顶层函数不可见，
+ * 所以这两个状态放在文件级（file-private）：只在本文件可见，作用等价于本 Activity 的私有字段，
+ * 两边都能读写，且不会污染任何全局作用域。
+ */
+
+/** 当前仍在显示的 TMDB 弹窗实例；只用于 [HeroHomeActivity.onDestroy] 主动关窗，避免 WindowLeaked。 */
+private var tmdbMatchDialog: TmdbMatchViewDialog? = null
+
+/**
+ * TMDB 弹窗是否正在显示。
+ *
+ * [HeroHomeActivity.dispatchKeyEvent] 第一行据此吞掉**所有**按键，
+ * 保证弹窗打开时任何按键都不会漏到底层海报行。呼出前置 true，dismiss 回调里置 false。
+ */
+private var isTmdbShowing = false
+
+/**
+ * 向上找到宿主 Activity。
+ *
+ * 由文件级私有函数承载（原来是 HeroHomeActivity 的成员扩展）：弹窗改由顶层 Composable
+ * `HeroHomeScreen` 直接创建后，两侧都要用它，放在成员上 Composable 就够不到了。
+ */
+private fun Context.findActivity(): Activity? {
+    var current: Context = this
+    while (true) {
+        if (current is Activity) return current
+        current = (current as? ContextWrapper)?.baseContext ?: return null
+    }
+}
 
 /**
  * 首页 override 里的一条完整 TMDB 数据。
@@ -461,6 +497,26 @@ class HeroHomeActivity : ComponentActivity() {
     }
 
     /**
+     * 【TMDB 手动匹配弹窗 · 终极防线】弹窗显示期间，所有按键一律吞掉。
+     *
+     * 弹窗自身已有 `setOnKeyListener` + `DecorView.requestFocus()` 抢焦点，
+     * 这里再兜第一行：只要 [isTmdbShowing] 为 true，方向键 / 确认键 / 菜单键
+     * 都不可能漏到底层海报行，避免弹窗背后的首页跟着滚 / 换焦点。
+     */
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (isTmdbShowing) return true
+        return super.dispatchKeyEvent(event)
+    }
+
+    /** 纯 View 弹窗随 Activity 一起收尾：先关窗再复位拦截标志，避免 WindowLeaked 与残留吞键。 */
+    override fun onDestroy() {
+        tmdbMatchDialog?.dismiss()
+        tmdbMatchDialog = null
+        isTmdbShowing = false
+        super.onDestroy()
+    }
+
+    /**
      * 从设置页回来时强制刷新首页。
      *
      * 用户在设置页里新增 / 切换接口源后，[VodConfig] 的内存状态已经变了，
@@ -581,14 +637,6 @@ class HeroHomeActivity : ComponentActivity() {
         val activity = context.findActivity() ?: return
         val push = PushParser.of(DEMO_STREAM_URL, vodName)
         VideoActivity.startDirect(activity, SiteApi.PUSH, push.getId(), push.getName(), null, null)
-    }
-
-    private fun Context.findActivity(): Activity? {
-        var current: Context = this
-        while (true) {
-            if (current is Activity) return current
-            current = (current as? ContextWrapper)?.baseContext ?: return null
-        }
     }
 
     private companion object {
@@ -1445,7 +1493,7 @@ private fun HeroHomeScreen(
                     Log.e("ChangeSource", "卡片长按触发，准备执行 changeSource")
                     changeSource(poster)
                 },
-                // 卡片长按方向下键 1.5s：呼出 TMDB 手动匹配弹窗（见下面的 TmdbMatchDialog）。
+                // 卡片长按方向下键 1.5s：呼出 TMDB 手动匹配弹窗（见下面的 TmdbMatchViewDialog）。
                 onLongPressTmdb = { index ->
                     pendingPosterFocus = index
                     showTmdbDialog = true
@@ -1457,58 +1505,70 @@ private fun HeroHomeScreen(
             )
         }
 
-        // ---- 最上层：TMDB 手动匹配弹窗（Compose Dialog，层级盖在首页之上）----
+        // ---- 最上层：TMDB 手动匹配弹窗（纯 View Dialog，层级盖在首页之上）----
         // 确定键写回 override → 首页这张卡的背景 / 简介 / 艺术字 Logo 换成 TMDB 内容
         // （卡片竖图始终是接口原图，不替换）；关闭后由 LaunchedEffect(showTmdbDialog) 把焦点还给长按的那张卡。
         // 真实数据可能为空（切到空源 / 请求失败），此时没有剧名可匹配，弹窗直接不渲染。
         val tmdbPoster = heroPoster
         if (showTmdbDialog && tmdbPoster != null) {
-            TmdbMatchViewHost(
-                initialKeyword = tmdbPoster.title,
-                // 真实搜索要带上这条目的源站身份：`TmdbMatcher.search(keyword, vod)` 用它取年份、
-                // 季号与备注来排序候选，和自动匹配完全是同一套规则。
-                vod = tmdbPoster.vod,
-                onConfirm = { item ->
-                    val key = tmdbPoster.posterKey
-                    // 同一条 TMDB 记录 → 保留已经拉到的简介 / Logo / 演员 / 真横图；
-                    // 换了条目 → 旧数据必须整体作废，否则会出现「海报是这部、背景或简介是另一部」。
-                    val prev = tmdbOverrides[key]?.takeIf { it.item.tmdbId == item.tmdbId }
-                    if (prev == null) HeroTmdbPrefetchCache.remove(key)
-                    // 直接用真实搜索结果：标题 / 副标题 / 简介 / 海报 / 横图都是 TMDB 原值。
-                    // 横图统一提到 w1920，与自动预匹配（`toHomeTmdbData`）逐字一致，避免同一张图两个档位。
-                    val manualData = HeroTmdbData(
-                        item = item,
-                        detail = prev?.detail,
-                        cast = prev?.cast.orEmpty(),
-                        overview = prev?.overview.orEmpty().ifBlank { item.overview },
-                        logoUrl = prev?.logoUrl,
-                        highResBackdrop = upgradeTmdbImage(item.backdropUrl.ifBlank { item.posterUrl }, "w1920"),
-                        manual = true,
-                        // 元数据行与列表预匹配保持同一套规则：手动换了条目，评分 / 年份当场跟着换。
-                        rating = item.ratingText(),
-                        year = item.yearText(),
-                    )
-                    tmdbOverrides = tmdbOverrides + (key to manualData)
-                    // 手动条目本身没有详情：已有就顺手写缓存；没有就交给焦点详情 effect 补拉
-                    // （`tmdbFocusRevision` 变化会强制它重跑一次，避免这里与 effect 并发发同一个请求）。
-                    HeroTmdbPrefetchCache.put(key, manualData)
-                    // 【落盘】只写内存 override 的后果是「重启后手动选择消失」：冷启动
-                    // `readHeroSyncCache` 读的是 `TmdbMatchCache`，磁盘里没有这条就只能退回
-                    // 自动匹配 / 源站竖图。写入规则与详情页 `saveManualMatch` 完全一致。
-                    // 读-改-写放 IO 线程：内存 override 已经生效，界面不等落盘。
-                    scope.launch(Dispatchers.IO) {
-                        persistManualTmdbMatch(tmdbPoster, item)
+            // 直接开纯 View 弹窗：不再经过 Compose 桥接（没有 0×0 ComposeView、没有额外组合开销）。
+            // LaunchedEffect 保证「一次长按 = 一次弹窗」：重组不会重复弹，key 变化才重新执行。
+            LaunchedEffect(tmdbPoster.posterKey) {
+                val activity = context.findActivity() ?: return@LaunchedEffect
+                // 先置位再 show()：从窗口出现的第一帧起，HeroHomeActivity.dispatchKeyEvent 就全部吞掉。
+                isTmdbShowing = true
+                val dialog = TmdbMatchViewDialog.create(activity)
+                    .keyword(tmdbPoster.title)
+                    // 真实搜索要带上这条目的源站身份：`TmdbMatcher.search(keyword, vod)` 用它取年份、
+                    // 季号与备注来排序候选，和自动匹配完全是同一套规则。
+                    .vod(tmdbPoster.vod)
+                    .listener { item ->
+                        val key = tmdbPoster.posterKey
+                        // 同一条 TMDB 记录 → 保留已经拉到的简介 / Logo / 演员 / 真横图；
+                        // 换了条目 → 旧数据必须整体作废，否则会出现「海报是这部、背景或简介是另一部」。
+                        val prev = tmdbOverrides[key]?.takeIf { it.item.tmdbId == item.tmdbId }
+                        if (prev == null) HeroTmdbPrefetchCache.remove(key)
+                        // 直接用真实搜索结果：标题 / 副标题 / 简介 / 海报 / 横图都是 TMDB 原值。
+                        // 横图统一提到 w1920，与自动预匹配（`toHomeTmdbData`）逐字一致，避免同一张图两个档位。
+                        val manualData = HeroTmdbData(
+                            item = item,
+                            detail = prev?.detail,
+                            cast = prev?.cast.orEmpty(),
+                            overview = prev?.overview.orEmpty().ifBlank { item.overview },
+                            logoUrl = prev?.logoUrl,
+                            highResBackdrop = upgradeTmdbImage(item.backdropUrl.ifBlank { item.posterUrl }, "w1920"),
+                            manual = true,
+                            // 元数据行与列表预匹配保持同一套规则：手动换了条目，评分 / 年份当场跟着换。
+                            rating = item.ratingText(),
+                            year = item.yearText(),
+                        )
+                        tmdbOverrides = tmdbOverrides + (key to manualData)
+                        // 手动条目本身没有详情：已有就顺手写缓存；没有就交给焦点详情 effect 补拉
+                        // （`tmdbFocusRevision` 变化会强制它重跑一次，避免这里与 effect 并发发同一个请求）。
+                        HeroTmdbPrefetchCache.put(key, manualData)
+                        // 【落盘】只写内存 override 的后果是「重启后手动选择消失」：冷启动
+                        // `readHeroSyncCache` 读的是 `TmdbMatchCache`，磁盘里没有这条就只能退回
+                        // 自动匹配 / 源站竖图。写入规则与详情页 `saveManualMatch` 完全一致。
+                        // 读-改-写放 IO 线程：内存 override 已经生效，界面不等落盘。
+                        scope.launch(Dispatchers.IO) {
+                            persistManualTmdbMatch(tmdbPoster, item)
+                        }
+                        // 【主动预下载】用户确认后可能马上移开焦点：竖图 / 横图 / 艺术字全部提前抓一次，
+                        // 请求自行跑完并写入 Coil 磁盘缓存，冷启动直接命中。
+                        prefetchHeroImage(context, item.posterUrl, HERO_POSTER_PRELOAD_WIDTH)
+                        prefetchHeroImage(context, manualData.highResBackdrop, HERO_BACKDROP_PRELOAD_WIDTH)
+                        prefetchHeroImage(context, manualData.logoUrl, HERO_LOGO_PRELOAD_WIDTH)
+                        if (prev?.detail == null) tmdbFocusRevision++
+                        showTmdbDialog = false
                     }
-                    // 【主动预下载】用户确认后可能马上移开焦点：竖图 / 横图 / 艺术字全部提前抓一次，
-                    // 请求自行跑完并写入 Coil 磁盘缓存，冷启动直接命中。
-                    prefetchHeroImage(context, item.posterUrl, HERO_POSTER_PRELOAD_WIDTH)
-                    prefetchHeroImage(context, manualData.highResBackdrop, HERO_BACKDROP_PRELOAD_WIDTH)
-                    prefetchHeroImage(context, manualData.logoUrl, HERO_LOGO_PRELOAD_WIDTH)
-                    if (prev?.detail == null) tmdbFocusRevision++
-                    showTmdbDialog = false
-                },
-                onDismiss = { showTmdbDialog = false },
-            )
+                    .dismissListener {
+                        // 关窗（点卡片确认 / 返回键 / 取消）后统一复位：解除按键拦截 + 收起弹窗状态。
+                        isTmdbShowing = false
+                        showTmdbDialog = false
+                    }
+                tmdbMatchDialog = dialog
+                dialog.show()
+            }
         }
     }
 }

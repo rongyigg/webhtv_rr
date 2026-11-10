@@ -22,8 +22,6 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
-import androidx.compose.ui.platform.ComposeView
-import androidx.compose.ui.platform.ViewCompositionStrategy
 import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import androidx.lifecycle.ViewModelProvider
@@ -60,6 +58,7 @@ import com.fongmi.android.tv.setting.TmdbSitePolicy
 import com.fongmi.android.tv.ui.audio.AudioMiniPlayer
 import com.fongmi.android.tv.ui.custom.HeroImageView
 import com.fongmi.android.tv.ui.custom.ProgressLayout
+import com.fongmi.android.tv.ui.dialog.TmdbMatchViewDialog
 import com.fongmi.android.tv.ui.helper.TmdbMatcher
 import com.fongmi.android.tv.ui.hero.ChangeSourceDialog
 import com.fongmi.android.tv.ui.hero.HeroHorizontalGapDecoration
@@ -70,7 +69,6 @@ import com.fongmi.android.tv.ui.hero.HeroSourceEntry
 import com.fongmi.android.tv.ui.hero.HomePosterItem
 import com.fongmi.android.tv.ui.hero.SourceSidebar
 import com.fongmi.android.tv.ui.hero.SourceSidebarMode
-import com.fongmi.android.tv.ui.dialog.TmdbMatchViewHost
 import com.fongmi.android.tv.ui.hero.openHeroDetailOrFolder
 import com.fongmi.android.tv.utils.Notify
 import com.fongmi.android.tv.utils.Util
@@ -150,8 +148,21 @@ class HomeViewActivity : AppCompatActivity() {
     /** 长按阈值：写死 1000ms（防误触，不用系统 500ms 的默认长按时长）。 */
     private val posterLongPressMs = 1000L
 
-    /** TMDB 手动匹配弹窗的 Compose 宿主（0×0，只承载组合；窗口由弹窗自己开）。 */
-    private var tmdbMatchHost: ComposeView? = null
+    /**
+     * TMDB 手动匹配弹窗（纯 View）实例。
+     *
+     * 直接 `TmdbMatchViewDialog.create(this).show()`，不再经过 Compose 桥接；
+     * 保留引用只为在 [onDestroy] 里主动关窗，避免 WindowLeaked。
+     */
+    private var tmdbMatchDialog: TmdbMatchViewDialog? = null
+
+    /**
+     * TMDB 弹窗是否正在显示。
+     *
+     * [dispatchKeyEvent] 第一行据此吞掉**所有**按键，绝不允许焦点漏到底层海报列表：
+     * 呼出前置 true，弹窗 dismiss 回调里置 false。
+     */
+    private var isTmdbShowing = false
 
     /**
      * 横图同步兜底缓存：`posterKey → 已解析横图`。
@@ -345,7 +356,10 @@ class HomeViewActivity : AppCompatActivity() {
         recycler.removeCallbacks(longPressCenterRunnable)
         isKeyDown = false
         isLongPressTriggered = false
-        dismissTmdbMatchHost()
+        // 纯 View 弹窗随 Activity 一起收尾：先关窗再复位拦截标志，避免 WindowLeaked 与残留吞键。
+        tmdbMatchDialog?.dismiss()
+        tmdbMatchDialog = null
+        isTmdbShowing = false
         // 在途 TMDB 请求（焦点那条 + 整个滑动窗口）一起作废：Activity 已经没了，回调绝不能再去碰 View。
         tmdbRequestJob?.cancel()
         tmdbWindowJobs.values.forEach { it.cancel() }
@@ -1394,11 +1408,10 @@ class HomeViewActivity : AppCompatActivity() {
      * **短按只给确定键**：`KEYCODE_DPAD_DOWN` 的短按只吞事件，绝不跳详情。
      */
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
-        // 【TMDB 手动匹配弹窗 · 按键兜底】弹窗显示期间，按键只允许在弹窗内部流转。
-        // 弹窗自身已用 dialog.setOnKeyListener（照抄逆向 F()）吃掉绝大多数按键，
-        // 这里再兜一层，拦掉任何漏到 Activity 的事件，避免背后的首页海报跟着滚动 / 换焦点。
-        // 弹窗关闭时 dismissListener → dismissTmdbMatchHost() 会把该字段清空，不会长期误吞。
-        if (tmdbMatchHost != null) return true
+        // 【TMDB 手动匹配弹窗 · 终极防线】弹窗显示期间，所有按键一律吞掉。
+        // 弹窗自身已有 setOnKeyListener + DecorView 抢焦点，这里再兜第一行，
+        // 保证任何情况下都绝不让焦点漏到底层海报列表。
+        if (isTmdbShowing) return true
         // 【菜单键】呼出全局接口源侧边栏（与 Compose 首页小房子同一实现）。
         // DOWN 只认首次按下，避免按住时重复弹窗；UP 一并吞掉，防止落到默认菜单处理。
         if (event.keyCode == KeyEvent.KEYCODE_MENU) {
@@ -1573,41 +1586,31 @@ class HomeViewActivity : AppCompatActivity() {
     }
 
     /**
-     * 长按方向下键：TMDB 手动匹配（复用 Compose 首页那份 [TmdbMatchDialog]，不另写第二套）。
+     * 长按方向下键：TMDB 手动匹配。
      *
-     * 弹窗是 Compose 组件，这里用 0×0 的 [ComposeView] 挂在 Activity 的 content 上承载组合
-     * （与 `ChangeSourceDialog` 承载 `HeroPlayDialog` 的写法一致），真正的窗口由弹窗自己开。
+     * 直接开纯 View 弹窗（[TmdbMatchViewDialog]），不再经过 Compose 桥接：
+     * 没有 0×0 的 ComposeView、没有 setContent、没有额外的组合开销，
+     * 弹窗的布局 / 键盘 / 联想词 / 焦点流转全部由它自己那套 XML + Adapter 负责。
      */
     private fun showTmdbManualMatch(item: HomePosterItem) {
-        dismissTmdbMatchHost()
-        val host = ComposeView(this).apply {
-            setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
-            layoutParams = ViewGroup.LayoutParams(0, 0)
-        }
-        host.setContent {
-            TmdbMatchViewHost(
-                initialKeyword = item.title,
-                vod = item.vod,
-                onConfirm = { tmdbItem ->
-                    // 内存覆盖 → 磁盘落盘 → 卡片竖图 + Hero 重绘，全部由这一个函数一次做完。
-                    applyManualTmdbMatch(item, tmdbItem)
-                    dismissTmdbMatchHost()
-                },
-                onDismiss = {
-                    dismissTmdbMatchHost()
-                    recycler.post { focusPoster(focusedIndex) }
-                },
-            )
-        }
-        (findViewById<ViewGroup>(android.R.id.content))?.addView(host)
-        tmdbMatchHost = host
-    }
-
-    private fun dismissTmdbMatchHost() {
-        val host = tmdbMatchHost ?: return
-        tmdbMatchHost = null
-        (host.parent as? ViewGroup)?.removeView(host)
-        host.disposeComposition()
+        tmdbMatchDialog?.dismiss()
+        val dialog = TmdbMatchViewDialog.create(this)
+            .keyword(item.title)
+            .vod(item.vod)
+            .listener { tmdbItem ->
+                // 内存覆盖 → 磁盘落盘 → 卡片竖图 + Hero 重绘，全部由这一个函数一次做完。
+                applyManualTmdbMatch(item, tmdbItem)
+            }
+            .dismissListener {
+                // 关窗（点卡片确认 / 返回键 / 取消）后统一复位：解除按键拦截 + 焦点还给长按那张卡。
+                isTmdbShowing = false
+                tmdbMatchDialog = null
+                recycler.post { focusPoster(focusedIndex) }
+            }
+        tmdbMatchDialog = dialog
+        // 先置位再 show()：从窗口出现的第一帧起，Activity 的 dispatchKeyEvent 就全部吞掉。
+        isTmdbShowing = true
+        dialog.show()
     }
 
     /**
