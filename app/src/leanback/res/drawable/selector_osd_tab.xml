@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    选集面板顶部操作标签（少列 / 多列、正序 / 倒序）专用三态胶囊。
+    和 OSD 底部动作按钮的 selector_osd_action 分开，避免把「默认半透明胶囊」带到 OSD 控制栏上。
+
+    - 焦点：@drawable/bg_global_focus_capsule（实心红渐变胶囊，28dp 全圆角）
+    - 选中（无焦点）：@drawable/bg_global_selected_capsule_border（同形状细线红框胶囊）
+    - 默认（未选中且无焦点）：@color/white_20 半透明胶囊，圆角同样是 28dp
+
+    三态圆角完全一致，26dp 高的标签都被钳制成 13dp 圆角的胶囊，外形不会在状态切换时跳动。
+-->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <item
+        android:drawable="@drawable/bg_global_focus_capsule"
+        android:state_focused="true" />
+    <item
+        android:drawable="@drawable/bg_global_selected_capsule_border"
+        android:state_selected="true" />
+    <item>
+        <shape android:shape="rectangle">
+            <solid android:color="@color/white_20" />
+            <corners android:radius="28dp" />
+        </shape>
+    </item>
+</selector>

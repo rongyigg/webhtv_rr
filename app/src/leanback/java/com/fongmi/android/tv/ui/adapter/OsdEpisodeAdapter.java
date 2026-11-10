@@ -32,6 +32,9 @@ import java.util.List;
  */
 public class OsdEpisodeAdapter extends RecyclerView.Adapter<OsdEpisodeAdapter.ViewHolder> {
 
+    /** 卡片固定高度（dp）。死锁这个值，正在播放的卡片不会被 25dp 的均衡器图标撑高。 */
+    private static final int CARD_HEIGHT_DP = 32;
+
     private final OnClickListener listener;
     private final List<Episode> items = new ArrayList<>();
 
@@ -108,14 +111,30 @@ public class OsdEpisodeAdapter extends RecyclerView.Adapter<OsdEpisodeAdapter.Vi
     }
 
     /**
-     * 固定 14sp / 左右 12dp / 上下 6dp 内边距：卡片高度 wrap_content 由内容撑开，
-     * 14sp 文字 + 上下 6dp 自然落在 30dp-32dp，和逆向原版的行高一致，不做固定高度。
+     * 固定 14sp / 左右 12dp 内边距，卡片高度由 adapter_osd_episode.xml 死锁在 32dp。
+     * 上下内边距给 0：32dp 已经决定卡片外形，文字用 layout_gravity=center 居中，
+     * 均衡器图标（25dp）也能完整落在 32dp 内，既不会被裁掉，也不会反过来把卡片撑高。
      */
     private void applyDensity(@NonNull ViewHolder holder) {
         holder.binding.text.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f);
         int horizontal = ResUtil.dp2px(12);
-        int vertical = ResUtil.dp2px(6);
-        holder.itemView.setPadding(horizontal, vertical, horizontal, vertical);
+        holder.itemView.setPadding(horizontal, 0, horizontal, 0);
+        lockCardHeight(holder.itemView);
+    }
+
+    /**
+     * 卡片高度死锁：布局里已写死 32dp，这里再用 LayoutParams + minHeight 兜一层，
+     * 保证「正在播放」卡片显示 25dp 均衡器图标时不会变高，
+     * 也就不会把同一行的邻居一起拉高（GridLayoutManager 的行高 = 该行最高子项）。
+     */
+    private void lockCardHeight(@NonNull View itemView) {
+        int height = ResUtil.dp2px(CARD_HEIGHT_DP);
+        itemView.setMinimumHeight(height);
+        ViewGroup.LayoutParams params = itemView.getLayoutParams();
+        if (params != null && params.height != height) {
+            params.height = height;
+            itemView.setLayoutParams(params);
+        }
     }
 
     public interface OnClickListener {

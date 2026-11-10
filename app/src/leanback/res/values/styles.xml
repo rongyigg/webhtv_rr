@@ -190,15 +190,17 @@
 
     <!--
         选集面板顶部操作标签（少列 / 多列、正序 / 倒序）。
-        字号 14sp，与下方集数网格和分页标签同一档，且小于「播放线路 / 选集」标题的 15sp；保留加粗。
-        高度压到 26dp（原 34dp）：焦点实心红胶囊 / 选中红框都被钳制成 13dp 圆角的扁平长条，
-        不再圆滚滚；上下不留 padding，文字靠 gravity=center 居中。
+        字号 14sp 且不加粗（normal），与左侧「视频 / 4K 高码」的 OsdChip 同粗细，
+        也小于「播放线路 / 选集」标题的 15sp bold。
+        高度压到 26dp（原 34dp）：焦点实心红胶囊 / 选中红框 / 默认半透明胶囊
+        都被钳制成 13dp 圆角的扁平胶囊，三态同尺寸，不再圆滚滚。
+        背景用专属 selector_osd_tab，不复用 OSD 控制栏的 selector_osd_action。
     -->
     <style name="OsdTab">
         <item name="android:layout_width">wrap_content</item>
         <item name="android:layout_height">26dp</item>
         <item name="android:layout_marginStart">14dp</item>
-        <item name="android:background">@drawable/selector_osd_action</item>
+        <item name="android:background">@drawable/selector_osd_tab</item>
         <item name="android:focusable">true</item>
         <item name="android:focusableInTouchMode">true</item>
         <item name="android:gravity">center</item>
@@ -208,7 +210,7 @@
         <item name="android:singleLine">true</item>
         <item name="android:textColor">@color/white</item>
         <item name="android:textSize">14sp</item>
-        <item name="android:textStyle">bold</item>
+        <item name="android:textStyle">normal</item>
     </style>
 
 </resources>

@@ -3,7 +3,9 @@
     播放页底部选集卡片，结构参考 ref_docs/adapter_episode.xml。
     - 卡片：focusable 的 FrameLayout + @drawable/selector_osd_episode
       （焦点实心红 / 选中细线红框 / 普通半透明长条，圆角一律 4dp，绝不用胶囊）。
-    - 尺寸：高度 wrap_content（文字高度 + 上下各 6dp 内边距 ≈ 30dp），长条形；圆角 4dp。
+    - 尺寸：高度固定 32dp（高死锁），长条形；圆角 4dp。
+      固定高度是关键：正在播放的那张卡片会显示 25dp 高的均衡器图标，
+      如果高度是 wrap_content，图标会比 14sp 文字高，导致该卡片和整行邻居一起被撑高。
     - 字体：14sp（对齐 ref_docs/adapter_episode.xml 的 textSize），颜色走
       selector_osd_episode_text（普通 / 正在播放的失焦 / 焦点三态）。
     - 跑马灯：由 OsdEpisodeAdapter.applyMarquee 动态切换，只有焦点卡片开 MARQUEE，
@@ -16,7 +18,7 @@
     xmlns:app="http://schemas.android.com/apk/res-auto"
     xmlns:tools="http://schemas.android.com/tools"
     android:layout_width="match_parent"
-    android:layout_height="wrap_content"
+    android:layout_height="32dp"
     android:layout_marginEnd="8dp"
     android:layout_marginBottom="8dp"
     android:background="@drawable/selector_osd_episode"
