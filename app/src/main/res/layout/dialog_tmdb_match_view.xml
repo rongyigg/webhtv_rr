@@ -201,14 +201,19 @@
                     android:textSize="14sp"
                     android:visibility="gone" />
 
+                <!--
+                    防裁切：clipChildren / clipToPadding 都为 false，1.08 倍放大的海报不会被列表边界切掉；
+                    左侧 8dp paddingStart 给第一张卡片的放大留出余量（逆向 HorizontalGridView 也是 8 的倍数）。
+                -->
                 <androidx.recyclerview.widget.RecyclerView
                     android:id="@+id/candidate"
                     android:layout_width="match_parent"
                     android:layout_height="match_parent"
+                    android:clipChildren="false"
                     android:clipToPadding="false"
                     android:nextFocusUp="@+id/keyboard"
                     android:overScrollMode="never"
-                    android:paddingStart="2dp"
+                    android:paddingStart="8dp"
                     android:paddingTop="10dp"
                     android:paddingEnd="2dp" />
             </FrameLayout>

@@ -90,3 +90,20 @@
 
 第 3 轮验证：新增/修改 XML 解析通过；`selector_vod` 与 leanback 原件字节一致；`panel_dialog_solid` 已定义；
 `TmdbMatchViewDialog` 括号平衡；改动全部落在声明路径。
+
+## 第 4 轮：严格照抄 pc3.java（红框位置 / 8dp 间距 / 按键拦截）
+
+| 项 | 改动 | 位置 |
+|---|---|---|
+| 红框位置 | 根 `LinearLayout` 移走 `android:foreground`，改挂到 `@id/imageWrapper`（保留 `duplicateParentState="true"`）；红框只贴海报，不再框住标题 / 年份 | `adapter_tmdb_match_card.xml` |
+| 防裁切 | `candidate.setClipChildren(false)` + `setClipToPadding(false)`；XML 同步 `clipChildren="false"`，`paddingStart` 2dp → 8dp | `TmdbMatchViewDialog.setupCandidate()` / `dialog_tmdb_match_view.xml` |
+| 卡片间距 | `CandidateSpacing(dp(12))` → `dp(8)`，照抄逆向 `b0()` 的 `setHorizontalSpacing(g2.b(8))` | `TmdbMatchViewDialog.setupCandidate()` |
+| 放大动作 | 去掉 `animate().setDuration(120)`，改 `applyCardFocus()` 直接 `setScaleX/Y(1.08f)` + `setTranslationZ(5dp)`；`onChildViewAttachedToWindow` 补 `g0()` 的 `if (childAt.hasFocus())` 初始化 | `TmdbMatchViewDialog` |
+| 按键拦截 | `show()` 里 `dialog.setOnKeyListener(...)`（照抄逆向 `F()` 的 `new n40(this, 3)`）：返回键 / 方向键 / 确认键 / 音量键放行，其余按键一律吃掉 | `TmdbMatchViewDialog.show()` |
+| 按键兜底 | `dispatchKeyEvent` 顶部 `if (tmdbMatchHost != null) return true` | `HomeViewActivity.dispatchKeyEvent` |
+
+未移植项：`F()` 里的 `d0(0.82f)`（全屏 dim 0.82）与第 3 轮「弹窗外围不许变暗」红线冲突，dim 保持 0，只移植 `setOnKeyListener`。
+
+n40 说明：`n40` 在 R8 后没有独立类（`ref_docs` 无原件），按唯一可观测行为复刻；若无条件 `return true`，方向键会被一并吞掉，弹窗内键盘与候选卡片将完全无法操作，因此保留导航键放行。
+
+第 4 轮验证：两个 XML 解析通过；`foreground` 只出现在 `imageWrapper`；间距 8dp / `paddingStart` 8dp / 两个 `clip* = false` 均已就位；Java 括号平衡；改动全部落在声明路径。

@@ -158,6 +158,25 @@ public class TmdbMatchViewDialog {
             if (pendingSuggest != null) suggestHandler.removeCallbacks(pendingSuggest);
             if (dismissListener != null) dismissListener.onDismiss();
         });
+        // 严格照抄逆向 F()：super.F(); dialog.setOnKeyListener(new n40(this, 3));
+        //
+        // n40 在 R8 之后没有留下独立类，按它唯一可观测的行为复刻：弹窗显示期间，
+        // 凡是弹窗自己不需要的按键都在这里吃掉，绝不允许穿透到首页去滚动海报 / 换焦点；
+        // 返回键放行给 Dialog 关闭，方向键与确认键必须放行给弹窗内的焦点系统，
+        // 否则虚拟键盘和候选卡片会完全无法操作。
+        dialog.setOnKeyListener((d, keyCode, event) -> switch (keyCode) {
+            case KeyEvent.KEYCODE_BACK,
+                 KeyEvent.KEYCODE_DPAD_UP,
+                 KeyEvent.KEYCODE_DPAD_DOWN,
+                 KeyEvent.KEYCODE_DPAD_LEFT,
+                 KeyEvent.KEYCODE_DPAD_RIGHT,
+                 KeyEvent.KEYCODE_DPAD_CENTER,
+                 KeyEvent.KEYCODE_ENTER,
+                 KeyEvent.KEYCODE_VOLUME_UP,
+                 KeyEvent.KEYCODE_VOLUME_DOWN,
+                 KeyEvent.KEYCODE_VOLUME_MUTE -> false;
+            default -> true;
+        });
         dialog.show();
         configureWindow();
         setupSuggestions();
@@ -487,10 +506,12 @@ public class TmdbMatchViewDialog {
         candidateAdapter = new CandidateAdapter();
         candidate.setLayoutManager(new LinearLayoutManager(activity, RecyclerView.HORIZONTAL, false));
         candidate.setItemAnimator(null);
-        // 卡片间距 12dp：卡片 108dp + 间距 12dp = 每张占 120dp。
-        // 960dp 逻辑宽度下右侧可视区约 512dp → 4×120 = 480，正好完整显示 4 张，
-        // 第 5 张从 480dp 开始，只露出 32dp ≈ 三分之一张（卡片自带 4dp 内边距，视觉间隙实为 20dp）。
-        candidate.addItemDecoration(new CandidateSpacing(dp(12)));
+        // 防裁切：1.08 倍放大的海报允许画到列表边界之外，第一张不会被左边缘切掉。
+        candidate.setClipChildren(false);
+        candidate.setClipToPadding(false);
+        // 卡片间距严格 8dp —— 逆向 b0() 的 ((HorizontalGridView) v0.i).setHorizontalSpacing(g2.b(8))，
+        // 一格 = 卡片 108dp + 8dp，视觉缝隙再加上卡片自带的 4dp 内边距。
+        candidate.addItemDecoration(new CandidateSpacing(dp(8)));
         candidate.setAdapter(candidateAdapter);
         // 严格照抄逆向 g0()：每张海报卡片的左焦点固定回放大镜按钮。
         candidate.addOnChildAttachStateChangeListener(new RecyclerView.OnChildAttachStateChangeListener() {
@@ -498,12 +519,24 @@ public class TmdbMatchViewDialog {
             @Override
             public void onChildViewAttachedToWindow(@NonNull View view) {
                 view.setNextFocusLeftId(R.id.searchBtn);
+                // g0() 最后那段：挂完监听后，若这张卡片已经持有焦点，立刻补一次放大。
+                if (view.hasFocus()) applyCardFocus(view, true);
             }
 
             @Override
             public void onChildViewDetachedFromWindow(@NonNull View view) {
             }
         });
+    }
+
+    /**
+     * 逆向 {@code g0()} 的放大动作：{@code setScaleX(1.08f)} / {@code setScaleY(1.08f)} /
+     * {@code setTranslationZ(5.0f)}，不走动画插值，聚焦与失焦在同一帧内直接生效。
+     */
+    private void applyCardFocus(View view, boolean hasFocus) {
+        view.setScaleX(hasFocus ? 1.08f : 1f);
+        view.setScaleY(hasFocus ? 1.08f : 1f);
+        view.setTranslationZ(hasFocus ? dp(RESULT_CARD_SCALE_DP) : 0f);
     }
 
     private void focusFirstResult() {
@@ -692,14 +725,9 @@ public class TmdbMatchViewDialog {
                     if (listener != null) listener.onItemClick(results.get(position));
                     dismiss();
                 });
-                itemView.setOnFocusChangeListener((view, hasFocus) -> {
-                    view.animate()
-                            .scaleX(hasFocus ? 1.08f : 1f)
-                            .scaleY(hasFocus ? 1.08f : 1f)
-                            .translationZ(hasFocus ? dp(RESULT_CARD_SCALE_DP) : 0)
-                            .setDuration(120)
-                            .start();
-                });
+                // 严格照抄逆向 g0()：childAt.setOnFocusChangeListener(this.D0)，
+                // D0 里就是 hasFocus 时 1.08 倍 + Z 轴抬升，失焦复位；没有动画插值。
+                itemView.setOnFocusChangeListener((view, hasFocus) -> applyCardFocus(view, hasFocus));
             }
         }
     }
@@ -722,8 +750,8 @@ public class TmdbMatchViewDialog {
     }
 
     /**
-     * 右侧海报列表的卡片间距：只在每张卡片右边留 {@code space}，最后一张不留，
-     * 这样 4 张完整卡片 + 第 5 张露边的手感完全由固定步长决定，不会随最后一张多出一截空白。
+     * 右侧海报列表的卡片间距：照抄逆向 {@code setHorizontalSpacing(g2.b(8))}，每张卡片右边留
+     * {@code space}，最后一张不留，避免列表尾部多出一截空白。
      */
     private static class CandidateSpacing extends RecyclerView.ItemDecoration {
 

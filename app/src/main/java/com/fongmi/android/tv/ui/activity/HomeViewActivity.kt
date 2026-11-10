@@ -1394,6 +1394,11 @@ class HomeViewActivity : AppCompatActivity() {
      * **短按只给确定键**：`KEYCODE_DPAD_DOWN` 的短按只吞事件，绝不跳详情。
      */
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        // 【TMDB 手动匹配弹窗 · 按键兜底】弹窗显示期间，按键只允许在弹窗内部流转。
+        // 弹窗自身已用 dialog.setOnKeyListener（照抄逆向 F()）吃掉绝大多数按键，
+        // 这里再兜一层，拦掉任何漏到 Activity 的事件，避免背后的首页海报跟着滚动 / 换焦点。
+        // 弹窗关闭时 dismissListener → dismissTmdbMatchHost() 会把该字段清空，不会长期误吞。
+        if (tmdbMatchHost != null) return true
         // 【菜单键】呼出全局接口源侧边栏（与 Compose 首页小房子同一实现）。
         // DOWN 只认首次按下，避免按住时重复弹窗；UP 一并吞掉，防止落到默认菜单处理。
         if (event.keyCode == KeyEvent.KEYCODE_MENU) {

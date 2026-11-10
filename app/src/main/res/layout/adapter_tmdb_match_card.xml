@@ -1,12 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
     手动 TMDB 匹配弹窗：右侧海报卡片。
-    108dp 宽 + 间距 12dp = 每张占 120dp；右侧可视区约 512dp，
-    4 张刚好占满 480dp，第 5 张露出 32dp ≈ 三分之一张（卡片自带 4dp 内边距，视觉间隙 20dp）。
 
-    焦点框直接复用首页海报卡片的 @drawable/selector_vod（= leanback adapter_vod.xml 的 foreground，
-    1.5dp @color/osd_focus + 8dp 圆角），不自己画细线红框；selector 只有 state_focused 一项，
-    未聚焦时不绘制任何东西，因此不会给卡片加额外边框；1.08 缩放动画在 itemView 上，foreground 跟着一起缩放。
+    焦点红框严格贴在 @id/imageWrapper（海报本身）上，**不覆盖也不框住标题 / 年份两行文字**：
+      - 根 LinearLayout 不再挂任何 foreground；
+      - imageWrapper 用 android:duplicateParentState="true" 复刻父容器的 focused 状态，
+        因此它自己拿到 state_focused 就能着色，无需 focusable；
+      - 红框资源直接复用首页 View 海报卡的 @drawable/selector_vod
+        （leanback adapter_vod.xml 的 foreground = 1.5dp @color/osd_focus + 8dp 圆角）。
+
+    尺寸照旧：108dp 宽卡片 + 8dp 间距（逆向 b0() 的 setHorizontalSpacing(g2.b(8))），
+    海报 100x150，卡片自带 4dp 内边距，放大到 1.08 倍时由 candidate 关闭裁剪承接。
 -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
@@ -19,7 +23,6 @@
     android:defaultFocusHighlightEnabled="false"
     android:focusable="true"
     android:focusableInTouchMode="true"
-    android:foreground="@drawable/selector_vod"
     android:gravity="center_horizontal"
     android:nextFocusUp="@id/keyboard"
     android:orientation="vertical"
@@ -32,7 +35,8 @@
         android:layout_height="150dp"
         android:clipChildren="false"
         android:clipToPadding="false"
-        android:duplicateParentState="true">
+        android:duplicateParentState="true"
+        android:foreground="@drawable/selector_vod">
 
         <com.google.android.material.imageview.ShapeableImageView
             android:id="@+id/image"
