@@ -191,11 +191,12 @@ public class TmdbMatchViewDialog {
         Window window = dialog.getWindow();
         if (window == null) return;
         window.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
-        // 遮罩从 0.82 降到 0.55：背后播放页/首页画面透出来，不再是死黑一块。
-        window.setDimAmount(0.55f);
+        // 弹窗外围保持原样明亮：彻底关掉全屏遮罩 —— 不透明度归零，并移除 DIM_BEHIND。
+        // 弹窗自身的可读性由 @drawable/shape_tmdb_match_shell（#F2222222）负责垫底。
+        window.setDimAmount(0f);
+        window.clearFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND);
         // 虚拟键盘由页面自己实现，窗口必须屏蔽系统输入法。
         window.addFlags(WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM);
-        window.addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND);
         window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_HIDDEN);
         DisplayMetrics metrics = activity.getResources().getDisplayMetrics();
         int preferred = Math.round(metrics.widthPixels * 0.82f);
@@ -486,6 +487,10 @@ public class TmdbMatchViewDialog {
         candidateAdapter = new CandidateAdapter();
         candidate.setLayoutManager(new LinearLayoutManager(activity, RecyclerView.HORIZONTAL, false));
         candidate.setItemAnimator(null);
+        // 卡片间距 12dp：卡片 108dp + 间距 12dp = 每张占 120dp。
+        // 960dp 逻辑宽度下右侧可视区约 512dp → 4×120 = 480，正好完整显示 4 张，
+        // 第 5 张从 480dp 开始，只露出 32dp ≈ 三分之一张（卡片自带 4dp 内边距，视觉间隙实为 20dp）。
+        candidate.addItemDecoration(new CandidateSpacing(dp(12)));
         candidate.setAdapter(candidateAdapter);
         // 严格照抄逆向 g0()：每张海报卡片的左焦点固定回放大镜按钮。
         candidate.addOnChildAttachStateChangeListener(new RecyclerView.OnChildAttachStateChangeListener() {
@@ -713,6 +718,26 @@ public class TmdbMatchViewDialog {
             RecyclerView.LayoutParams params = (RecyclerView.LayoutParams) view.getLayoutParams();
             int column = params instanceof GridLayoutManager.LayoutParams grid ? grid.getSpanIndex() : 0;
             outRect.set(0, 0, column == SEARCH_COLUMNS - 1 ? 0 : space, space);
+        }
+    }
+
+    /**
+     * 右侧海报列表的卡片间距：只在每张卡片右边留 {@code space}，最后一张不留，
+     * 这样 4 张完整卡片 + 第 5 张露边的手感完全由固定步长决定，不会随最后一张多出一截空白。
+     */
+    private static class CandidateSpacing extends RecyclerView.ItemDecoration {
+
+        private final int space;
+
+        CandidateSpacing(int space) {
+            this.space = space;
+        }
+
+        @Override
+        public void getItemOffsets(@NonNull Rect outRect, @NonNull View view, @NonNull RecyclerView parent, @NonNull RecyclerView.State state) {
+            int position = parent.getChildAdapterPosition(view);
+            int last = state.getItemCount() - 1;
+            outRect.set(0, 0, position == last ? 0 : space, 0);
         }
     }
 }

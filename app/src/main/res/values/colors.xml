@@ -109,4 +109,6 @@
     <color name="panel_scrim_end">#E6000000</color>
     <!-- 底部面板（选集 / 轨道）的半透明深灰底：视频纯黑时面板也要能看出边界，同时不完全遮挡画面。 -->
     <color name="panel_scrim_base">#CC222222</color>
+    <!-- 手动 TMDB 匹配弹窗底色：去掉全屏遮罩后，靠这层 95% 深灰把弹窗自己“垫”起来 -->
+    <color name="panel_dialog_solid">#F2222222</color>
 </resources>

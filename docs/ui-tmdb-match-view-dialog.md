@@ -75,3 +75,18 @@
 
 第 2 轮验证：新增/修改 XML 全部 `System.Xml` 解析通过；三个 selector 焦点项均指向全局 drawable；
 被删的三个 shape 无任何残留引用；`TmdbMatchViewDialog` / `TmdbKeyboardAdapter` 括号平衡。
+
+## 第 3 轮：最终视觉定稿
+
+| 项 | 改动 | 位置 |
+|---|---|---|
+| 去遮罩 | `setDimAmount(0.55f)` → `0f` + `clearFlags(FLAG_DIM_BEHIND)`，弹窗外围（顶栏 / 背景海报）零压暗 | `TmdbMatchViewDialog.configureWindow()` |
+| 弹窗垫底 | 外壳底色 `@color/panel_scrim_end`（#E6000000）→ 新增 `@color/panel_dialog_solid` **#F2222222**，95% 深灰、12dp 圆角 | `shape_tmdb_match_shell.xml` / `values/colors.xml` |
+| 卡片间距 | 新增 `CandidateSpacing` ItemDecoration：右边距 12dp、最后一张不留；卡片 110dp → 108dp（海报 102×153 → 100×150） | `TmdbMatchViewDialog.setupCandidate()` / `adapter_tmdb_match_card.xml` |
+| 密度算账 | 960dp 逻辑宽 → 弹窗 787dp → 右侧可视 512dp；4×(108+12)=480 完整 4 张，第 5 张起点 480、露出 32dp ≈ 1/3 张 | 同上 |
+| 焦点框 | 卡片根布局 `android:foreground="@drawable/selector_vod"`（首页 leanback 海报卡的同一资源，1.5dp `@color/osd_focus` + 8dp 圆角）；未聚焦不绘制；1.08 缩放动画不变 | `adapter_tmdb_match_card.xml` + main 复制 `selector_vod.xml` / `shape_vod_focused.xml` |
+
+不动项（红线 3）：键盘适配器（含二维码键、`selector_tmdb_key`）、联想词去抖与 `SearchSuggest` 拉取、`dispatchKey()` 跨区拦截、`setNextFocusLeftId(R.id.searchBtn)`、`nextFocusUp/Down` 全部未改。
+
+第 3 轮验证：新增/修改 XML 解析通过；`selector_vod` 与 leanback 原件字节一致；`panel_dialog_solid` 已定义；
+`TmdbMatchViewDialog` 括号平衡；改动全部落在声明路径。

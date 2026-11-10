@@ -1,13 +1,17 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-    手动 TMDB 匹配弹窗：右侧海报卡片（照抄逆向 adapter_tmdb_match.xml）。
-    110dp 宽、102x153 海报、12sp 标题、10sp 副标题；焦点态由 TmdbMatchViewDialog 做 1.08 缩放 + translationZ，
-    与逆向 g0() 完全一致，因此这里不写 selector 背景（避免圆角框和外框叠加跳形）。
+    手动 TMDB 匹配弹窗：右侧海报卡片。
+    108dp 宽 + 间距 12dp = 每张占 120dp；右侧可视区约 512dp，
+    4 张刚好占满 480dp，第 5 张露出 32dp ≈ 三分之一张（卡片自带 4dp 内边距，视觉间隙 20dp）。
+
+    焦点框直接复用首页海报卡片的 @drawable/selector_vod（= leanback adapter_vod.xml 的 foreground，
+    1.5dp @color/osd_focus + 8dp 圆角），不自己画细线红框；selector 只有 state_focused 一项，
+    未聚焦时不绘制任何东西，因此不会给卡片加额外边框；1.08 缩放动画在 itemView 上，foreground 跟着一起缩放。
 -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     xmlns:tools="http://schemas.android.com/tools"
-    android:layout_width="110dp"
+    android:layout_width="108dp"
     android:layout_height="wrap_content"
     android:background="@null"
     android:clipChildren="false"
@@ -15,6 +19,7 @@
     android:defaultFocusHighlightEnabled="false"
     android:focusable="true"
     android:focusableInTouchMode="true"
+    android:foreground="@drawable/selector_vod"
     android:gravity="center_horizontal"
     android:nextFocusUp="@id/keyboard"
     android:orientation="vertical"
@@ -23,8 +28,8 @@
 
     <FrameLayout
         android:id="@+id/imageWrapper"
-        android:layout_width="102dp"
-        android:layout_height="153dp"
+        android:layout_width="100dp"
+        android:layout_height="150dp"
         android:clipChildren="false"
         android:clipToPadding="false"
         android:duplicateParentState="true">

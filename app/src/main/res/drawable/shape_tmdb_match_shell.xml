@@ -1,7 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 手动 TMDB 匹配弹窗：整体深色圆角外壳（窗口背景设为透明，由这张图承担） -->
+<!--
+    手动 TMDB 匹配弹窗外壳。
+    去掉全屏遮罩后，弹窗必须自己“垫”起来：底色从 90% 黑（@color/panel_scrim_end）
+    换成 95% 的深灰 @color/panel_dialog_solid（#F2222222），
+    既保证白字 / 金色海报标题的对比度，又不会像纯黑那样和背景糊成一块。
+-->
 <shape xmlns:android="http://schemas.android.com/apk/res/android"
     android:shape="rectangle">
-    <solid android:color="@color/panel_scrim_end" />
+
+    <solid android:color="@color/panel_dialog_solid" />
+
     <corners android:radius="12dp" />
 </shape>
