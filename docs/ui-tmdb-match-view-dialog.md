@@ -162,3 +162,67 @@ n40 说明：`n40` 在 R8 后没有独立类（`ref_docs` 无原件），按唯�
 - `HistoryActivity`（leanback + mobile）仍是 flavor 首页 `HomeActivity` 与 mobile `VodFragment` 的历史页；`HomeActivity` 又被 `VideoActivity` / `LiveActivity` / `TmdbDetailActivity` 的 `isTaskRoot()` 回退分支启动，仍然可达。`HistoryViewActivity` 只接管了 `HomeViewActivity` 这条入口。
 
 第 7 轮验证：两个 XML `[xml]` 解析通过；`HomeViewActivity` 花括号 306/306、圆括号 1056/1056；`TmdbMatchViewDialog` 花括号 154/154、圆括号 609/609；`"KeyTest"` 字符串零残留；主清单无 `HeroHomeActivity`；未编译（按用户要求只出 diff）。
+
+## 第 8 轮：新旧 Dialog 的 Window 配置逐行对比 + `addView` 前定稿 + 三层焦点日志
+
+### ① 旧 Compose 版 `TmdbMatchDialog` 到底配了什么
+
+结论：**它自己什么都没配。** 除 `usePlatformDefaultWidth = false` 外没有任何 Window / Flag 代码，全部来自 Compose UI 的 `DialogWrapper`。
+
+| 证据 | 位置 |
+|---|---|
+| `Dialog(onDismissRequest = ..., properties = DialogProperties(usePlatformDefaultWidth = false))` | `edf413c68^:app/src/main/java/com/fongmi/android/tv/ui/hero/TmdbMatchDialog.kt:290-292` |
+| `window.requestFeature(FEATURE_NO_TITLE)`、`setBackgroundDrawableResource(android.R.color.transparent)`、`WindowCompat.setDecorFitsSystemWindows(window, true)`、`window.setGravity(Gravity.CENTER)` | `androidx.compose.ui:ui-android:1.10.4` → `androidMain/androidx/compose/ui/window/AndroidDialog.android.kt:496-506` |
+| `window.setSoftInputMode(SOFT_INPUT_ADJUST_UNSPECIFIED)`（`decorFitsSystemWindows=true` 分支） | 同上 `:638-646` |
+| 主题 `R.style.DialogWindowTheme` 的定义只有 `<item name="android:windowClipToOutline">false</item>`（无 parent、无 `windowIsFloating`、无 dim） | `ui-android-1.10.4.aar!/res/values/values.xml` |
+| 全文没有 `FLAG_NOT_FOCUSABLE`、`FLAG_ALT_FOCUSABLE_IM`、`TYPE_APPLICATION_OVERLAY`、`setDimAmount` | 同上（整份文件 grep 无命中） |
+| 焦点是"下一帧再抢"，不是靠 Flag：`LaunchedEffect(Unit) { withFrameNanos { }; requestFocus(inputRequester); ... }` | `TmdbMatchDialog.kt:280-284` |
+
+也就是说：旧弹窗之所以能拦按键，靠的是 **① 全屏非浮动窗口（`windowIsFloating` 未设 → false）+ ② 所有窗口属性在 `show()` 前一次性带上去 + ③ 过一帧后由弹窗内真实可聚焦子节点抢焦点**。
+
+### ② 逐行对比
+
+| 配置点 | 旧 Compose（生效值） | 新 View（本轮前） | 新 View（本轮后） |
+|---|---|---|---|
+| Dialog 主题 | Compose `DialogWindowTheme`（仅 `windowClipToOutline=false`） | `Theme_WebHTV_LightDialog`（parent `Theme.Material3.Light.Dialog.Alert`） | 不变 |
+| `windowIsFloating` | false（主题未声明） | true（Material Alert 默认） | 不变（未改主题，避免动内部版式） |
+| `FEATURE_NO_TITLE` | 显式 `requestFeature` | AlertDialog 自带 | 不变 |
+| 背景 | `android.R.color.transparent` | `ColorDrawable(Color.TRANSPARENT)` | 不变 |
+| 调暗 | 无 dim | `setDimAmount(0f)` + `clearFlags(FLAG_DIM_BEHIND)` | 不变 |
+| `FLAG_NOT_FOCUSABLE` | 从未出现 | `clearFlags`（**`show()` 之后**） | `configureWindow()` 提前到 `show()` **之前**，进入时即无该位 |
+| `FLAG_NOT_TOUCH_MODAL` | 从未出现 | `clearFlags`（show 之后） | 同上，提前 |
+| `FLAG_ALT_FOCUSABLE_IM` | 无 | 设置 | 保留（用户要求；语义只是"不要输入法、仍要按键焦点"） |
+| `softInputMode` | `ADJUST_UNSPECIFIED` | `STATE_ALWAYS_HIDDEN` | `STATE_ALWAYS_HIDDEN \| ADJUST_NOTHING`（不许 IME 触发 relayout） |
+| `gravity` | `CENTER`（Compose 显式） | 主题默认 | 显式 `Gravity.CENTER` |
+| 宽度 | 内容 `fillMaxWidth(0.82)` | `setLayout(0.82w, wrap)`（show 之后） | `setLayout` 提前到 `show()` 之前 |
+| 焦点请求 | 一帧后 `requestFocus(真实子 View)` | `decorView.requestFocus()` + `keyword.post{}` | 相同 + 100ms 二次抢焦 + 三层日志 |
+| 窗口类型 | `TYPE_APPLICATION`（默认） | `TYPE_APPLICATION`（默认） | 不变；**不引入** `TYPE_APPLICATION_OVERLAY`（旧版没有，且需要 `SYSTEM_ALERT_WINDOW`、会脱离 Activity token 并破坏 IME 目标） |
+
+### ③ 为什么旧版拿得到焦点、新版报 `no window has focus`
+
+1. `Dialog.dispatchKeyEvent()` 先查 `mOnKeyListener`（即 `setOnKeyListener` 那段），再走 `mWindow.superDispatchKeyEvent`。所以"按下就吞"能生效的前提只有一个：**按键被投递到 Dialog 的窗口**。
+2. `ViewRootImpl` 在 `decorView.hasWindowFocus() == false` 时直接丢弃按键 —— 系统日志里的 `no window has focus` 就是这条。而窗口焦点是 WMS 在 `addView`（`show()`）那一刻依据 `WindowManager.LayoutParams` 决定的；`show()` 之后再 `clearFlags` 只会产生一次 `updateViewLayout`，**不保证重新授焦**。
+3. 旧版：全屏非浮动窗口 + 属性在 `show()` 前定稿 + 一帧后真实子 View 抢焦点 → 窗口一次就拿到焦点，`n40` 必然收到按键。
+4. 新版（本轮前）：Material **浮动**窗口，先以主题默认属性 `addView`，随后 `setLayout` / `clearFlags` / `setSoftInputMode` 连续改写触发多次 relayout；同时 `DecorView` 在被设为 `focusableInTouchMode` 之前 `requestFocus()` 直接返回 false，弹窗窗口内一个 View 都没持焦点。
+5. 于是 Activity 窗口一直是 focused window：`HomeViewActivity.dispatchKeyEvent` 能带着 `isTmdbShowing=true` 继续打印，而弹窗的 `ViewRootImpl` 侧留下 `no window has focus` —— 与观察到的现象完全吻合。
+
+### 本轮改动
+
+| 项 | 改动 | 位置 |
+|---|---|---|
+| 属性定稿时机 | `configureWindow()` 从 `show()` 之后移到之前，窗口以最终属性 `addView` | `TmdbMatchViewDialog.show()` |
+| 软键盘 | `STATE_ALWAYS_HIDDEN \| ADJUST_NOTHING`，输入法状态变化不再 relayout | `configureWindow()` |
+| 居中 | 显式 `window.setGravity(Gravity.CENTER)`（照抄 Compose） | `configureWindow()` |
+| 日志 1 | `DialogTest: show: flags=0x...`（`0x8` 必须没有、`0x20000` 应有） | `show()` |
+| 日志 2 | `DialogTest: Dialog received: <key> action=<n>`（出现在 `Dialog` 级 `setOnKeyListener`） | `show()` |
+| 日志 3 | `DialogTest: refocus: windowFocused=? focused=? keywordRequestFocus=? keywordHasFocus=?`（100ms 后） | `scheduleRefocus()` |
+
+### 判定方法（下一轮真机一次运行即可定性）
+
+- 只有 `show: flags`、没有 `Dialog received` → 按键仍投递在 Activity 窗口：`windowFocused=false` 时是 WMS/窗口层问题（下一步改主题为全屏非浮动，照抄 `DialogWindowTheme`）；`windowFocused=true` 但 `focused=null` 是视图层问题（让 `keyboard` 首键或根布局先持焦点）。
+- `Dialog received` 出现但方向键仍漏到底层 → 是 `Dialog` 级 listener 的返回值问题，不再是焦点问题。
+- 日志定位完成后应整体删除（`git show` 可随时取回），避免长期占用 logcat。
+
+### 第 8 轮验证
+
+`TmdbMatchViewDialog.java` 花括号 154/154、圆括号 622/622；`import android.view.Gravity` 与 `Log` 均被使用；`DialogTest` 日志 3 处；`configureWindow()` 调用点（idx 8452）在 `dialog.show()`（idx 8479）之前；未编译（按用户要求只出 diff）。

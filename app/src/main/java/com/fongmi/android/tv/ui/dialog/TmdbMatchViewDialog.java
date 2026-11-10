@@ -11,6 +11,7 @@ import android.text.TextUtils;
 import android.text.TextWatcher;
 import android.util.DisplayMetrics;
 import android.util.Log;
+import android.view.Gravity;
 import android.view.KeyEvent;
 import android.view.LayoutInflater;
 import android.view.View;
@@ -178,6 +179,10 @@ public class TmdbMatchViewDialog {
         // 返回键放行给 Dialog 关闭，方向键与确认键必须放行给弹窗内的焦点系统，
         // 否则虚拟键盘和候选卡片会完全无法操作。
         dialog.setOnKeyListener((d, keyCode, event) -> {
+            // 判定性日志：出现 = 按键确实进到 Dialog 的窗口（焦点在弹窗这边）；
+            // 不出现 = 按键还留在下面的 HomeViewActivity 窗口（焦点没交给弹窗）。
+            Log.d("DialogTest", "Dialog received: " + keyCode
+                    + " action=" + (event == null ? -1 : event.getAction()));
             // 返回键：照抄 n40 的"关窗并吞掉"，不再依赖 Dialog.onKeyDown 的默认分支。
             // 抬键才关（与系统行为一致），按下 / 抬起都返回 true，保证没有任何一帧漏到底层。
             if (keyCode == KeyEvent.KEYCODE_BACK) {
@@ -199,8 +204,12 @@ public class TmdbMatchViewDialog {
             default -> true;
             };
         });
-        dialog.show();
+        // 【属性必须在 addView 之前定稿】Window 的 flags / softInputMode / 尺寸 / gravity 是在
+        // WindowManager.addView()（即 show()）那一刻被 WMS 读取并据此决定输入焦点的；
+        // show() 之后再 clearFlags 只会触发一次 updateViewLayout，焦点/输入法目标已经定过，不可靠。
+        // 旧版 Compose Dialog 同样是"窗口属性在 show 之前就绪"（见 docs 里的逐行对比表）。
         configureWindow();
+        dialog.show();
         // 【强制夺焦】日志已证实 isTmdbShowing=true 时系统仍报 no window has focus：
         // 说明事件还落在 Activity 窗口上，弹窗自己的窗口没抢到焦点。
         // 这里在 show() 之后立刻再清一次 FLAG_NOT_FOCUSABLE，把 DecorView 设为可触摸聚焦并 requestFocus()。
@@ -209,6 +218,8 @@ public class TmdbMatchViewDialog {
             window.clearFlags(WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE);
             window.getDecorView().setFocusableInTouchMode(true);
             window.getDecorView().requestFocus();
+            // 0x8 = FLAG_NOT_FOCUSABLE（必须没有）；0x20000 = FLAG_ALT_FOCUSABLE_IM（应有）。
+            Log.d("DialogTest", "show: flags=0x" + Integer.toHexString(window.getAttributes().flags));
         }
         // 【延迟二次抢焦】show() 的窗口 attach 与首次焦点申请在下一帧 traversal 才完成，
         // 这期间可能被系统窗口 / 输入法抢走；100ms 后再各要一次（DecorView + 输入框）。
@@ -237,10 +248,18 @@ public class TmdbMatchViewDialog {
             if (dialog == null || !dialog.isShowing()) return;
             Window window = dialog.getWindow();
             if (window == null) return;
-            window.clearFlags(WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE);
-            window.getDecorView().setFocusableInTouchMode(true);
-            window.getDecorView().requestFocus();
-            if (keyword != null) keyword.requestFocus();
+            View decor = window.getDecorView();
+            decor.setFocusableInTouchMode(true);
+            decor.requestFocus();
+            boolean keywordRequested = keyword != null && keyword.requestFocus();
+            // 三层分离，一次运行就能定性：
+            // windowFocused=false          -> 窗口层就没拿到焦点（WMS / 系统窗口 / 输入法问题）
+            // windowFocused=true, focused=null -> 窗口有焦点但内部没有 View 持焦点（按键会被丢）
+            // keywordHasFocus=true         -> 完全正常，Dialog 自己的 onKey 一定会收到按键
+            Log.d("DialogTest", "refocus: windowFocused=" + decor.hasWindowFocus()
+                    + " focused=" + decor.findFocus()
+                    + " keywordRequestFocus=" + keywordRequested
+                    + " keywordHasFocus=" + (keyword != null && keyword.hasFocus()));
         };
         uiHandler.postDelayed(pendingRefocus, REFOCUS_DELAY_MS);
     }
@@ -322,7 +341,13 @@ public class TmdbMatchViewDialog {
                 | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL);
         window.setFlags(WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM,
                 WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM);
-        window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_HIDDEN);
+        // SOFT_INPUT_ADJUST_NOTHING：输入法状态变化时不要重新 relayout 本窗口，
+        // 否则 addView 之后的一次 relayout 会把刚拿到的焦点丢掉（Compose 在 S+ 上也是 ADJUST_NOTHING）。
+        window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_HIDDEN
+                | WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING);
+        // 旧版 Compose DialogWrapper 固定 window.setGravity(Gravity.CENTER)，
+        // 这里显式写死，避免不同 ROM / 主题的默认 gravity 差异。
+        window.setGravity(Gravity.CENTER);
         DisplayMetrics metrics = activity.getResources().getDisplayMetrics();
         int preferred = Math.round(metrics.widthPixels * 0.82f);
         int available = Math.max(1, metrics.widthPixels - dp(48));
