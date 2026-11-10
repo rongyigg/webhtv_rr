@@ -1253,6 +1253,24 @@ public class Setting {
         Prefers.put("tmdb_episode_grid_mode", gridMode);
     }
 
+    /** 选集面板上次的列数：false = 8 列 24 集/页，true = 2 列 6 集/页。 */
+    public static boolean isOsdFewColumns() {
+        return Prefers.getBoolean("osd_few_columns", false);
+    }
+
+    public static void putOsdFewColumns(boolean fewColumns) {
+        Prefers.put("osd_few_columns", fewColumns);
+    }
+
+    /** 选集面板上次的排序：true = 倒序（从最后一集开始）。 */
+    public static boolean isOsdRevSort() {
+        return Prefers.getBoolean("osd_rev_sort", false);
+    }
+
+    public static void putOsdRevSort(boolean revSort) {
+        Prefers.put("osd_rev_sort", revSort);
+    }
+
     public static boolean isTmdbEpisodeFileSize() {
         return Prefers.getBoolean("tmdb_episode_file_size", false);
     }

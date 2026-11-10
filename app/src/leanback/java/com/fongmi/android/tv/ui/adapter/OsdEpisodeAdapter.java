@@ -1,5 +1,6 @@
 package com.fongmi.android.tv.ui.adapter;
 
+import android.text.TextUtils;
 import android.util.TypedValue;
 import android.view.LayoutInflater;
 import android.view.View;
@@ -22,6 +23,7 @@ import java.util.List;
  * 标题复用选集按钮的构造 {@link EpisodeAdapter#getNativeTitle(Episode)}。
  * 只有当前正在播放的 {@link Episode#isSelected()} 才把 {@code @raw/equalizer} 置为 VISIBLE 并播放，
  * 其余一律 GONE 且停止动画。
+ * 跑马灯只在获得焦点的卡片上开：同屏多张卡片同时滚动会白耗渲染资源。
  */
 public class OsdEpisodeAdapter extends RecyclerView.Adapter<OsdEpisodeAdapter.ViewHolder> {
 
@@ -73,15 +75,15 @@ public class OsdEpisodeAdapter extends RecyclerView.Adapter<OsdEpisodeAdapter.Vi
     public void onBindViewHolder(@NonNull ViewHolder holder, int position) {
         Episode item = items.get(position);
         holder.binding.text.setText(EpisodeAdapter.getNativeTitle(item));
-        // 文字只在获得焦点时跑马灯，卡片自身用 itemView 的焦点态背景。
-        holder.binding.text.setSelected(holder.itemView.hasFocus());
         applyDensity(holder);
         applySelected(holder, item.isSelected());
+        // rebind 后按当前焦点状态恢复跑马灯，避免卡片被回收重建后滚动停住。
+        applyMarquee(holder, holder.itemView.hasFocus());
         holder.itemView.setOnClickListener(view -> listener.onItemClick(item));
         // 逆向 App 的行为：焦点一落到某一集就立刻切过去，不用再按确定键。
         // 这里只回调、不重建列表，焦点才能继续沿方向键移动。
         holder.itemView.setOnFocusChangeListener((view, hasFocus) -> {
-            holder.binding.text.setSelected(hasFocus);
+            applyMarquee(holder, hasFocus);
             if (hasFocus && !item.isSelected()) listener.onFocus(item);
         });
     }
@@ -91,6 +93,16 @@ public class OsdEpisodeAdapter extends RecyclerView.Adapter<OsdEpisodeAdapter.Vi
         super.onViewRecycled(holder);
         holder.binding.lottie.cancelAnimation();
         holder.binding.lottie.setVisibility(View.GONE);
+    }
+
+    /**
+     * 动态跑马灯：只有 hasFocus == true 才切 MARQUEE + setSelected(true)，
+     * 失焦立刻回到 END + setSelected(false)，保证同一时刻只有一张卡片在滚。
+     * 卡片自身状态用 itemView 的 activated/focused 背景，这里的 selected 只作用于文字。
+     */
+    private void applyMarquee(@NonNull ViewHolder holder, boolean focused) {
+        holder.binding.text.setEllipsize(focused ? TextUtils.TruncateAt.MARQUEE : TextUtils.TruncateAt.END);
+        holder.binding.text.setSelected(focused);
     }
 
     private void applySelected(@NonNull ViewHolder holder, boolean selected) {

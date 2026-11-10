@@ -87,7 +87,9 @@
         被选中按钮的红色高亮，是 #E53935 → #C62828 的纵向渐变，不是纯红 #FF0000。
         后期换色只改这里，禁止在 layout / drawable 里另写红色十六进制。
     -->
-    <color name="osd_focus">#FFE53935</color>
+    <!-- 全局「细线红框」统一色（需求指定 @color/osd_red_end）：首页 Tab / 设置项 / 列表焦点 / 选集卡片共用。 -->
+    <color name="osd_red_end">#FFE53935</color>
+    <color name="osd_focus">@color/osd_red_end</color>
     <color name="osd_focus_dark">#FFC62828</color>
     <!-- 选集卡片默认态：深色半透明（需求指定 #33FFFFFF）。 -->
     <color name="osd_surface">#33FFFFFF</color>

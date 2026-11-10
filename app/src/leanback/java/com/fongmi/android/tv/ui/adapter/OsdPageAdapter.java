@@ -13,6 +13,7 @@ import java.util.List;
 
 /**
  * 播放页底部选集面板的分页标签（1-6 / 7-12 ...）。
+ * 焦点滑过标签即回调 {@link OnClickListener#onItemFocus(int)}：面板直接翻页，不用再按确定键。
  */
 public class OsdPageAdapter extends RecyclerView.Adapter<OsdPageAdapter.ViewHolder> {
 
@@ -59,11 +60,19 @@ public class OsdPageAdapter extends RecyclerView.Adapter<OsdPageAdapter.ViewHold
         holder.binding.text.setText(items.get(position));
         holder.binding.text.setSelected(position == selectedPosition);
         holder.binding.text.setOnClickListener(view -> listener.onItemClick(position));
+        // 焦点即选中：滑到哪一页就翻到哪一页，点击/确定键的语义保持不变。
+        holder.binding.text.setOnFocusChangeListener((view, hasFocus) -> {
+            if (hasFocus) listener.onItemFocus(position);
+        });
     }
 
     public interface OnClickListener {
 
         void onItemClick(int position);
+
+        /** 分页标签获得焦点：立即切换下方集数网格。 */
+        default void onItemFocus(int position) {
+        }
     }
 
     public static class ViewHolder extends RecyclerView.ViewHolder {

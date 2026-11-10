@@ -1,12 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 全局焦点皮肤（小胶囊）：红渐变填充，去掉原来的 1.5dp 白描边。 -->
+<!-- 全局焦点皮肤（小胶囊）：透明底 + 1.5dp 细线红框。 -->
 <shape xmlns:android="http://schemas.android.com/apk/res/android"
     android:shape="rectangle">
 
-    <gradient
-        android:angle="0"
-        android:endColor="@color/osd_accent_light"
-        android:startColor="@color/osd_accent" />
+    <solid android:color="@android:color/transparent" />
 
     <corners android:radius="4dp" />
 
@@ -15,5 +12,9 @@
         android:left="12dp"
         android:right="12dp"
         android:top="8dp" />
+
+    <stroke
+        android:width="1.5dp"
+        android:color="@color/osd_red_end" />
 
 </shape>

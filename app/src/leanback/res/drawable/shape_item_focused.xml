@@ -1,16 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!--
-  全局焦点皮肤（与播放页选集窗同一套）：左深右浅的水平红渐变 @color/osd_accent → @color/osd_accent_light。
-  原先是黑底 40% + 1.5dp 白描边；白描边在首页 / 选集页 / 搜索页 / 历史 / 收藏里显得杂乱，
-  统一换成逆向 App 的红渐变色块。几何参数（4dp 圆角、8/12dp padding）保持不变，避免尺寸跳动。
--->
+<!-- 全局焦点皮肤（降噪版）：透明底 + 1.5dp 细线红框 @color/osd_red_end，不再有实心红底。 -->
 <shape xmlns:android="http://schemas.android.com/apk/res/android"
     android:shape="rectangle">
 
-    <gradient
-        android:angle="0"
-        android:endColor="@color/osd_accent_light"
-        android:startColor="@color/osd_accent" />
+    <solid android:color="@android:color/transparent" />
 
     <corners android:radius="4dp" />
 
@@ -19,5 +12,9 @@
         android:left="12dp"
         android:right="12dp"
         android:top="8dp" />
+
+    <stroke
+        android:width="1.5dp"
+        android:color="@color/osd_red_end" />
 
 </shape>

@@ -1,21 +1,22 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-    播放页选集卡片（ref_docs/adapter_episode.xml 里 text 的背景）：
-    - 默认：实心黑底 @color/osd_card（#1A1A1A），5dp 小圆角，高约 30dp
-    - 焦点 / 正在播放：左深右浅的水平红渐变 @color/osd_accent → @color/osd_accent_light
-      （原逆向 App 截图取样：左 #E50914、右 #FD7D83，无描边）
-    - 正在播放但失去焦点（activated）：黑底 + 2dp @color/osd_focus 红描边 + 红字，
-      对应文字色见 @color/selector_osd_episode_text
-    - padding 同时承担卡片高度和文字内边距（原版卡片没有额外 margin）
+    播放页选集卡片（ref_docs/adapter_episode.xml 里 text 的背景）。
+
+    红线：任何状态都不允许「实心大红底」，统一为「透明底 + 细线红框」。
+      - 焦点（遥控器所在）：透明底 + 2dp @color/osd_red_end 细框
+      - 正在播放但失焦（activated）：透明底 + 1dp @color/osd_red_end 细框 + 红字
+        （文字色见 @color/selector_osd_episode_text）
+      - 普通：透明底、无描边（逆向 App 的面板底色是纯黑，卡片本来就没有底色）
+    圆角 4dp（需求指定）；padding 同时承担卡片高度和文字内边距。
 -->
 <selector xmlns:android="http://schemas.android.com/apk/res/android">
     <item android:state_focused="true">
         <shape android:shape="rectangle">
-            <gradient
-                android:angle="0"
-                android:endColor="@color/osd_accent_light"
-                android:startColor="@color/osd_accent" />
-            <corners android:radius="3dp" />
+            <solid android:color="@android:color/transparent" />
+            <stroke
+                android:width="2dp"
+                android:color="@color/osd_red_end" />
+            <corners android:radius="4dp" />
             <padding
                 android:bottom="5dp"
                 android:left="12dp"
@@ -25,11 +26,11 @@
     </item>
     <item android:state_activated="true">
         <shape android:shape="rectangle">
-            <solid android:color="@color/osd_card" />
+            <solid android:color="@android:color/transparent" />
             <stroke
-                android:width="2dp"
-                android:color="@color/osd_focus" />
-            <corners android:radius="3dp" />
+                android:width="1dp"
+                android:color="@color/osd_red_end" />
+            <corners android:radius="4dp" />
             <padding
                 android:bottom="5dp"
                 android:left="12dp"
@@ -39,8 +40,8 @@
     </item>
     <item>
         <shape android:shape="rectangle">
-            <solid android:color="@color/osd_card" />
-            <corners android:radius="3dp" />
+            <solid android:color="@android:color/transparent" />
+            <corners android:radius="4dp" />
             <padding
                 android:bottom="5dp"
                 android:left="12dp"

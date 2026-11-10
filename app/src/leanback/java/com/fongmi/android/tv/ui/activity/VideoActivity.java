@@ -391,7 +391,7 @@ private boolean runtimeSourceOnly;
     private int mOsdPageIndex;
     private GridLayoutManager mOsdGridLayout;
     /** 选集面板列数档位（照抄逆向 U2()/t3()）：少列 = 2 列 × 6 集/页，多列 = 8 列 × 24 集/页。 */
-    private boolean isFewColumns = false;
+    private boolean isFewColumns = Setting.isOsdFewColumns();
     /** 当前已解析艺术字的剧名，剧名变化时才重查缓存。 */
     private String mOsdLogoName;
     /** HeroLogoCache / TmdbMatchCache 命中的艺术字 URL，空串表示回退文字标题。 */
@@ -4919,7 +4919,19 @@ private boolean runtimeSourceOnly;
         mBinding.episodePanel.osdFlagList.setLayoutManager(new LinearLayoutManager(this, RecyclerView.HORIZONTAL, false));
         mBinding.episodePanel.osdFlagList.setAdapter(mOsdFlagAdapter = new OsdFlagAdapter(this::onOsdFlagClick));
         mBinding.episodePanel.osdPageList.setLayoutManager(new LinearLayoutManager(this, RecyclerView.HORIZONTAL, false));
-        mBinding.episodePanel.osdPageList.setAdapter(mOsdPageAdapter = new OsdPageAdapter(this::onOsdPageClick));
+        mBinding.episodePanel.osdPageList.setAdapter(mOsdPageAdapter = new OsdPageAdapter(new OsdPageAdapter.OnClickListener() {
+
+            @Override
+            public void onItemClick(int position) {
+                onOsdPageClick(position);
+            }
+
+            /** 焦点滑过分页标签就翻页（逆向 App 的节奏），不用再按确定键。 */
+            @Override
+            public void onItemFocus(int position) {
+                onOsdPageFocus(position);
+            }
+        }));
         mBinding.episodePanel.osdEpisodeGrid.setLayoutManager(mOsdGridLayout = new GridLayoutManager(this, getOsdColumn()));
         mBinding.episodePanel.osdEpisodeGrid.setAdapter(mOsdEpisodeAdapter = new OsdEpisodeAdapter(new OsdEpisodeAdapter.OnClickListener() {
 
@@ -5023,6 +5035,7 @@ private boolean runtimeSourceOnly;
     /** 少列 / 多列：真实改变下方网格的列数并重建分页标签（少列 2×6，多列 8×24）。 */
     private void toggleOsdColumn() {
         isFewColumns = !isFewColumns;
+        Setting.putOsdFewColumns(isFewColumns);
         applyOsdColumn();
         refocusTab(0);
     }
@@ -5046,6 +5059,7 @@ private boolean runtimeSourceOnly;
     private void onOsdSort() {
         if (mHistory == null) return;
         onRevSort();
+        Setting.putOsdRevSort(mHistory.isRevSort());
         bindEpisodePanel(true);
         refocusTab(1);
     }
@@ -5098,10 +5112,23 @@ private boolean runtimeSourceOnly;
         // MENU 只呼出选集面板：不再顺带 showControl()，否则控制栏会跟面板一起被拉出来。
         // 面板打开期间不允许 OSD 自动隐藏，避免用户正在翻页时整块 UI 消失。
         App.removeCallbacks(mR1);
+        applyOsdSortMemory();
         bindEpisodePanel(true);
         mBinding.episodePanel.getRoot().setVisibility(View.VISIBLE);
         syncOsdLogo();
         focusEpisodePanel();
+    }
+
+    /**
+     * 呼出面板前把「正序/倒序」对齐到上次的记忆值（等价逆向 App 的 vx0.S 全局偏好），
+     * 这样每次打开都是同一个顺序，不会因为换了部剧又回到正序。
+     */
+    private void applyOsdSortMemory() {
+        if (mHistory == null) return;
+        boolean revSort = Setting.isOsdRevSort();
+        if (mHistory.isRevSort() == revSort) return;
+        mHistory.setRevSort(revSort);
+        if (mFlagAdapter != null && mFlagAdapter.getItemCount() > 0) reverseEpisode(false);
     }
 
     private void hideEpisodePanel() {
@@ -5182,10 +5209,28 @@ private boolean runtimeSourceOnly;
     }
 
     private void onOsdPageClick(int position) {
-        mOsdPageIndex = Math.max(0, position);
-        mOsdPageAdapter.setSelectedPosition(mOsdPageIndex);
-        bindOsdPage(mOsdPageIndex);
-        focusRecyclerPosition(mBinding.episodePanel.osdEpisodeGrid, 0);
+        selectOsdPage(position, true);
+    }
+
+    /** 分页标签焦点即选中：焦点移到 7-12 就直接翻页，不用再按确定键。 */
+    private void onOsdPageFocus(int position) {
+        if (position == mOsdPageIndex) return;
+        selectOsdPage(position, false);
+    }
+
+    /**
+     * 切到指定分页。enterGrid=true 是「确定键/遥控器点击」，焦点顺势进入网格第一集；
+     * false 是「焦点滑过标签」，焦点留在分页行，用户可以继续左右浏览页码。
+     */
+    private boolean selectOsdPage(int position, boolean enterGrid) {
+        if (mOsdPageAdapter == null) return false;
+        if (position < 0 || position >= mOsdPageAdapter.getItemCount()) return false;
+        mOsdPageIndex = position;
+        mOsdPageAdapter.setSelectedPosition(position);
+        bindOsdPage(position);
+        mBinding.episodePanel.osdPageList.scrollToPosition(position);
+        if (enterGrid) focusRecyclerPosition(mBinding.episodePanel.osdEpisodeGrid, 0);
+        return true;
     }
 
     private void onOsdEpisodeClick(Episode item) {
@@ -5251,10 +5296,11 @@ private boolean runtimeSourceOnly;
         if (position == RecyclerView.NO_POSITION) return false;
         int column = getOsdColumn();
         int columnIndex = column <= 0 ? 0 : position % column;
-        if (left) return columnIndex == 0 && switchOsdPage(-1, false);
+        // 上一页停在最后一集，下一页停在第一集：新页的「对应位置」正好接住这次方向键。
+        if (left) return columnIndex == 0 && switchOsdPage(-1, true);
         boolean lastColumn = columnIndex == column - 1;
         boolean lastItem = position == mOsdEpisodeAdapter.getItemCount() - 1;
-        return (lastColumn || lastItem) && switchOsdPage(1, true);
+        return (lastColumn || lastItem) && switchOsdPage(1, false);
     }
 
     /**
