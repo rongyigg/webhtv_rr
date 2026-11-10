@@ -1,11 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- 详情页集数剧照焦点：3dp 黄描边 → 2dp 主题红 @color/osd_focus，和全局皮肤一致。 -->
 <shape xmlns:android="http://schemas.android.com/apk/res/android"
     android:shape="rectangle">
 
     <corners android:radius="8dp" />
 
     <stroke
-        android:width="3dp"
-        android:color="#FFD166" />
+        android:width="2dp"
+        android:color="@color/osd_focus" />
 
 </shape>

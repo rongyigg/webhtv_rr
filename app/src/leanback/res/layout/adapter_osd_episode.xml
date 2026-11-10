@@ -2,7 +2,7 @@
 <!--
     播放页底部选集卡片：沿用逆向 ref_docs/adapter_episode.xml 的结构。
     - 卡片：focusable 的 FrameLayout + @drawable/selector_osd_episode（黑底/红渐变，5dp 圆角）
-    - 文字：16sp 单行居中的 MaterialTextView，颜色走 selector_osd_episode_text
+    - 文字：14sp 单行居中的 MaterialTextView，颜色走 selector_osd_episode_text
       （焦点白字 / 正在播放但失焦红字 / 普通白字）
     - Lottie：20x25dp，约束在卡片内部右侧垂直居中（clipChildren=true，负边距已删除，
       不再掉出卡片）；保留 @raw/equalizer 自带颜色，不加白色滤镜；
@@ -16,8 +16,8 @@
     xmlns:tools="http://schemas.android.com/tools"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
-    android:layout_marginEnd="6dp"
-    android:layout_marginBottom="6dp"
+    android:layout_marginEnd="8dp"
+    android:layout_marginBottom="8dp"
     android:background="@drawable/selector_osd_episode"
     android:clipChildren="true"
     android:clipToPadding="true"
@@ -36,7 +36,7 @@
         android:scrollHorizontally="true"
         android:singleLine="true"
         android:textColor="@color/selector_osd_episode_text"
-        android:textSize="16sp"
+        android:textSize="14sp"
         tools:text="第20集" />
 
     <com.airbnb.lottie.LottieAnimationView

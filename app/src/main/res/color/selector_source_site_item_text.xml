@@ -1,7 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+  换源弹窗站点行的文字色：焦点背景已从纯白改成红渐变，深色字在渐变上几乎看不见，
+  所以焦点态直接用白字（与选集窗焦点卡片一致）；其余状态本来就是白字。
+-->
 <selector xmlns:android="http://schemas.android.com/apk/res/android">
-    <item
-        android:state_focused="true"
-        android:color="@color/black" />
     <item android:color="@color/white" />
 </selector>

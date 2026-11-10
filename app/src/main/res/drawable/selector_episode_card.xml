@@ -1,22 +1,26 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+  详情页选集卡片的前景描边（adapter_episode_card 的 android:foreground）。
+  作为前景覆盖层不能填色，所以焦点/当前播放都用细红框表达，色值跟随全局皮肤：
+    focused  → 2dp @color/osd_focus（红）
+    selected → 1dp @color/osd_focus_dark（当前播放，弱一档）
+  原先分别是 3dp #FFD166 黄和 2dp #2CC56F 绿。
+-->
 <selector xmlns:android="http://schemas.android.com/apk/res/android">
-    <!-- 获得焦点：白色边框，优先于当前播放态 -->
     <item android:state_focused="true">
         <shape android:shape="rectangle">
             <solid android:color="#00000000" />
-            <stroke android:width="3dp" android:color="#FFD166" />
+            <stroke android:width="2dp" android:color="@color/osd_focus" />
             <corners android:radius="8dp" />
         </shape>
     </item>
-    <!-- 当前播放：高亮黄边框 -->
     <item android:state_selected="true">
         <shape android:shape="rectangle">
             <solid android:color="#00000000" />
-            <stroke android:width="2dp" android:color="#2CC56F" />
+            <stroke android:width="1dp" android:color="@color/osd_focus_dark" />
             <corners android:radius="8dp" />
         </shape>
     </item>
-    <!-- 默认：透明 -->
     <item>
         <shape android:shape="rectangle">
             <solid android:color="#00000000" />

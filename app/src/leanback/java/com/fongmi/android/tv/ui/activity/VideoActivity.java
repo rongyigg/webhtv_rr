@@ -3467,6 +3467,12 @@ private boolean runtimeSourceOnly;
         boolean episodeChanged = seamless(resolved);
         if (initialBinding && !episodeChanged) onRefresh();
         loadTmdbRelatedVideosForCurrentEpisode();
+        // 切线路后立刻把线路写进历史：seamless() 匹配不到同名集时不会走 getPlayer() → updateHistory()，
+        // 不补这一次写入，下次进入还是会退回默认线路（截图注释「这里选中了没有记忆」）。
+        if (mHistory != null) {
+            setHistoryFlag(resolved);
+            syncHistory();
+        }
     }
 
     private void setEpisodeAdapter(List<Episode> items) {
@@ -4915,7 +4921,19 @@ private boolean runtimeSourceOnly;
         mBinding.episodePanel.osdPageList.setLayoutManager(new LinearLayoutManager(this, RecyclerView.HORIZONTAL, false));
         mBinding.episodePanel.osdPageList.setAdapter(mOsdPageAdapter = new OsdPageAdapter(this::onOsdPageClick));
         mBinding.episodePanel.osdEpisodeGrid.setLayoutManager(mOsdGridLayout = new GridLayoutManager(this, getOsdColumn()));
-        mBinding.episodePanel.osdEpisodeGrid.setAdapter(mOsdEpisodeAdapter = new OsdEpisodeAdapter(this::onOsdEpisodeClick));
+        mBinding.episodePanel.osdEpisodeGrid.setAdapter(mOsdEpisodeAdapter = new OsdEpisodeAdapter(new OsdEpisodeAdapter.OnClickListener() {
+
+            @Override
+            public void onItemClick(Episode item) {
+                onOsdEpisodeClick(item);
+            }
+
+            /** 焦点一落到卡片就切集，逆向 App 的按键节奏：只移动焦点，不用再按确定。 */
+            @Override
+            public void onFocus(Episode item) {
+                onOsdEpisodeFocus(item);
+            }
+        }));
         mBinding.episodePanel.osdTabColumn.setOnClickListener(guarded(this::toggleOsdColumn));
         mBinding.episodePanel.osdTabSort.setOnClickListener(guarded(this::onOsdSort));
         updateOsdTabs();
@@ -5149,6 +5167,10 @@ private boolean runtimeSourceOnly;
 
     private void refreshEpisodePanelIfVisible() {
         if (mBinding == null || !isVisible(mBinding.episodePanel.getRoot())) return;
+        // 面板正被遥控器操作时不做整表重建：bindEpisodePanel() 里的 addAll() 是 notifyDataSetChanged，
+        // 会把焦点打回第一项，让「焦点即时切集」一路跳回开头。当前页选中态由
+        // OsdEpisodeAdapter.notifySelectionChanged() 原地刷新，页码/线路由面板自己的操作同步。
+        if (PlayerControlFocusHelper.containsFocus(mBinding.episodePanel.getRoot())) return;
         bindEpisodePanel(false);
     }
 
@@ -5172,6 +5194,19 @@ private boolean runtimeSourceOnly;
         onItemClick(item);
     }
 
+    /**
+     * 选集面板「焦点即时切集」：焦点移到某一集就直接开始播放，不需要再按确定键。
+     * scroll=false 避免打断遥控器正在进行的焦点移动；面板内只刷新新旧两张卡片的状态，
+     * 不重建列表、不关闭控制栏，焦点才能继续沿方向键走。
+     */
+    private void onOsdEpisodeFocus(Episode item) {
+        if (item == null || item.isSelected()) return;
+        int oldPosition = mOsdEpisodeAdapter.getSelectedPosition();
+        int newPosition = mOsdEpisodeAdapter.indexOf(item);
+        selectEpisode(item, false);
+        mOsdEpisodeAdapter.notifySelectionChanged(oldPosition, newPosition);
+    }
+
     /** OSD 底部按钮行再按一次「下」就把控制栏收起来，和遥控器的开合节奏一致。 */
     private boolean dispatchOsdDownKey(KeyEvent event) {
         if (event == null || !KeyUtil.isActionUp(event) || !KeyUtil.isDownKey(event)) return false;
@@ -5192,8 +5227,58 @@ private boolean runtimeSourceOnly;
             focusEpisodePanel();
             return true;
         }
+        if (dispatchEpisodePanelEdgeKey(event)) return true;
         if (dispatchEpisodePanelVerticalKey(event)) return true;
         return PlayerControlFocusHelper.handleKey(mBinding.episodePanel.getRoot(), null, event);
+    }
+
+    /**
+     * 选集网格左右边界翻页：焦点停在本页第一列再按左 → 上一分页；末列（或本页最后一集）
+     * 再按右 → 下一分页。原先只能按方向键挪到分页行去点，长剧集要按十几次才换页。
+     * 返回 false 表示没有处理，继续交给系统 focusSearch（例如已经在第一页/最后一页）。
+     */
+    private boolean dispatchEpisodePanelEdgeKey(KeyEvent event) {
+        if (event == null || !KeyUtil.isActionDown(event)) return false;
+        boolean left = KeyUtil.isLeftKey(event);
+        if (!left && !KeyUtil.isRightKey(event)) return false;
+        if (mOsdEpisodeAdapter == null) return false;
+        RecyclerView grid = mBinding.episodePanel.osdEpisodeGrid;
+        View focus = grid.findFocus();
+        if (focus == null) return false;
+        RecyclerView.ViewHolder holder = grid.findContainingViewHolder(focus);
+        if (holder == null) return false;
+        int position = holder.getBindingAdapterPosition();
+        if (position == RecyclerView.NO_POSITION) return false;
+        int column = getOsdColumn();
+        int columnIndex = column <= 0 ? 0 : position % column;
+        if (left) return columnIndex == 0 && switchOsdPage(-1, false);
+        boolean lastColumn = columnIndex == column - 1;
+        boolean lastItem = position == mOsdEpisodeAdapter.getItemCount() - 1;
+        return (lastColumn || lastItem) && switchOsdPage(1, true);
+    }
+
+    /**
+     * 翻到相邻分页并保持操作节奏：翻到上一页停在最后一集，翻到下一页停在第 0 集，
+     * 再按一次同方向键就能继续翻。页码行同步高亮当前页。
+     */
+    private boolean switchOsdPage(int delta, boolean focusLast) {
+        if (mOsdPageAdapter == null) return false;
+        int pages = mOsdPageAdapter.getItemCount();
+        int target = mOsdPageIndex + delta;
+        if (target < 0 || target >= pages) return false;
+        mOsdPageIndex = target;
+        mOsdPageAdapter.setSelectedPosition(target);
+        bindOsdPage(target);
+        mBinding.episodePanel.osdPageList.scrollToPosition(target);
+        int count = mOsdEpisodeAdapter == null ? 1 : mOsdEpisodeAdapter.getItemCount();
+        int position = Math.max(0, focusLast ? count - 1 : 0);
+        RecyclerView grid = mBinding.episodePanel.osdEpisodeGrid;
+        // 数据刚换过，要等这一帧布局完成才能拿到新页的卡片，否则焦点会停在旧 child 上。
+        grid.post(() -> {
+            if (mBinding == null || !isVisible(mBinding.episodePanel.getRoot())) return;
+            focusRecyclerPosition(grid, position);
+        });
+        return true;
     }
 
     /**

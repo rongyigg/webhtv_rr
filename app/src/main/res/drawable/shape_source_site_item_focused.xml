@@ -1,11 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- 换源弹窗站点整行的焦点态：原先纯白胶囊（配合黑字），改成与选集窗一致的红渐变 + 白字。 -->
 <inset xmlns:android="http://schemas.android.com/apk/res/android"
     android:insetLeft="8dp"
     android:insetRight="8dp"
     android:insetTop="4dp"
     android:insetBottom="4dp">
     <shape android:shape="rectangle">
-        <solid android:color="@color/white"/>
+        <gradient
+            android:angle="0"
+            android:endColor="@color/osd_accent_light"
+            android:startColor="@color/osd_accent"/>
         <corners android:radius="28dp"/>
     </shape>
 </inset>

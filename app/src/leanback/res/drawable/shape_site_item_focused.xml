@@ -1,14 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- 站点/分类标签焦点：原先是 #2F6FED 蓝底 + 2dp 白描边，改成红渐变填充。 -->
 <shape xmlns:android="http://schemas.android.com/apk/res/android"
     android:shape="rectangle">
 
-    <solid android:color="#2F6FED" />
+    <gradient
+        android:angle="0"
+        android:endColor="@color/osd_accent_light"
+        android:startColor="@color/osd_accent" />
 
     <corners android:radius="12dp" />
-
-    <stroke
-        android:width="2dp"
-        android:color="@color/white" />
 
     <padding
         android:bottom="10dp"
