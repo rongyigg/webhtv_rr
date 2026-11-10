@@ -24,9 +24,13 @@
     android:orientation="vertical"
     android:padding="18dp">
 
+    <!--
+        顶栏固定 36dp：联想词胶囊高度 28dp + 上下各 4dp，整体高度恒定。
+        不管联想词出现 / 消失 / 从 1 条变成 10 条，弹窗高度都不再抖动。
+    -->
     <LinearLayout
         android:layout_width="match_parent"
-        android:layout_height="wrap_content"
+        android:layout_height="36dp"
         android:layout_marginBottom="12dp"
         android:gravity="center_vertical"
         android:orientation="horizontal">
@@ -47,7 +51,7 @@
         <androidx.recyclerview.widget.RecyclerView
             android:id="@+id/suggestion"
             android:layout_width="0dp"
-            android:layout_height="wrap_content"
+            android:layout_height="match_parent"
             android:layout_marginStart="12dp"
             android:layout_weight="1"
             android:clipChildren="false"
@@ -105,11 +109,19 @@
                     android:textSize="14sp"
                     tools:text="嫁金钗" />
 
+                <!--
+                    放大镜对齐键盘第一排第 2 个字母（B）：
+                    键盘 6 列 = 6×30dp + 5×5dp 间距 = 205dp，在 217dp 左列里居中 → 左缩进 6dp，
+                    B 键占 181~211dp、中心 196dp；
+                    按钮 32dp 宽，加 marginEnd 5dp 后占 180~212dp、中心正好也是 196dp。
+                    输入框同时被压短 5dp（weight=1 自动让位），不再顶到列尾。
+                -->
                 <androidx.appcompat.widget.AppCompatImageView
                     android:id="@+id/searchBtn"
                     android:layout_width="32dp"
                     android:layout_height="32dp"
                     android:layout_marginStart="6dp"
+                    android:layout_marginEnd="5dp"
                     android:background="@drawable/selector_tmdb_search"
                     android:contentDescription="@string/home_tmdb_match"
                     android:focusable="true"

@@ -1,8 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 手动 TMDB 匹配弹窗：虚拟键盘按键两态 -->
+<!--
+    手动 TMDB 匹配弹窗：虚拟键盘按键两态。
+    焦点态强制复用全局横向红渐变（@drawable/bg_global_focus_solid_red），
+    与首页 Tab / 选集面板同一套颜色，弹窗内不再出现任何自定义纯红色块。
+-->
 <selector xmlns:android="http://schemas.android.com/apk/res/android">
     <item
-        android:drawable="@drawable/shape_tmdb_key_focused"
+        android:drawable="@drawable/bg_global_focus_solid_red"
         android:state_focused="true" />
     <item android:drawable="@drawable/shape_tmdb_key_normal" />
 </selector>

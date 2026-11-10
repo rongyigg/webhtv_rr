@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    手动 TMDB 匹配弹窗：虚拟键盘第 1 个功能键 = 二维码（对齐逆向 ub2.java 的 R.drawable.ic_qr）。
+    用描边方框 + 方块点绘制，不依赖 vector 的 fillType（低版本 API 也稳定），颜色走全局 @color/white。
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:tint="@color/white"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+
+    <!-- 左上定位框 -->
+    <path
+        android:fillColor="@android:color/transparent"
+        android:pathData="M4.7,4.7h5.6v5.6h-5.6z"
+        android:strokeColor="@android:color/white"
+        android:strokeWidth="1.4" />
+
+    <!-- 右上定位框 -->
+    <path
+        android:fillColor="@android:color/transparent"
+        android:pathData="M13.7,4.7h5.6v5.6h-5.6z"
+        android:strokeColor="@android:color/white"
+        android:strokeWidth="1.4" />
+
+    <!-- 左下定位框 -->
+    <path
+        android:fillColor="@android:color/transparent"
+        android:pathData="M4.7,13.7h5.6v5.6h-5.6z"
+        android:strokeColor="@android:color/white"
+        android:strokeWidth="1.4" />
+
+    <!-- 右下数据点 -->
+    <path
+        android:fillColor="@android:color/white"
+        android:pathData="M13.5,13.5h2.2v2.2h-2.2zM17.8,13.5h1.9v1.9h-1.9zM13.5,17.8h1.9v1.9h-1.9zM17.1,17.1h2.6v2.6h-2.6z" />
+</vector>

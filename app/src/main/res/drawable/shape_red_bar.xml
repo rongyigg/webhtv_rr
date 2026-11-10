@@ -1,5 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
-<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
-    <corners android:radius="2dp"/>
-    <solid android:color="#e50914"/>
+<!--
+    全局细红条（选集面板 / 换源弹窗 / TMDB 匹配弹窗共用）。
+    颜色改为引用全局品牌色 @color/osd_accent，不再写死 #e50914 —— 取值完全相同，像素无变化，
+    但从此任何调色都只改 colors.xml 一处。
+-->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+
+    <corners android:radius="2dp" />
+
+    <solid android:color="@color/osd_accent" />
 </shape>

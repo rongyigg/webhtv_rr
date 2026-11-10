@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    全局「实心焦点」样式：播放页选集面板同款横向红渐变
+    @color/osd_accent → @color/osd_accent_light（不写任何十六进制字面量）。
+
+    圆角 4dp = 小圆角矩形：首页分类 Tab 原本就是矩形/小圆角矩形，禁止做成半圆胶囊；
+    分页标签、集数卡片、OSD 动作按钮统一复用同一个小圆角。
+    刻意不带 <padding>：这些 View 自己设置了内边距，避免换背景时把尺寸改掉。
+-->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+
+    <gradient
+        android:angle="0"
+        android:endColor="@color/osd_accent_light"
+        android:startColor="@color/osd_accent" />
+
+    <corners android:radius="4dp" />
+
+</shape>

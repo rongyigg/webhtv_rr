@@ -1,7 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<!-- 手动 TMDB 匹配弹窗：虚拟键盘按键焦点态（实心品牌红，尺寸与默认态一致） -->
-<shape xmlns:android="http://schemas.android.com/apk/res/android"
-    android:shape="rectangle">
-    <solid android:color="@color/osd_accent" />
-    <corners android:radius="4dp" />
-</shape>

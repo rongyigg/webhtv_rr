@@ -1,8 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 手动 TMDB 匹配弹窗：放大镜按钮两态 -->
+<!--
+    手动 TMDB 匹配弹窗：放大镜按钮两态。
+    焦点态同样引用全局横向红渐变 @drawable/bg_global_focus_solid_red（4dp 圆角）。
+-->
 <selector xmlns:android="http://schemas.android.com/apk/res/android">
     <item
-        android:drawable="@drawable/shape_tmdb_search_focused"
+        android:drawable="@drawable/bg_global_focus_solid_red"
         android:state_focused="true" />
     <item android:drawable="@drawable/shape_tmdb_search_normal" />
 </selector>

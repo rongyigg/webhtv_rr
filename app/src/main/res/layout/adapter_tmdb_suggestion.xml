@@ -1,19 +1,26 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 手动 TMDB 匹配弹窗：顶部联想词胶囊（横向列表，点击直接搜索） -->
+<!--
+    手动 TMDB 匹配弹窗：顶部联想词胶囊（横向列表，点击直接填入并搜索）。
+    高度固定 28dp + 上下各 4dp 外边距 = 36dp，正好填满固定高度的顶栏，
+    不管出现几条建议，弹窗高度都不变；圆角走 selector（默认 14dp / 焦点全局胶囊红 28dp）。
+-->
 <com.google.android.material.textview.MaterialTextView xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools"
     android:id="@+id/text"
     android:layout_width="wrap_content"
-    android:layout_height="wrap_content"
-    android:layout_margin="4dp"
+    android:layout_height="28dp"
+    android:layout_marginStart="4dp"
+    android:layout_marginTop="4dp"
+    android:layout_marginEnd="4dp"
+    android:layout_marginBottom="4dp"
     android:background="@drawable/selector_tmdb_suggestion"
     android:ellipsize="marquee"
     android:focusable="true"
     android:focusableInTouchMode="true"
+    android:gravity="center"
+    android:maxWidth="200dp"
     android:paddingStart="12dp"
-    android:paddingTop="6dp"
     android:paddingEnd="12dp"
-    android:paddingBottom="6dp"
     android:singleLine="true"
     android:textColor="@color/white"
     android:textSize="12sp"

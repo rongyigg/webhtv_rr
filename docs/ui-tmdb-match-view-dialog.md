@@ -54,5 +54,24 @@
 
 - [x] 布局 / 资源 / 键盘适配器 / 弹窗核心逻辑
 - [x] 首页（`HomeViewActivity`）与 Hero 首页（`HeroHomeActivity`）接线
+- [x] 第 2 轮视觉与交互修复（见下）
 - [ ] 播放页 `VideoActivity` 的重匹配入口（目前仍是 `TmdbSearchDialog` 列表版）——下一阶段
 - [ ] 编译 + 真机焦点回归
+
+## 第 2 轮：视觉 / 交互 / 建议复用修复
+
+| 项 | 改动 | 位置 |
+|---|---|---|
+| 遮罩 | `setDimAmount(0.82f)` → `0.55f`，透出背后画面 | `TmdbMatchViewDialog.configureWindow()` |
+| 防抖高度 | 顶栏固定 `36dp`、胶囊固定 `28dp`（+上下 4dp 边距）、RSS 高度 `match_parent`；建议从 0 条变 10 条弹窗高度不变 | `dialog_tmdb_match_view.xml` / `adapter_tmdb_suggestion.xml` |
+| 对齐 | 键盘 6×30dp+5×5dp=205dp 居中于 217dp → B 键 181~211dp（中心 196dp）；放大镜 32dp + `marginEnd 5dp` → 180~212dp（中心 196dp），输入框同步压短 5dp | `dialog_tmdb_match_view.xml` |
+| 键盘底色 | 默认态改 `@color/white_20`（即 `#33FFFFFF`）+ 4dp 圆角方块 | `shape_tmdb_key_normal.xml` |
+| 二维码键 | 第 1 个功能键图标 `ic_keyboard_search` → 新增 `ic_qr`（描边方框 + 数据点，不依赖 fillType） | `TmdbKeyboardAdapter.ICONS[0]` |
+| 建议复用 | `TextWatcher` 停顿 260ms → `SearchSuggest.iqiyiUrl/tencentUrl` 发请求 → `parseIqiyi/parseTencent` 解析 → `merge` 合并去重；本地 `k0()` 结果置顶，最多 10 条；序号 + `dialog.isShowing()` 双重过期保护 | `TmdbMatchViewDialog`（`scheduleSuggestions/requestSuggestions/applySuggestions/refreshSuggestions`） |
+| 全局红 | 键盘键、放大镜、建议胶囊焦点态分别引用 `@drawable/bg_global_focus_solid_red` / `bg_global_focus_capsule`（leanback 原件字节级复制到 main）；删除 `shape_tmdb_key_focused` / `shape_tmdb_search_focused` / `shape_tmdb_suggestion_focused` 三个私有纯红形状 | `selector_tmdb_key/search/suggestion` |
+| 去硬编码红 | `shape_red_bar` 与 `shape_tmdb_badge` 的 `#e50914` → `@color/osd_accent`（同值，全工程零像素变化） | 两个共享 drawable |
+
+不改动项（红线 3）：`TmdbKeyboardAdapter.dispatchKey()` 的跨区焦点拦截、`candidate.addOnChildAttachStateChangeListener` 里 `setNextFocusLeftId(R.id.searchBtn)`、`nextFocusUp/Down` 一律未动。
+
+第 2 轮验证：新增/修改 XML 全部 `System.Xml` 解析通过；三个 selector 焦点项均指向全局 drawable；
+被删的三个 shape 无任何残留引用；`TmdbMatchViewDialog` / `TmdbKeyboardAdapter` 括号平衡。

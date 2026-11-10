@@ -4,6 +4,8 @@ import android.app.Activity;
 import android.graphics.Color;
 import android.graphics.Rect;
 import android.graphics.drawable.ColorDrawable;
+import android.os.Handler;
+import android.os.Looper;
 import android.text.Editable;
 import android.text.TextUtils;
 import android.text.TextWatcher;
@@ -26,19 +28,28 @@ import androidx.recyclerview.widget.GridLayoutManager;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
+import com.fongmi.android.tv.App;
 import com.fongmi.android.tv.R;
 import com.fongmi.android.tv.bean.TmdbConfig;
 import com.fongmi.android.tv.bean.TmdbItem;
 import com.fongmi.android.tv.bean.Vod;
+import com.fongmi.android.tv.bean.Word;
+import com.fongmi.android.tv.impl.Callback;
 import com.fongmi.android.tv.service.TmdbService;
 import com.fongmi.android.tv.ui.helper.TmdbMatcher;
 import com.fongmi.android.tv.utils.ImgUtil;
+import com.fongmi.android.tv.utils.SearchSuggest;
+import com.github.catvod.net.OkHttp;
 import com.google.android.material.dialog.MaterialAlertDialogBuilder;
 
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+
+import okhttp3.Call;
+import okhttp3.Response;
 
 /**
  * 手动 TMDB 匹配弹窗（纯 View 实现，禁止 Compose）。
@@ -72,11 +83,20 @@ public class TmdbMatchViewDialog {
     private static final int KEYWORD_MAX_LENGTH = 40;
     private static final int SEARCH_COLUMNS = 6;
     private static final int RESULT_CARD_SCALE_DP = 5;
+    /** 顶部联想词最多展示条数（本地 k0 结果置顶，其余给在线建议）。 */
+    private static final int SUGGEST_LIMIT = 10;
+    /** 输入停顿多久再去拉在线建议，避免每个字母打一次网络请求。 */
+    private static final long SUGGEST_DEBOUNCE_MS = 260;
     private static final Pattern YEAR_PATTERN = Pattern.compile("(19|20)\\d{2}");
     private static final Pattern SEASON_PATTERN = Pattern.compile("第?\\s*([一二三四五六七八九十百0-9]+)\\s*季|(?i)\\bseason\\s*(\\d{1,2})\\b|(?i)\\bs(\\d{1,2})\\b");
 
     private final Activity activity;
     private final List<String> suggestions = new ArrayList<>();
+    /** k0() 清洗出的本地候选（置顶，永远先于在线建议）。 */
+    private final List<String> localSuggestions = new ArrayList<>();
+    private final List<Word.Data> iqiyiWords = new ArrayList<>();
+    private final List<Word.Data> tencentWords = new ArrayList<>();
+    private final Handler suggestHandler = new Handler(Looper.getMainLooper());
     private final List<TmdbItem> results = new ArrayList<>();
 
     private AlertDialog dialog;
@@ -95,6 +115,8 @@ public class TmdbMatchViewDialog {
     private String initialKeyword;
     private Listener listener;
     private DismissListener dismissListener;
+    private Runnable pendingSuggest;
+    private int suggestSeq;
     private boolean searching;
 
     public static TmdbMatchViewDialog create(Activity activity) {
@@ -131,6 +153,9 @@ public class TmdbMatchViewDialog {
         bindViews(root);
         dialog = new MaterialAlertDialogBuilder(activity, R.style.Theme_WebHTV_LightDialog).setView(root).create();
         dialog.setOnDismissListener(item -> {
+            // 关窗即作废在途的联想词请求，避免回调打到已销毁的 View 上。
+            suggestSeq++;
+            if (pendingSuggest != null) suggestHandler.removeCallbacks(pendingSuggest);
             if (dismissListener != null) dismissListener.onDismiss();
         });
         dialog.show();
@@ -166,7 +191,8 @@ public class TmdbMatchViewDialog {
         Window window = dialog.getWindow();
         if (window == null) return;
         window.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
-        window.setDimAmount(0.82f);
+        // 遮罩从 0.82 降到 0.55：背后播放页/首页画面透出来，不再是死黑一块。
+        window.setDimAmount(0.55f);
         // 虚拟键盘由页面自己实现，窗口必须屏蔽系统输入法。
         window.addFlags(WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM);
         window.addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND);
@@ -219,11 +245,81 @@ public class TmdbMatchViewDialog {
         return values;
     }
 
+    /**
+     * 本地 k0() 结果：清洗名 + 「清洗名 年份」。先本地出词，保证断网 / 输入第一帧也有内容。
+     */
     private void buildSuggestions(String rawName) {
+        localSuggestions.clear();
+        localSuggestions.addAll(buildSuggestionValues(rawName));
+        refreshSuggestions();
+    }
+
+    /**
+     * 顶部胶囊 = 本地 k0() 结果（置顶）+ 搜索页同款在线建议。
+     *
+     * <p>在线部分直接复用搜索页 {@code SearchActivity.getSuggest()} 的那套数据源与解析：
+     * {@link SearchSuggest#iqiyiUrl}/{@link SearchSuggest#tencentUrl} 发请求、
+     * {@link SearchSuggest#parseIqiyi}/{@link SearchSuggest#parseTencent} 解析、
+     * {@link SearchSuggest#merge} 合并去重。所以输入 {@code jjc} 也会出现「嫁金钗」这类拼音首字母结果。
+     */
+    private void refreshSuggestions() {
+        if (suggestionAdapter == null) return;
         suggestions.clear();
-        suggestions.addAll(buildSuggestionValues(rawName));
+        for (String value : localSuggestions) {
+            if (suggestions.size() >= SUGGEST_LIMIT) break;
+            addSuggestion(suggestions, value);
+        }
+        for (Word.Data data : SearchSuggest.merge(iqiyiWords, tencentWords)) {
+            if (suggestions.size() >= SUGGEST_LIMIT) break;
+            addSuggestion(suggestions, data.getTitle());
+        }
         suggestionAdapter.notifyDataSetChanged();
+        // 顶栏高度固定 36dp，这里隐藏 / 显示都不会改变弹窗高度。
         suggestionView.setVisibility(suggestions.isEmpty() ? View.GONE : View.VISIBLE);
+    }
+
+    /** 输入停顿 {@link #SUGGEST_DEBOUNCE_MS} 后拉一次在线建议；空串直接清空在线结果。 */
+    private void scheduleSuggestions(String text) {
+        if (pendingSuggest != null) suggestHandler.removeCallbacks(pendingSuggest);
+        String query = text == null ? "" : text.trim();
+        if (TextUtils.isEmpty(query)) {
+            suggestSeq++;
+            iqiyiWords.clear();
+            tencentWords.clear();
+            refreshSuggestions();
+            return;
+        }
+        pendingSuggest = () -> requestSuggestions(query);
+        suggestHandler.postDelayed(pendingSuggest, SUGGEST_DEBOUNCE_MS);
+    }
+
+    private void requestSuggestions(String query) {
+        final int seq = ++suggestSeq;
+        iqiyiWords.clear();
+        tencentWords.clear();
+        OkHttp.newCall(SearchSuggest.iqiyiUrl(query)).enqueue(suggestCallback(seq, false));
+        OkHttp.newCall(SearchSuggest.tencentUrl(query)).enqueue(suggestCallback(seq, true));
+    }
+
+    private Callback suggestCallback(int seq, boolean tencent) {
+        return new Callback() {
+
+            @Override
+            public void onResponse(@NonNull Call call, @NonNull Response response) throws IOException {
+                String result = response.body() == null ? "" : response.body().string();
+                if (TextUtils.isEmpty(result)) return;
+                // 网络线程不许碰 View，统一回主线程渲染。
+                App.post(() -> applySuggestions(seq, result, tencent));
+            }
+        };
+    }
+
+    private void applySuggestions(int seq, String result, boolean tencent) {
+        if (seq != suggestSeq || dialog == null || !dialog.isShowing()) return;
+        List<Word.Data> parsed = tencent ? SearchSuggest.parseTencent(result) : SearchSuggest.parseIqiyi(result);
+        if (tencent) tencentWords.addAll(parsed);
+        else iqiyiWords.addAll(parsed);
+        refreshSuggestions();
     }
 
     private void setupSuggestions() {
@@ -345,6 +441,8 @@ public class TmdbMatchViewDialog {
                     return;
                 }
                 buildSuggestions(text);
+                // 复用搜索页那套在线建议：停顿 260ms 拉一次，输入 jjc 也能出「嫁金钗」。
+                scheduleSuggestions(text);
             }
         });
         keyword.setOnKeyListener((view, keyCode, event) -> {

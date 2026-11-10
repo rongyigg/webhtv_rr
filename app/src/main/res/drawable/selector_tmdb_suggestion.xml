@@ -1,8 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 手动 TMDB 匹配弹窗：顶部联想词胶囊两态 -->
+<!--
+    手动 TMDB 匹配弹窗：顶部联想词胶囊两态。
+    焦点态用全局胶囊红 @drawable/bg_global_focus_capsule（28dp 全圆角），
+    默认态圆角同步为 14dp —— 胶囊高度固定 28dp，两态视觉上都是完整胶囊，聚焦不跳形。
+-->
 <selector xmlns:android="http://schemas.android.com/apk/res/android">
     <item
-        android:drawable="@drawable/shape_tmdb_suggestion_focused"
+        android:drawable="@drawable/bg_global_focus_capsule"
         android:state_focused="true" />
     <item android:drawable="@drawable/shape_tmdb_suggestion" />
 </selector>

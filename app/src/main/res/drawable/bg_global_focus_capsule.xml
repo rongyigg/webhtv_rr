@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    全局「实心焦点胶囊」：形状提取自换源弹窗站点标签
+    （app/src/main/res/drawable/shape_source_site_chip_focused.xml）——
+    横向两段红渐变 + 28dp 全圆角，用于首页分类 Tab 与选集面板顶部分页标签的焦点态。
+
+    颜色只引用全局资源 @color/osd_accent → @color/osd_accent_light，不写任何十六进制字面量；
+    angle=0 = 从左到右，与 Compose 侧 HeroCommonUi.HeroFocusBrush 的 horizontalGradient 一致。
+
+    刻意不带 <padding> / <inset>：换源弹窗那两处（上下 inset 2dp、左右 padding 6dp）
+    是 26dp 标签的私有微调；首页 Tab 与分页标签各自维护内边距，换背景不得改变它们的尺寸。
+-->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+
+    <gradient
+        android:angle="0"
+        android:endColor="@color/osd_accent_light"
+        android:startColor="@color/osd_accent" />
+
+    <corners android:radius="28dp" />
+
+</shape>

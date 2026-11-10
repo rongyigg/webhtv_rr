@@ -18,9 +18,9 @@ import com.fongmi.android.tv.R;
  * <p>键盘是 6 列 {@code GridLayoutManager}，共 30 个键 = 4 个功能键 + 26 个字母键，
  * 正好 5 行，和逆向 {@code dialog_tmdb_match.xml} 的 {@code app:spanCount="6"} 一致。
  *
- * <p>功能键顺序（逆向是「扫码 / 左移 / 右移 / 退格」，本工程没有扫码资源，换成「确认 / 左移 / 右移 / 退格」）：
+ * <p>功能键顺序（逆向是「扫码 / 左移 / 右移 / 退格」）：
  * <ul>
- *     <li>0 = 确认（等同放大镜按钮，触发 TMDB 搜索）</li>
+ *     <li>0 = 二维码键（逆向是 {@code ic_qr} 扫码；本工程无扫码入口，图标照抄，行为沿用确认搜索）</li>
  *     <li>1 = 光标左移</li>
  *     <li>2 = 光标右移</li>
  *     <li>3 = 退格</li>
@@ -52,7 +52,7 @@ public class TmdbKeyboardAdapter extends RecyclerView.Adapter<RecyclerView.ViewH
     public static final int SPAN_COUNT = 6;
 
     private static final int[] ICONS = {
-            R.drawable.ic_keyboard_search,
+            R.drawable.ic_qr,
             R.drawable.ic_keyboard_left,
             R.drawable.ic_keyboard_right,
             R.drawable.ic_keyboard_back,
