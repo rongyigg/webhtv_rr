@@ -1,29 +1,30 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
     OSD 底部文字按钮：默认完全透明压在画面上；
-    焦点态 = #FF8A80 → #E53935 水平渐变（angle=0 即从左到右）+ 8dp 圆角矩形。
-    禁止正圆胶囊、禁止垂直渐变、禁止纯 #FF0000、禁止方块焦点。
+    焦点态 = 左深右浅的水平红渐变 @color/osd_accent → @color/osd_accent_light 胶囊，
+    圆角 15dp 正好是 30dp 按钮高度的一半（原逆向 App 截图里的药丸形焦点框）。
+    禁止垂直渐变、禁止纯 #FF0000、禁止方块焦点。
 -->
 <selector xmlns:android="http://schemas.android.com/apk/res/android">
     <item android:state_focused="true">
         <shape android:shape="rectangle">
             <gradient
                 android:angle="0"
-                android:endColor="#E53935"
-                android:startColor="#FF8A80" />
-            <corners android:radius="8dp" />
+                android:endColor="@color/osd_accent_light"
+                android:startColor="@color/osd_accent" />
+            <corners android:radius="15dp" />
         </shape>
     </item>
     <item android:state_pressed="true">
         <shape android:shape="rectangle">
             <solid android:color="@color/osd_surface" />
-            <corners android:radius="8dp" />
+            <corners android:radius="15dp" />
         </shape>
     </item>
     <item>
         <shape android:shape="rectangle">
             <solid android:color="@android:color/transparent" />
-            <corners android:radius="8dp" />
+            <corners android:radius="15dp" />
         </shape>
     </item>
 </selector>

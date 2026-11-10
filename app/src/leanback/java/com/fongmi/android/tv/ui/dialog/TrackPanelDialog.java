@@ -65,10 +65,10 @@ public final class TrackPanelDialog extends BaseBottomSheetDialog implements Tra
         return true;
     }
 
-    /** 去掉弹窗遮罩（FLAG_DIM_BEHIND / dimAmount），打开面板时画面保持可见。 */
+    /** 保留系统弹窗遮罩（FLAG_DIM_BEHIND）：面板本身透明，没有遮罩时浅色轨道文字压在亮画面上看不清。 */
     @Override
     protected boolean stableOverlay() {
-        return true;
+        return false;
     }
 
     @Override

@@ -91,6 +91,13 @@
     <color name="osd_focus_dark">#FFC62828</color>
     <!-- 选集卡片默认态：深色半透明（需求指定 #33FFFFFF）。 -->
     <color name="osd_surface">#33FFFFFF</color>
+    <!--
+        选集卡片 / OSD 焦点胶囊（取自原逆向 App 的界面截图取样，不是估算）：
+        未选中卡片黑底 #1A1A1A；选中/焦点为左深右浅的水平红渐变 #E50914 → #FD7D83。
+    -->
+    <color name="osd_card">#FF1A1A1A</color>
+    <color name="osd_accent">#FFE50914</color>
+    <color name="osd_accent_light">#FFFD7D83</color>
     <!-- OSD 底部遮罩：透明 → #CC000000 的两段渐变。 -->
     <color name="osd_scrim_start">#00000000</color>
     <color name="osd_scrim_end">#CC000000</color>

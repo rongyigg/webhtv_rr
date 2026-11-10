@@ -5077,7 +5077,7 @@ private boolean runtimeSourceOnly;
             hideEpisodePanel();
             return;
         }
-        if (!isVisible(mBinding.osdControl.getRoot())) showControl(mBinding.osdControl.osdEpisodes);
+        // MENU 只呼出选集面板：不再顺带 showControl()，否则控制栏会跟面板一起被拉出来。
         // 面板打开期间不允许 OSD 自动隐藏，避免用户正在翻页时整块 UI 消失。
         App.removeCallbacks(mR1);
         bindEpisodePanel(true);
@@ -5090,7 +5090,9 @@ private boolean runtimeSourceOnly;
         if (mBinding == null || !isVisible(mBinding.episodePanel.getRoot())) return;
         mBinding.episodePanel.getRoot().setVisibility(View.GONE);
         syncOsdLogo();
-        PlayerControlFocusHelper.ensureFocus(mBinding.osdControl.getRoot(), mBinding.osdControl.osdEpisodes);
+        // 控制栏可见时焦点还给控制栏；MENU 单独呼出的面板没有控制栏，焦点直接交回播放画面。
+        if (isVisible(mBinding.osdControl.getRoot())) PlayerControlFocusHelper.ensureFocus(mBinding.osdControl.getRoot(), mBinding.osdControl.osdEpisodes);
+        else mBinding.video.requestFocus();
     }
 
     /** 重新绑定线路 / 分页 / 当前页选集；resetPage=false 时保留用户手动切换的页码。 */
@@ -5190,7 +5192,55 @@ private boolean runtimeSourceOnly;
             focusEpisodePanel();
             return true;
         }
+        if (dispatchEpisodePanelVerticalKey(event)) return true;
         return PlayerControlFocusHelper.handleKey(mBinding.episodePanel.getRoot(), null, event);
+    }
+
+    /**
+     * 选集面板纵向焦点闭环：网格首行「上」→ 操作标签行，操作标签行/分页行「上」→ 播放线路，
+     * 播放线路「下」→ 操作标签行。网格内部的行间移动继续交给系统 focusSearch。
+     * 不能依赖 adapter_osd_episode 里的 nextFocus*：逆向布局的 @id/flag、@id/array 在本工程
+     * 指向嵌入页（非全屏）的同名控件，全屏面板取不到，网格首行按「上」会被 handleKey 直接吞掉，
+     * 表现为只能一路往左再按左才回得到上面。
+     */
+    private boolean dispatchEpisodePanelVerticalKey(KeyEvent event) {
+        if (event == null || !KeyUtil.isActionDown(event)) return false;
+        if (KeyUtil.isUpKey(event)) {
+            if (isOsdGridFirstRow()) return focusOsdTabRow();
+            if (hasOsdTabRowFocus()) return focusOsdFlag();
+            return false;
+        }
+        if (KeyUtil.isDownKey(event) && PlayerControlFocusHelper.containsFocus(mBinding.episodePanel.osdFlagList)) return focusOsdTabRow();
+        return false;
+    }
+
+    /** 当前焦点是否落在选集网格的第一行（少列 2 列 / 多列 8 列）。 */
+    private boolean isOsdGridFirstRow() {
+        RecyclerView grid = mBinding.episodePanel.osdEpisodeGrid;
+        View focus = grid.findFocus();
+        if (focus == null) return false;
+        RecyclerView.ViewHolder holder = grid.findContainingViewHolder(focus);
+        if (holder == null) return false;
+        int position = holder.getBindingAdapterPosition();
+        return position != RecyclerView.NO_POSITION && position < getOsdColumn();
+    }
+
+    private boolean hasOsdTabRowFocus() {
+        return PlayerControlFocusHelper.containsFocus(mBinding.episodePanel.osdTabColumn)
+                || PlayerControlFocusHelper.containsFocus(mBinding.episodePanel.osdTabSort)
+                || PlayerControlFocusHelper.containsFocus(mBinding.episodePanel.osdPageList);
+    }
+
+    /** 标签行优先停在正序/倒序（刚操作过的那个），其次少列/多列。 */
+    private boolean focusOsdTabRow() {
+        if (isVisible(mBinding.episodePanel.osdTabSort) && mBinding.episodePanel.osdTabSort.requestFocus()) return true;
+        return isVisible(mBinding.episodePanel.osdTabColumn) && mBinding.episodePanel.osdTabColumn.requestFocus();
+    }
+
+    /** 回到播放线路行，停在当前选中的线路上。 */
+    private boolean focusOsdFlag() {
+        int position = mOsdFlagAdapter == null ? RecyclerView.NO_POSITION : mOsdFlagAdapter.getSelectedPosition();
+        return focusRecyclerPosition(mBinding.episodePanel.osdFlagList, position < 0 ? 0 : position);
     }
 
     private boolean isPanelFocusKey(KeyEvent event) {
@@ -5265,7 +5315,8 @@ private boolean runtimeSourceOnly;
         mBinding.osdControl.getRoot().setVisibility(View.VISIBLE);
         syncOsdState();
         updateCustomButtonVisibility();
-        if (mOsd != null) mOsd.setControlsVisible(true);
+        // 不再把旧 WebHTV 屏显（标题/分辨率/时间）绑到控制栏上：按「下」呼出控制栏时只显示新版 OSD，
+        // 旧 PlayerOsdController 仅在用户自己开启 OSD 屏显时独立显示，不会跟着控制栏冒出来。
         PlayerControlFocusHelper.ensureFocus(mBinding.osdControl.getRoot(), resolveOsdTarget(view));
         App.removeCallbacks(mOsdTick);
         App.post(mOsdTick, OSD_TICK_INTERVAL);
@@ -8180,7 +8231,9 @@ private boolean runtimeSourceOnly;
         if (onEpisodeKey(event)) return true;
         if (handleEpisodeLongPress(event)) return true;
         if (mAudioStageVisible && isGone(mBinding.osdControl.getRoot()) && dispatchAudioStageKey(event)) return true;
-        if (isFullscreen() && isGone(mBinding.osdControl.getRoot()) && mKeyDown.hasEvent(event) && service() != null) return mKeyDown.onKeyDown(event);
+        // 选集面板独占方向键：MENU 直接呼出面板时控制栏是隐藏的，若不排除面板，
+        // CustomKeyDownVod 会把方向键当成快进/快退吞掉，面板里根本无法移动焦点。
+        if (isFullscreen() && isGone(mBinding.osdControl.getRoot()) && isGone(mBinding.episodePanel.getRoot()) && mKeyDown.hasEvent(event) && service() != null) return mKeyDown.onKeyDown(event);
         if (KeyUtil.isMediaFastForward(event)) return onSeekForward();
         if (KeyUtil.isMediaRewind(event)) return onSeekBack();
         return super.dispatchKeyEvent(event);

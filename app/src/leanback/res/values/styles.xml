@@ -110,20 +110,21 @@
     </style>
 
     <!--
-        播放页 OSD 底部文字按钮：默认透明，焦点态是 #FF8A80 → #E53935 水平渐变 8dp 圆角矩形。
-        字号 14sp、按钮间距统一 16dp，整行贴左排布（禁止居中、禁止正圆胶囊）。
+        播放页 OSD 底部文字按钮：默认透明，焦点态是 #E50914 → #FD7D83 的水平红渐变胶囊。
+        尺寸照抄原逆向 App 截图：高 30dp、左右内边距 12dp（两字按钮约 52dp 宽），
+        圆角 15dp 即高度的一半；字号 14sp、按钮间距统一 16dp，整行贴左排布（禁止居中）。
     -->
     <style name="OsdAction">
         <item name="android:layout_width">wrap_content</item>
-        <item name="android:layout_height">40dp</item>
+        <item name="android:layout_height">30dp</item>
         <item name="android:layout_marginEnd">16dp</item>
         <item name="android:background">@drawable/selector_osd_action</item>
         <item name="android:focusable">true</item>
         <item name="android:focusableInTouchMode">true</item>
         <item name="android:gravity">center</item>
         <item name="android:includeFontPadding">false</item>
-        <item name="android:paddingStart">6dp</item>
-        <item name="android:paddingEnd">6dp</item>
+        <item name="android:paddingStart">12dp</item>
+        <item name="android:paddingEnd">12dp</item>
         <item name="android:singleLine">true</item>
         <item name="android:textColor">@color/white</item>
         <item name="android:textSize">14sp</item>
