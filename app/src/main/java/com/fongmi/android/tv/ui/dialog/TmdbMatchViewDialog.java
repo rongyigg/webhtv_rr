@@ -151,6 +151,10 @@ public class TmdbMatchViewDialog {
         if (activity == null || activity.isFinishing() || activity.isDestroyed()) return;
         View root = LayoutInflater.from(activity).inflate(R.layout.dialog_tmdb_match_view, null, false);
         bindViews(root);
+        // 【最后一道闸】根布局按键监听：能冒到根布局，说明弹窗内所有可聚焦控件都拒绝了这个方向
+        // （子 View 先消费，内部焦点流转完全不受影响）。这时绝不允许它继续冒到 Activity 或
+        // 底层海报列表，直接吞掉，等价于逆向 pc3.F() 里 n40 的"走投无路就吃掉"。
+        root.setOnKeyListener((view, keyCode, event) -> handleRootKey(view, keyCode));
         dialog = new MaterialAlertDialogBuilder(activity, R.style.Theme_WebHTV_LightDialog).setView(root).create();
         dialog.setOnDismissListener(item -> {
             // 关窗即作废在途的联想词请求，避免回调打到已销毁的 View 上。
@@ -164,9 +168,17 @@ public class TmdbMatchViewDialog {
         // 凡是弹窗自己不需要的按键都在这里吃掉，绝不允许穿透到首页去滚动海报 / 换焦点；
         // 返回键放行给 Dialog 关闭，方向键与确认键必须放行给弹窗内的焦点系统，
         // 否则虚拟键盘和候选卡片会完全无法操作。
-        dialog.setOnKeyListener((d, keyCode, event) -> switch (keyCode) {
-            case KeyEvent.KEYCODE_BACK,
-                 KeyEvent.KEYCODE_DPAD_UP,
+        dialog.setOnKeyListener((d, keyCode, event) -> {
+            // 返回键：照抄 n40 的"关窗并吞掉"，不再依赖 Dialog.onKeyDown 的默认分支。
+            // 抬键才关（与系统行为一致），按下 / 抬起都返回 true，保证没有任何一帧漏到底层。
+            if (keyCode == KeyEvent.KEYCODE_BACK) {
+                if (event != null && event.getAction() == KeyEvent.ACTION_UP) dismiss();
+                return true;
+            }
+            // 内部导航键（方向 / 确认 / 回车）与音量键一律放行给弹窗内部控件；
+            // 其余按键（菜单 / 首页 / 数字键等）在 Dialog 这一层直接吞掉，绝不外溢。
+            return switch (keyCode) {
+            case KeyEvent.KEYCODE_DPAD_UP,
                  KeyEvent.KEYCODE_DPAD_DOWN,
                  KeyEvent.KEYCODE_DPAD_LEFT,
                  KeyEvent.KEYCODE_DPAD_RIGHT,
@@ -176,6 +188,7 @@ public class TmdbMatchViewDialog {
                  KeyEvent.KEYCODE_VOLUME_DOWN,
                  KeyEvent.KEYCODE_VOLUME_MUTE -> false;
             default -> true;
+            };
         });
         dialog.show();
         configureWindow();
@@ -200,6 +213,50 @@ public class TmdbMatchViewDialog {
         if (dialog != null) dialog.dismiss();
     }
 
+    /**
+     * 根布局兜底拦截：只处理会在「弹窗 ↔ 底层页面」之间造成串焦的导航键。
+     *
+     * <p>事件能走到这里，说明焦点控件与本层 ViewGroup 都已经拒收该方向，
+     * 因此返回 true 不会截断弹窗内部的焦点流转，只是把"跑出弹窗"的那一下吃掉。
+     * 音量键、菜单键等不在白名单里的按键原样放行（由 {@code show()} 里的
+     * Dialog 级 OnKeyListener 统一处理）。
+     */
+    private static boolean handleRootKey(View root, int keyCode) {
+        int direction = focusDirection(keyCode);
+        if (direction == 0) {
+            // 确认键 / 回车：说明没有任何控件接手，就地吞掉，绝不让它外溢。
+            return keyCode == KeyEvent.KEYCODE_DPAD_CENTER
+                    || keyCode == KeyEvent.KEYCODE_ENTER
+                    || keyCode == KeyEvent.KEYCODE_NUMPAD_ENTER;
+        }
+        View focused = root.findFocus();
+        View next = focused == null ? null : focused.focusSearch(direction);
+        // 该方向上弹窗内还有可聚焦目标 → 交还系统做正常的焦点搜索，内部流转一点不改。
+        if (next != null && isInside(root, next)) return false;
+        // 已经没有目标了：这才叫"按键要跑出弹窗"，吞掉。
+        return true;
+    }
+
+    /** 把遥控器方向键翻译成 {@link View#focusSearch(int)} 用的方向常量；非方向键返回 0。 */
+    private static int focusDirection(int keyCode) {
+        return switch (keyCode) {
+            case KeyEvent.KEYCODE_DPAD_UP -> View.FOCUS_UP;
+            case KeyEvent.KEYCODE_DPAD_DOWN -> View.FOCUS_DOWN;
+            case KeyEvent.KEYCODE_DPAD_LEFT -> View.FOCUS_LEFT;
+            case KeyEvent.KEYCODE_DPAD_RIGHT -> View.FOCUS_RIGHT;
+            default -> 0;
+        };
+    }
+
+    private static boolean isInside(View root, View view) {
+        View current = view;
+        while (current != null) {
+            if (current == root) return true;
+            current = current.getParent() instanceof View parent ? parent : null;
+        }
+        return false;
+    }
+
     private void bindViews(View root) {
         keyword = root.findViewById(R.id.keyword);
         searchBtn = root.findViewById(R.id.searchBtn);
@@ -220,7 +277,15 @@ public class TmdbMatchViewDialog {
         window.setDimAmount(0f);
         window.clearFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND);
         // 虚拟键盘由页面自己实现，窗口必须屏蔽系统输入法。
-        window.addFlags(WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM);
+        // 【焦点物理隔绝】本弹窗必须持有窗口焦点，否则按键会直接派发给底层的 HomeViewActivity：
+        // 1. 先显式清掉"放弃焦点"的标志（FLAG_NOT_FOCUSABLE）以及非模态标志（FLAG_NOT_TOUCH_MODAL），
+        //    确保代码里不存在任何让窗口不要焦点的位；
+        // 2. 再只置 FLAG_ALT_FOCUSABLE_IM（屏蔽软键盘/输入法，**不影响**窗口焦点与遥控器按键）。
+        // setFlags 的第二个参数是掩码，只改这一位，不会顺手清掉 DIM / 尺寸等其它标志。
+        window.clearFlags(WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL);
+        window.setFlags(WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM,
+                WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM);
         window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_HIDDEN);
         DisplayMetrics metrics = activity.getResources().getDisplayMetrics();
         int preferred = Math.round(metrics.widthPixels * 0.82f);

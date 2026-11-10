@@ -165,6 +165,15 @@ class HomeViewActivity : AppCompatActivity() {
     private var isTmdbShowing = false
 
     /**
+     * TMDB 弹窗代号：每次呼出自增。
+     *
+     * `Dialog.dismiss()` 的 dismiss 回调是 Handler 异步消息，旧弹窗的回调可能**晚于**
+     * 新弹窗的 `show()` 才执行；没有这层校验，它会把新弹窗刚置上的 [isTmdbShowing]
+     * 复位成 false，于是新弹窗整个生命周期都不再拦截，按键重新漏到底层海报列表。
+     */
+    private var tmdbDialogSerial = 0
+
+    /**
      * 横图同步兜底缓存：`posterKey → 已解析横图`。
      *
      * `bindBackdrop` 在**首帧绘制之前**同步查一次磁盘匹配缓存；命中后写进这里，
@@ -1411,6 +1420,7 @@ class HomeViewActivity : AppCompatActivity() {
         // 【TMDB 手动匹配弹窗 · 终极防线】弹窗显示期间，所有按键一律吞掉。
         // 弹窗自身已有 setOnKeyListener + DecorView 抢焦点，这里再兜第一行，
         // 保证任何情况下都绝不让焦点漏到底层海报列表。
+        Log.d("KeyTest", "HomeViewActivity dispatchKeyEvent: ${event.keyCode}, isTmdbShowing=$isTmdbShowing")
         if (isTmdbShowing) return true
         // 【菜单键】呼出全局接口源侧边栏（与 Compose 首页小房子同一实现）。
         // DOWN 只认首次按下，避免按住时重复弹窗；UP 一并吞掉，防止落到默认菜单处理。
@@ -1593,6 +1603,8 @@ class HomeViewActivity : AppCompatActivity() {
      * 弹窗的布局 / 键盘 / 联想词 / 焦点流转全部由它自己那套 XML + Adapter 负责。
      */
     private fun showTmdbManualMatch(item: HomePosterItem) {
+        // 领一个新代号：旧弹窗的 dismiss 回调如果迟到，会因代号不匹配被直接丢弃。
+        val serial = ++tmdbDialogSerial
         tmdbMatchDialog?.dismiss()
         val dialog = TmdbMatchViewDialog.create(this)
             .keyword(item.title)
@@ -1603,6 +1615,9 @@ class HomeViewActivity : AppCompatActivity() {
             }
             .dismissListener {
                 // 关窗（点卡片确认 / 返回键 / 取消）后统一复位：解除按键拦截 + 焦点还给长按那张卡。
+                // dismiss 回调是 Handler 异步消息：旧弹窗的回调可能晚于新弹窗的 show() 才到，
+                // 不加这道判断就会把新弹窗的拦截标志清成 false（按键立刻漏到底层列表）。
+                if (serial != tmdbDialogSerial) return@dismissListener
                 isTmdbShowing = false
                 tmdbMatchDialog = null
                 recycler.post { focusPoster(focusedIndex) }

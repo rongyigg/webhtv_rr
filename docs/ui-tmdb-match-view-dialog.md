@@ -127,3 +127,21 @@ n40 说明：`n40` 在 R8 后没有独立类（`ref_docs` 无原件），按唯�
 保留说明：`ui/hero/HeroKeyboard.kt` 仍被 `HeroSearchActivity` 使用，未删除；其中一处 KDoc 仍提到类名 `TmdbMatchDialog`，仅是注释，不影响编译。
 
 第 5 轮验证：全仓 `TmdbMatchViewHost` 零引用；`ui.hero.TmdbMatchDialog` 零引用；两个 Kotlin 文件花括号 314/314、594/594；`TmdbMatchViewDialog` 花括号 139/139；删除的两个文件已由 git 记录为删除；改动全部落在声明路径。
+
+## 第 6 轮：HomeView 纯 View 首页按键穿透的根因排查与修复
+
+| 项 | 改动 | 位置 |
+|---|---|---|
+| 诊断日志 | `Log.d("KeyTest", "HomeViewActivity dispatchKeyEvent: ${event.keyCode}, isTmdbShowing=$isTmdbShowing")` | `HomeViewActivity.dispatchKeyEvent` 第一行 |
+| 标志竞态 | 新增 `tmdbDialogSerial`：每次呼出自增；dismiss 回调代号不匹配直接丢弃 | `HomeViewActivity.showTmdbManualMatch()` |
+| Window 焦点位 | `clearFlags(FLAG_NOT_FOCUSABLE \| FLAG_NOT_TOUCH_MODAL)`，再 `setFlags(FLAG_ALT_FOCUSABLE_IM, FLAG_ALT_FOCUSABLE_IM)`（掩码只改这一位） | `TmdbMatchViewDialog.configureWindow()` |
+| Dialog 级拦截 | 返回键 `dismiss()` + 返回 true；方向 / 确认 / 回车 / 音量键放行；其余一律吞 | `TmdbMatchViewDialog.show()` |
+| 根布局兜底 | `root.setOnKeyListener` → `handleRootKey()`：方向键用 `focusSearch` 判定，只有该方向已无弹窗内目标时才吞；确认 / 回车就地吞掉 | `TmdbMatchViewDialog.show()` |
+
+**根因**：`Dialog.dismiss()` 的 dismiss 回调是 Handler 异步消息（`Dialog.sendDismissMessage()` 内部 `sendToTarget()`）。`showTmdbManualMatch()` 先 `dismiss()` 旧窗、再置 `isTmdbShowing = true`，旧窗的迟到回调随后才执行，把新弹窗的标志复位成 `false`、`tmdbMatchDialog` 置空 —— 新弹窗整个生命周期 Activity 都不再拦截，按键直接落到海报列表。代号校验就是修这个竞态。
+
+**兜底的边界**：`dispatchKeyEvent` 只对"派给 Activity 窗口"的按键生效；`Dialog` 是独立 Window，一旦它的 DecorView 拿到焦点，按键走 `Dialog.dispatchKeyEvent → Dialog.OnKeyListener → Window.superDispatchKeyEvent`，根本不经过 Activity。所以 Activity 只兜 `show()` 前后的窗口切换空窗期，弹窗内部的拦截必须由 Dialog 自己完成。
+
+**RecyclerView 排查结论**：`HomeViewActivity` 的 `recycler` 没有任何 `setOnKeyListener` / `setOnKeyDown` 覆写，Adapter 也不消费按键；`descendantFocusability` 只控制焦点可达性。因此不存在"RecyclerView 私自截胡"，无需改动（红线 2）。
+
+第 6 轮验证：`HomeViewActivity` 花括号 315/315、圆括号 1063/1063；`TmdbMatchViewDialog` 花括号 144/144、圆括号 570/570；`tmdbDialogSerial` 只在 `showTmdbManualMatch()` 内读写；未编译（按用户要求只出 diff）。
