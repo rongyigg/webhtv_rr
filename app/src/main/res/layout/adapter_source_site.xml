@@ -7,9 +7,13 @@
   itemView，若把背景/focusable 放在内层，adapter 设置的 isSelected 会落在不画背景的外层，
   焦点态也就永远不会绘制。合并成一层后 itemView 即标签，状态一定生效。
 
-  颜色（按需求指定）：
-  - focused：红底 #E50914（@color/red）+ 白字，胶囊圆角 28dp（见 selector_source_site_chip_background）
-  - normal / selected：透明底 + 白字
+  三态全部走全局样式（见 selector_source_site_chip_background）：
+  - focused  → 实心红渐变胶囊 @drawable/bg_global_focus_capsule（28dp）
+  - selected → 失焦选中，同形状细线红框 @drawable/bg_global_selected_capsule_border（1.5dp）
+  - normal   → 普通半透明胶囊 @drawable/shape_source_site_chip_normal（@color/white_10）
+
+  内边距写在这一层：三份背景都刻意不带 <padding>，
+  若把 6dp 留在某一份 drawable 里，焦点态就会比常态窄 12dp，按住方向键时整行宽度抖动。
 -->
 <androidx.appcompat.widget.LinearLayoutCompat xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/item"
@@ -18,6 +22,8 @@
     android:background="@drawable/selector_source_site_chip_background"
     android:focusable="true"
     android:focusableInTouchMode="true"
+    android:paddingStart="6dp"
+    android:paddingEnd="6dp"
     android:layout_width="wrap_content"
     android:layout_height="match_parent">
     <androidx.appcompat.widget.AppCompatTextView

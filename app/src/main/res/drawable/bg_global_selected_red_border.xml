@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    全局「选中」样式：透明底 + 1.5dp 细线红框（@color/osd_red_end），4dp 轻微圆角。
+    用于矩形卡片（选集集数卡等）的「已选中但未聚焦」态，绝不使用实心红底。
+    刻意不带 <padding>：调用方自己维护内边距，避免换背景时把卡片尺寸改掉。
+
+    与 leanback 源集的同名文件保持一致：main 里的换源弹窗属于 main 源集，
+    mobile flavor 不含 leanback/res，缺这一份会直接编译不过。
+-->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+
+    <solid android:color="@android:color/transparent" />
+
+    <stroke
+        android:width="1.5dp"
+        android:color="@color/osd_red_end" />
+
+    <corners android:radius="4dp" />
+
+</shape>

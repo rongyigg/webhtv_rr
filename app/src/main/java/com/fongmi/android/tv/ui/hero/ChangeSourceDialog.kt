@@ -12,7 +12,6 @@ import android.view.Gravity
 import android.view.KeyEvent
 import android.view.View
 import android.view.ViewGroup
-import android.view.ViewTreeObserver
 import android.view.WindowManager
 import android.widget.FrameLayout
 import android.widget.TextView
@@ -125,19 +124,6 @@ internal class ChangeSourceDialog private constructor(
 
     /** 当前站点栏下标（[tabSites] 的下标；Tab 是动态的，只有出过结果的源才会在里面）。 */
     private var selectedSite: Int = 0
-
-    /**
-     * 焦点是否停在下方结果区。
-     *
-     * 《焦点总结》规则 ②③ 的分界线：还在结果区 → 当前站点标签留红框（知道这批结果属于哪个站点）；
-     * 焦点回到小房子或站点栏 → 红框收起，不留多余的红色干扰。
-     */
-    private var contentFocused = false
-
-    /** 全局焦点监听：View 体系里判断「焦点是否在结果 RecyclerView 内」最可靠的方式。 */
-    private val focusListener = ViewTreeObserver.OnGlobalFocusChangeListener { _, newFocus ->
-        setContentFocused(newFocus != null && isDescendantOf(resultRecycler, newFocus))
-    }
 
     /** 当前展示的结果。永远只属于 [selectedSite] 这一个源。 */
     private var visibleResults: List<Vod> = emptyList()
@@ -258,20 +244,32 @@ internal class ChangeSourceDialog private constructor(
     private var started = false
 
     /**
-     * 【原版同款 W 锁 · 弹窗侧】长按打开时手指还按着，连发会让焦点在候选源里一路乱跑。
+     * 【最外层按键闸门】长按呼出时手指还按着，弹窗窗口收到的第一批事件就是 `repeatCount > 0` 的连发。
      *
-     * 弹窗是独立 Window，Activity 的 `dispatchKeyEvent` 根本看不到这些事件，只能在弹窗自己这里拦：
-     * 从打开起、到收到那次真实的 `ACTION_UP`（或下一次全新按下 `repeatCount == 0`）为止，
-     * 所有连发一律吞掉。松开即恢复，正常「按住下键连续翻源」不受影响。
+     * 弹窗是独立 Window，Activity 的 `dispatchKeyEvent` 根本看不到这些事件，
+     * 所以拦截必须放在弹窗自己的 `dispatchKeyEvent`（所有子 View 的按键之前）。
+     *
+     * 规则：
+     * 1. 弹窗刚建好时闸门是关着的（[blockUntilKeyUp] = true）；
+     * 2. 抬手（ACTION_UP）→ 开闸；
+     * 3. 一次全新的按下（ACTION_DOWN 且 repeatCount == 0）→ 开闸后照常派发；
+     * 4. 闸门关着期间，**所有** ACTION_DOWN（含连发）与 ACTION_MULTIPLE 一律吞掉。
+     *
+     * 这样「长按确定键呼出」的连发一个都进不来，而正常按住 ←/→ 连续换源完全不受影响
+     * （那时闸门早已打开）。
      */
-    private var swallowRepeat = true
+    private var blockUntilKeyUp = true
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
-        when {
-            event.action == KeyEvent.ACTION_UP -> swallowRepeat = false
-            event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0 -> swallowRepeat = false
-            swallowRepeat && event.action == KeyEvent.ACTION_DOWN -> return true
+        if (event.action == KeyEvent.ACTION_UP) {
+            blockUntilKeyUp = false
+            return super.dispatchKeyEvent(event)
         }
+        if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
+            blockUntilKeyUp = false
+        }
+        val swallowing = event.action == KeyEvent.ACTION_DOWN || event.action == KeyEvent.ACTION_MULTIPLE
+        if (blockUntilKeyUp && swallowing) return true
         return super.dispatchKeyEvent(event)
     }
 
@@ -303,9 +301,6 @@ internal class ChangeSourceDialog private constructor(
         super.onStart()
         // 【排查日志】onStart = 窗口已经真正显示；没有这一行说明 show() 之前就失败了。
         Log.e(TAG, "弹窗 onStart: 候选源=${sites.size}, 已有 Tab=${tabSites.size}")
-        // 焦点进出结果区时同步站点标签的红框（规则 ②③）。
-        // 与 onStop 的移除成对，保证弹窗被复用/重新显示时监听不会丢也不会重复添加。
-        window?.decorView?.viewTreeObserver?.addOnGlobalFocusChangeListener(focusListener)
         // 先立「忽略重放」标志再挂观察者：observeForever 的首次同步重放必须被拦掉。
         ignoreReplay = true
         viewModel.search.observeForever(searchObserver)
@@ -337,7 +332,6 @@ internal class ChangeSourceDialog private constructor(
     }
 
     override fun onStop() {
-        window?.decorView?.viewTreeObserver?.removeOnGlobalFocusChangeListener(focusListener)
         viewModel.search.removeObserver(searchObserver)
         viewModel.searchProgress.removeObserver(progressObserver)
         viewModel.result.removeObserver(resultObserver)
@@ -404,12 +398,42 @@ internal class ChangeSourceDialog private constructor(
         // 「⬅️ 返回」只在 folder 下探时出现：点一下退到上一级目录 / 回到搜索结果。
         backBtn = findViewById(R.id.backBtn)
         backBtn.setOnClickListener { exitDrillDown() }
+        // 下探期间站点栏隐藏，「返回」就是弹窗里最上面一行：方向键按同一套规则点名落点，
+        // 否则 ↓ 只会落到 RecyclerView 容器上（卡片不高亮，用户以为按键没反应）。
+        backBtn.setOnKeyListener { _, keyCode, event ->
+            if (event.action != KeyEvent.ACTION_DOWN) return@setOnKeyListener false
+            when (keyCode) {
+                KeyEvent.KEYCODE_DPAD_DOWN -> {
+                    if (visibleResults.isNotEmpty()) focusFirstResult()
+                    true
+                }
+                KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT -> true
+                else -> false
+            }
+        }
         siteLayout = findViewById(R.id.siteLayout)
     }
 
     private fun bindHome() {
         homeBtn = findViewById(R.id.homeBtn)
         homeBtn.setOnClickListener { openSidebar() }
+        // 小房子与站点栏同一行：← 已在布局里指向它，→ / ↓ 也必须点名，
+        // 不能交给系统 focus search 落到 RecyclerView 容器或上一次焦点上。
+        homeBtn.setOnKeyListener { _, keyCode, event ->
+            if (event.action != KeyEvent.ACTION_DOWN) return@setOnKeyListener false
+            when (keyCode) {
+                KeyEvent.KEYCODE_DPAD_RIGHT -> {
+                    focusSite(selectedSite)
+                    true
+                }
+                KeyEvent.KEYCODE_DPAD_DOWN -> {
+                    if (visibleResults.isNotEmpty()) focusFirstResult()
+                    true
+                }
+                KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_LEFT -> true
+                else -> false
+            }
+        }
     }
 
     private fun bindSiteList() {
@@ -783,14 +807,22 @@ internal class ChangeSourceDialog private constructor(
         if (active) backBtn.post { if (drillActive() && !backBtn.hasFocus()) backBtn.requestFocus() }
     }
 
-    /** 目录结果到达后把焦点落到第一张海报；ViewHolder 还没布局好时再补一次。 */
+    /**
+     * 把焦点精准落到结果区的**第一张**卡片。
+     *
+     * Tab 栏按 ↓、下探回包后都用这一个入口：
+     * - 先 `scrollToPosition(0)`，保证第 0 张一定在可视区（否则 findViewHolder 永远拿不到）；
+     * - ViewHolder 还在布局中时补一次 post，两次都取不到才放弃，绝不把焦点留在 RecyclerView 容器上。
+     */
     private fun focusFirstResult() {
         resultRecycler.post {
+            resultRecycler.scrollToPosition(0)
             val holder = resultRecycler.findViewHolderForAdapterPosition(0)
             if (holder != null) {
                 holder.itemView.requestFocus()
             } else {
                 resultRecycler.post {
+                    resultRecycler.scrollToPosition(0)
                     resultRecycler.findViewHolderForAdapterPosition(0)?.itemView?.requestFocus()
                 }
             }
@@ -903,34 +935,6 @@ internal class ChangeSourceDialog private constructor(
         super.onBackPressed()
     }
 
-    /** 当前焦点是否还在下方结果区。只在状态真的变化时刷新标签背景，避免无谓重绘。 */
-    private fun setContentFocused(value: Boolean) {
-        if (contentFocused == value) return
-        contentFocused = value
-        syncSiteActivation()
-    }
-
-    /**
-     * 把 `isActivated` 打到「当前站点且焦点在结果区」的那一个标签上。
-     * drawable 的 `state_activated` 项据此显示红框（shape_source_site_chip_selected）。
-     */
-    private fun syncSiteActivation() {
-        for (index in 0 until siteRecycler.childCount) {
-            val child = siteRecycler.getChildAt(index)
-            val position = siteRecycler.getChildAdapterPosition(child)
-            child.isActivated = contentFocused && position == selectedSite
-        }
-    }
-
-    private fun isDescendantOf(parent: View, child: View): Boolean {
-        var current: View? = child
-        while (current != null) {
-            if (current === parent) return true
-            current = current.parent as? View
-        }
-        return false
-    }
-
     /**
      * 弹窗内小房子：拉起多选侧边栏（层级盖在换源弹窗之上，后创建的窗口在上层）。
      *
@@ -987,12 +991,30 @@ internal class ChangeSourceDialog private constructor(
         override fun onBindViewHolder(holder: Holder, position: Int) {
             // 显示名走 Site.getDisplayName()：尊重用户在站点管理里的改名。
             holder.name.text = tabSites[position].displayName
+            // 失焦选中 → 1.5dp 细线红框（drawable 的 state_selected 分支）；
+            // 焦点态由 state_focused 优先接管，直接变成实心红渐变胶囊。
             holder.itemView.isSelected = position == selectedSite
-            // 规则 ②：当前站点 + 焦点在结果区 → 红框（drawable 的 state_activated 分支）。
-            holder.itemView.isActivated = contentFocused && position == selectedSite
             // 第一个站点标签向左回到小房子；其余在站点栏内滚动。
             holder.itemView.nextFocusLeftId = if (position == 0) R.id.homeBtn else View.NO_ID
             holder.itemView.setOnClickListener { selectSite(holder.bindingAdapterPosition) }
+            // 垂直方向由这里点名接管，不交给系统 focus search：
+            // - ↓：精准落到「当前站源」的第一张卡片，而不是 RecyclerView 容器 / 上次焦点；
+            // - ↑：站点栏是弹窗内最上面一行可聚焦内容，吃掉，焦点不出弹窗；
+            // - →：最后一个 Tab 吃掉（对标 f23 的 app:focusOutEnd="false"），首尾不穿透。
+            //   第一个 Tab 的 ← 不拦：布局的 nextFocusLeft 指向小房子，仍在本弹窗内。
+            holder.itemView.setOnKeyListener { _, keyCode, event ->
+                if (event.action != KeyEvent.ACTION_DOWN) return@setOnKeyListener false
+                when (keyCode) {
+                    KeyEvent.KEYCODE_DPAD_DOWN -> {
+                        if (visibleResults.isEmpty()) return@setOnKeyListener true
+                        focusFirstResult()
+                        true
+                    }
+                    KeyEvent.KEYCODE_DPAD_UP -> true
+                    KeyEvent.KEYCODE_DPAD_RIGHT -> holder.bindingAdapterPosition == tabSites.lastIndex
+                    else -> false
+                }
+            }
             // 【焦点即选中】焦点停稳即切源：电视端不用再按确定键。
             // - 停稳 [SITE_FOCUS_DEBOUNCE_MS] 才真正 `selectSite`，快速滑过多个源不会连发请求；
             // - 每次 gain 都重排任务（覆盖上一个），真正执行时再校验「该标签仍持有焦点」；
@@ -1046,17 +1068,24 @@ internal class ChangeSourceDialog private constructor(
                 // 点卡片**不再跳详情页**：folder 就地展开目录，普通剧集直接弹选集。
                 openResult(item, site)
             }
-            // 卡片按 ↑ 必须回到**当前选中的站点标签**（《焦点总结》规则 ④的同一条思路）。
-            // 弹窗布局里 recycler 的 nextFocusUp 指向整个 siteRecycler，焦点只会落到
-            // RecyclerView 容器上，标签本身既不高亮也不滚动，用户看不出自己回到了哪个站点；
-            // 所以在这里拦一次，直接点名请求那个标签的焦点。
-            // 下探期间站点栏是隐藏的：↑ 改成回到「⬅️ 返回」，否则焦点会卡死在卡片上。
+            // 卡片按键全部在这里点名接管，不让系统 focus search 决定落点：
+            // - ↑：精准回到**当前选中**的站点标签（下探期间站点栏隐藏，改回「⬅️ 返回」）；
+            //   布局里 recycler 的 nextFocusUp 只指向 siteRecycler 容器，标签既不高亮也不滚动，
+            //   所以必须显式 requestFocus。
+            // - ↓：结果区只有一行，吃掉，焦点不出弹窗。
+            // - ← / →：首尾两张吃掉，不穿透到弹窗外（对标 f23 的 focusOutFront / focusOutEnd = false）。
             holder.card.setOnKeyListener { _, keyCode, event ->
-                if (event.action == KeyEvent.ACTION_DOWN && keyCode == KeyEvent.KEYCODE_DPAD_UP) {
-                    if (drillActive()) backBtn.requestFocus() else focusSite(selectedSite)
-                    true
-                } else {
-                    false
+                if (event.action != KeyEvent.ACTION_DOWN) return@setOnKeyListener false
+                val pos = holder.bindingAdapterPosition
+                when (keyCode) {
+                    KeyEvent.KEYCODE_DPAD_UP -> {
+                        if (drillActive()) backBtn.requestFocus() else focusSite(selectedSite)
+                        true
+                    }
+                    KeyEvent.KEYCODE_DPAD_DOWN -> true
+                    KeyEvent.KEYCODE_DPAD_LEFT -> pos <= 0
+                    KeyEvent.KEYCODE_DPAD_RIGHT -> pos >= visibleResults.lastIndex
+                    else -> false
                 }
             }
         }
@@ -1106,13 +1135,13 @@ internal class ChangeSourceDialog private constructor(
         private const val WINDOW_MARGIN_DP = 16
 
         /**
-         * 窗口遮罩暗度：**50%**。
+         * 窗口遮罩暗度：**0.56**，与 TMDB 详情弹窗逐字同值
+         * （`TmdbDetailActivity.java:6482` / `:6604` 的 `window.setDimAmount(0.56f)`）。
          *
-         * 与选集弹窗的自绘遮罩 `DIALOG_SCRIM = 0x80000000` 对齐；工程既有弹窗也都在
-         * 0.56–0.6 之间（`TmdbDetailActivity 0.56`、`ChoiceDialog 0.58`）。
-         * 原来的 0.6 叠在深色 Hero 页上接近全黑，弹窗外的背景完全看不见，已按需求调浅。
+         * 不用更深的 0.6+：叠在深色 Hero 页上接近死黑，弹窗外的背景完全看不见。
+         * 也不用 0.5 以下：遮罩太淡时，弹窗面板与背后的海报墙会糊在一起，分不清层级。
          */
-        private const val DIM_AMOUNT = 0.5f
+        private const val DIM_AMOUNT = 0.56f
 
         /** 初始焦点重试：ViewHolder 未布局完成时，焦点会停在 RecyclerView 上，标签就没有红底。 */
         private const val FOCUS_RETRY_COUNT = 6

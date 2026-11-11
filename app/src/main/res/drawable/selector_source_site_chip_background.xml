@@ -1,26 +1,25 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  换源弹窗（ChangeSourceDialog）站点标签的三态背景：
+  换源弹窗（ChangeSourceDialog）站点标签的三态背景，全部走全局样式：
 
-  focused    → 红渐变色块 + 白字（shape_source_site_chip_focused）
-  activated  → 失焦但仍是当前站点、且焦点在下半区：红框 + 透明底（shape_source_site_chip_selected）
-  selected   → 当前站点但焦点已离开模块：透明（沿用常态，规则 ③ 不保留红框）
-  normal     → 透明
+  focused   → @drawable/bg_global_focus_capsule        实心红渐变胶囊（@color/osd_accent → osd_accent_light，28dp）
+  selected  → @drawable/bg_global_selected_capsule_border  失焦但仍是当前站源：同形状透明底 + 1.5dp 细线红框
+  normal    → @drawable/shape_source_site_chip_normal  普通半透明胶囊（@color/white_10）
 
-  为什么用 state_activated 而不是 state_selected：
-  `selected` 只表达「当前站点」，与焦点位置无关；`activated` 由
-  ChangeSourceDialog 在焦点进出结果区时动态置位，正好对应规则 ②③ 的分界。
-  状态顺序即优先级：focused > activated > selected > normal。
+  为什么 selected 用 capsule 而不是 bg_global_selected_red_border：
+  后者是 **4dp 直角**的卡片款（选集集数卡在用）。站点标签是 28dp 胶囊，
+  换成 4dp 会在「焦点胶囊 → 失焦圆角矩形」之间跳形；胶囊款才是这一对的正确搭档，
+  首页分类 Tab 也是同一对（HomeViewActivity 里 focused → capsule、selected → capsule border）。
+
+  状态顺序即优先级：focused > selected > normal。
+  三份背景都不带 <padding>，内边距由 adapter_source_site.xml 决定，换态不改尺寸。
 -->
 <selector xmlns:android="http://schemas.android.com/apk/res/android">
     <item
         android:state_focused="true"
-        android:drawable="@drawable/shape_source_site_chip_focused" />
-    <item
-        android:state_activated="true"
-        android:drawable="@drawable/shape_source_site_chip_selected" />
+        android:drawable="@drawable/bg_global_focus_capsule" />
     <item
         android:state_selected="true"
-        android:drawable="@drawable/shape_source_chip_round_activated" />
-    <item android:drawable="@drawable/shape_source_chip_round_normal" />
+        android:drawable="@drawable/bg_global_selected_capsule_border" />
+    <item android:drawable="@drawable/shape_source_site_chip_normal" />
 </selector>

@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    换源弹窗站点标签的「普通」态：半透明胶囊（不是全透明）。
+    形态与 @drawable/bg_global_focus_capsule / @drawable/bg_global_selected_capsule_border
+    完全一致（28dp 全圆角），只把实心渐变换成 @color/white_10（#1AFFFFFF），
+    这样三态切换时标签宽度与外形都不跳。
+
+    刻意不带 <padding>：全局胶囊/红框两份都是无 padding 的，
+    内边距统一由 adapter_source_site.xml 的行内 padding 提供，
+    否则焦点态会因为少 6dp 内边距而让文字贴边、整行宽度抖动。
+-->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+
+    <solid android:color="@color/white_10" />
+
+    <corners android:radius="28dp" />
+
+</shape>

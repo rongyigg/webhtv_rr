@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    全局「选中胶囊」：与 @drawable/bg_global_focus_capsule 完全同一形状（28dp 全圆角），
+    只是把实心渐变换成透明底 + 1.5dp 细线红框 @color/osd_red_end。
+    用于「已选中但焦点不在它身上」的首页分类 Tab、选集分页标签与换源弹窗站点标签。
+    圆角与焦点态逐字一致（28dp），两态切换时标签外形不会跳动。
+    同样不带 <padding>，尺寸完全由调用方的布局决定。
+
+    与 leanback 源集的同名文件保持一致：main 里的换源弹窗（ChangeSourceDialog）属于
+    main 源集，mobile flavor 不含 leanback/res，缺这一份会直接编译不过。
+-->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+
+    <solid android:color="@android:color/transparent" />
+
+    <stroke
+        android:width="1.5dp"
+        android:color="@color/osd_red_end" />
+
+    <corners android:radius="28dp" />
+
+</shape>
