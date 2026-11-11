@@ -2,12 +2,13 @@
 <!--
   侧边栏迷你勾选圈（对应需求中的 selector_site_item_check）。
 
-  MaterialCheckBox 的默认按钮是方框，这里用 android:button 换成圆形状态图：
-  - 常态未勾选 → 白色空心圆；
-  - 常态已勾选 → 白色实心圆 + 深色对勾；
-  - 行聚焦（白胶囊）→ 自动切黑色空心 / 黑色实心 + 白色对勾，避免白圈消失。
+  MaterialCheckBox 的默认按钮是方框，这里用 android:button 换成逆向原版的圆形状态图：
+  - 未勾选 → 24dp 空心圆（1.5dp 细环，环内透明）；
+  - 已勾选 → 同一个空心圆 + 对勾（描边同色，不填满实心，和逆向截图一致）。
 
-  四态顺序与逆向原版一致：focused+checked > focused > checked > normal。
+  颜色不写死在这里，统一交给 selector_site_item_check_tint：
+  常态 #FFFFFF，行聚焦（白胶囊）#000000。
+  下面四个 focused 变体是兜底：即使某些机型忽略了 buttonTint，焦点态仍是黑圈黑勾。
 -->
 <selector xmlns:android="http://schemas.android.com/apk/res/android">
     <item

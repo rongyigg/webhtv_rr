@@ -15,11 +15,11 @@
 
   宽度不写死：窗口在 SourceSidebar.onStart 的 applyWindowLayout 里按屏宽 0.4f 设定，
   根节点 match_parent 跟随窗口，顶部两个 0dp + weight=1 的按钮因此天然等分、严格对称。
-  高度 wrap_content：源少时面板贴内容，源多时由 CustomRecyclerView 在窗口内滚动。
+  高度 match_parent：面板随窗口铺满，列表（wrap_content + maxHeight 上限）在窗口内滚动。
 -->
 <androidx.appcompat.widget.LinearLayoutCompat xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
-    android:layout_height="wrap_content"
+    android:layout_height="match_parent"
     android:background="@drawable/shape_dialog_source"
     android:baselineAligned="false"
     android:orientation="vertical"

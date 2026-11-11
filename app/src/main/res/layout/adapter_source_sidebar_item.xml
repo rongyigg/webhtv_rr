@@ -5,12 +5,16 @@
   结构严格按逆向原版 adapter_site.xml + s82.java：
   - 根 FrameLayout 就是可聚焦的行本体，高 40dp，背景 selector_site_item_background；
     单选 / 多选共用同一套行布局；
+  - 【状态链红线】根 FrameLayout 拿到 focused 后，中间 LinearLayoutCompat 必须
+    duplicateParentState="true" 才能继续下发，文字 / 勾选圈的 duplicateParentState="true"
+    才真正继承到焦点。少了中间这一层，子控件的父节点永远不 focused，
+    就会出现「白胶囊上还是白字白圈」的白底白字；
   - 文字 width=0dp + weight=1 + gravity=center + 18sp，横向占满文字区并居中；
-    焦点时 selector_site_item_text 把文字反转为纯黑 #000000，其余状态纯白 #FFFFFF；
-  - 右侧 MaterialCheckBox 20×20dp（原版 24dp，按需求缩小），
+    焦点时 selector_site_item_text 反转为纯黑 #000000，其余状态纯白 #FFFFFF；
+  - 右侧 MaterialCheckBox 24×24dp，marginEnd 16dp 不贴边（行本身还有 8dp paddingEnd）；
     enabled/focusable/clickable 全部 false，只作为状态显示；
-    android:button 指向 selector_site_item_check，画出白色空心圆 / 白色实心带勾，
-    行聚焦白胶囊上自动切黑色版本，避免白圈白底看不见；
+    android:button 指向 selector_site_item_check（24dp 空心圆 / 空心圆 + 对勾），
+    颜色由 selector_site_item_check_tint 决定：常态 #FFFFFF，行聚焦 #000000；
   - 行底 1dp View 使用原版 shape_line_tapered（左右透明、中间 10% 白），
     左右各 24dp；焦点胶囊 inset 上下 4dp，下划线落在胶囊之外，不会被白底吞掉。
 
@@ -30,6 +34,7 @@
     <androidx.appcompat.widget.LinearLayoutCompat
         android:layout_width="match_parent"
         android:layout_height="match_parent"
+        android:duplicateParentState="true"
         android:gravity="center_vertical"
         android:orientation="horizontal"
         android:paddingStart="8dp"
@@ -51,12 +56,13 @@
 
         <com.google.android.material.checkbox.MaterialCheckBox
             android:id="@+id/check"
-            android:layout_width="20dp"
-            android:layout_height="20dp"
+            android:layout_width="24dp"
+            android:layout_height="24dp"
             android:layout_marginStart="8dp"
+            android:layout_marginEnd="16dp"
             android:background="@null"
             android:button="@drawable/selector_site_item_check"
-            android:buttonTint="@null"
+            android:buttonTint="@color/selector_site_item_check_tint"
             android:clickable="false"
             android:duplicateParentState="true"
             android:enabled="false"
@@ -66,7 +72,7 @@
             android:minHeight="0dp"
             android:minWidth="0dp"
             android:padding="0dp"
-            app:buttonTint="@null" />
+            app:buttonTint="@color/selector_site_item_check_tint" />
     </androidx.appcompat.widget.LinearLayoutCompat>
 
     <View

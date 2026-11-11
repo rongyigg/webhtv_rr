@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  勾选圈着色（CheckBox 的 buttonTint）：常态纯白，行聚焦（白胶囊）转纯黑。
+
+  必须配合 duplicateParentState 才有意义：勾选框跟随行根的下发状态，
+  所以深色面板上永远是白圈白勾，白胶囊上永远是黑圈黑勾，不会白底白圈。
+-->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <item
+        android:state_focused="true"
+        android:color="#000000" />
+    <item android:color="#FFFFFF" />
+</selector>
