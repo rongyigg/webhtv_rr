@@ -175,7 +175,7 @@ internal class SourceSidebar private constructor(
 
     /** 布局可能尚未完成、ViewHolder 还取不到，这里重试几次，保证焦点一定落在行上。 */
     private fun focusRow(position: Int, attempt: Int = 0) {
-        val holder = list.findViewHolderForAdapterPosition(position)
+        val holder = list.findViewHolderForAdapterPosition(position) as? Adapter.Holder
         if (holder != null && holder.row.requestFocus()) return
         if (attempt < FOCUS_RETRY_COUNT) {
             list.postDelayed({ focusRow(position, attempt + 1) }, FOCUS_RETRY_DELAY_MS)
