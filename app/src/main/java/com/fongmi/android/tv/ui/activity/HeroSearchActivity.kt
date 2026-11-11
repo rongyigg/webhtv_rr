@@ -478,7 +478,7 @@ class HeroSearchActivity : AppCompatActivity() {
                         true
                     }
 
-                    input.text.trim().isNotEmpty() -> {
+                    input.text.toString().trim().isNotEmpty() -> {
                         focusSite(column)
                         true
                     }
@@ -541,7 +541,7 @@ class HeroSearchActivity : AppCompatActivity() {
     }
 
     private fun refreshWordSection() {
-        val hasInput = input.text.trim().isNotEmpty()
+        val hasInput = input.text.toString().trim().isNotEmpty()
         val words = if (hasInput) suggestWords else hotWords
         wordTitle.text = if (hasInput) TITLE_SUGGEST else TITLE_HOT
         wordSection.visibility = if (words.isEmpty()) View.GONE else View.VISIBLE
@@ -552,7 +552,7 @@ class HeroSearchActivity : AppCompatActivity() {
         // 先用本地缓存秒出（同 `X1()` 的两步），再异步刷一次网络。
         hotWords = parseWords(Setting.getHot())
         refreshWordSection()
-        if (input.text.trim().isNotEmpty() || hotRequested) return
+        if (input.text.toString().trim().isNotEmpty() || hotRequested) return
         hotRequested = true
         lifecycleScope.launch {
             val body = try {
@@ -566,7 +566,7 @@ class HeroSearchActivity : AppCompatActivity() {
                 return@launch
             }
             // 请求返回时用户可能已经开始输入：热搜区不再展示，直接丢弃这次结果。
-            if (input.text.trim().isNotEmpty()) return@launch
+            if (input.text.toString().trim().isNotEmpty()) return@launch
             val fresh = try {
                 parseWords(body)
             } catch (e: CancellationException) {
@@ -601,7 +601,7 @@ class HeroSearchActivity : AppCompatActivity() {
                 return@launch
             }
             // 返回时输入已经变了：这批建议已经过期，不写界面。
-            if (input.text.trim() != text) return@launch
+            if (input.text.toString().trim() != text) return@launch
             val fresh = try {
                 parseWords(body)
             } catch (e: CancellationException) {
@@ -857,7 +857,7 @@ class HeroSearchActivity : AppCompatActivity() {
             }
             return
         }
-        val hasInput = input.text.trim().isNotEmpty()
+        val hasInput = input.text.toString().trim().isNotEmpty()
         val labels = siteLabels()
         if (selectedSite > labels.lastIndex) selectedSite = labels.lastIndex.coerceAtLeast(0)
         if (focusedSite > labels.lastIndex) focusedSite = labels.lastIndex.coerceAtLeast(0)
@@ -907,7 +907,7 @@ class HeroSearchActivity : AppCompatActivity() {
 
     /** 站点 Tab 落焦点；焦点即选中，下方海报立刻切到该站点。 */
     private fun focusSite(index: Int) {
-        if (input.text.trim().isEmpty()) {
+        if (input.text.toString().trim().isEmpty()) {
             focusInput()
             return
         }
@@ -983,7 +983,7 @@ class HeroSearchActivity : AppCompatActivity() {
 
     /** 胶囊 ↓ 到底时的兜底落点：回到刚才高亮的站点 Tab（而不是盲目落到第一个）。 */
     private fun focusResultsFromChips(): Boolean {
-        if (input.text.trim().isEmpty()) return false
+        if (input.text.toString().trim().isEmpty()) return false
         focusSite(focusedSite)
         return true
     }
