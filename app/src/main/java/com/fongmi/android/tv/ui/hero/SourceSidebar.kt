@@ -51,7 +51,9 @@ internal enum class SourceSidebarMode {
  * - 勾选圈（仅多选）→ `selector_check_circle`（20dp、2dp 环）四态，由行的 state_selected 驱动：
  *   未勾选空心环，已勾选环 + 对勾；行聚焦白胶囊上自动转黑；
  * - 单选模式的列表按原版实测补内边距：左右 16dp、顶部 12dp（叠加面板自身 4dp = 20dp / 16dp），
- *   首行胶囊距窗口顶 20dp、白胶囊左右各留 20dp，与图1 完全对齐。
+ *   首行胶囊距窗口顶 20dp、白胶囊左右各留 20dp，与图1 完全对齐；
+ * - 最后一条不画行底下划线（逆向 `xp.java:327` / `ns2.java:66` / `s82.java:99,112`
+ *   都是 `i == size - 1 ? GONE : VISIBLE`），列表底部收在最后一行上，不留悬空分隔线。
  *
  * 行布局的根是纵向容器（行 + 下划线），真正可聚焦、画白胶囊的是 `@id/item`；
  * ViewHolder 单独持有它（`row`），焦点、点击、勾选态全部打在它身上，
@@ -252,6 +254,9 @@ internal class SourceSidebar private constructor(
             // 多选行的圈（duplicateParentState）继承行的 state_selected，selector_check_circle 据此显示 √；
             // 单选行没有圈，setSelected 只落到文字选择器上，白胶囊 / 黑字仍由 focused 驱动。
             holder.row.isSelected = checked[position]
+            // 逆向 xp.java:327 / ns2.java:66 / s82.java:99,112：最后一条的下划线整条 GONE，
+            // 否则列表底部会多出一条悬空分隔线。ViewHolder 会被复用，所以两种状态都要显式写。
+            holder.line.visibility = if (position == entries.size - 1) View.GONE else View.VISIBLE
             holder.row.nextFocusUpId = if (isMulti && position == 0) R.id.all else View.NO_ID
             holder.row.setOnClickListener { onConfirm(holder.bindingAdapterPosition) }
             // 左右键在列表内被消费，不会把焦点甩出侧边栏。
@@ -265,6 +270,8 @@ internal class SourceSidebar private constructor(
             /** 逆向 `@id/item`：真正可聚焦、画白胶囊的那一行。 */
             val row: View = view.findViewById(R.id.item)
             val name: TextView = view.findViewById(R.id.text)
+            /** 逆向 `@id/line`：行底下划线，最后一条要整条隐藏。 */
+            val line: View = view.findViewById(R.id.line)
             /** 只有多选行（`adapter_search_site`）才有这颗 20dp 勾选圈；单选行取到 null。 */
             val check: ImageView? = view.findViewById(R.id.check)
         }
