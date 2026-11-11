@@ -36,8 +36,9 @@ internal enum class SourceSidebarMode {
  * 结构与尺寸照搬逆向原版，两套行布局按模式分开（与逆向 `s82.onCreateViewHolder`
  * 的 viewType 分支同构，本类 = 需求中的 `s82.java`，
  * 面板 = 需求中的 `activity_site_view.xml`，落地文件 `dialog_source_sidebar.xml`）：
- * - 单选（首页）：逆向 `adapter_site_simple.xml` → `adapter_source_sidebar_item_simple.xml`，
- *   40dp 行、18sp 文字、文字 `weight=1` 铺满整行后居中、下划线左右 24dp + `marginTop 16dp`；
+ * - 单选（首页）：逆向 `adapter_v2_site.xml` → `adapter_source_sidebar_item_simple.xml`
+ *   （原版首页侧边栏 = `HomeActivityV2` 的 `tm3` + `xp` mode 10），
+ *   39dp 行、14sp 文字、文字铺满整行后居中、下划线左右 12dp 且紧贴行底；
  * - 多选（换源）：逆向 `adapter_search_site.xml` → `adapter_source_sidebar_item.xml`，
  *   39dp 行、14sp 文字、20dp 勾选圈、下划线左右 12dp，顶部「全选 / 全不选」对称胶囊按钮。
  *
@@ -49,7 +50,8 @@ internal enum class SourceSidebarMode {
  * - 焦点之外没有选中白框：点击即切源 / 勾选；
  * - 勾选圈（仅多选）→ `selector_check_circle`（20dp、2dp 环）四态，由行的 state_selected 驱动：
  *   未勾选空心环，已勾选环 + 对勾；行聚焦白胶囊上自动转黑；
- * - 单选模式没有顶栏，列表顶部补 16dp 留白，第一条源名不会顶到面板最上面。
+ * - 单选模式的列表按原版实测补内边距：左右 16dp、顶部 12dp（叠加面板自身 4dp = 20dp / 16dp），
+ *   首行胶囊距窗口顶 20dp、白胶囊左右各留 20dp，与图1 完全对齐。
  *
  * 行布局的根是纵向容器（行 + 下划线），真正可聚焦、画白胶囊的是 `@id/item`；
  * ViewHolder 单独持有它（`row`），焦点、点击、勾选态全部打在它身上，
@@ -165,12 +167,14 @@ internal class SourceSidebar private constructor(
         list = findViewById(R.id.recycler)
         list.layoutManager = LinearLayoutManager(context)
         list.itemAnimator = null
-        // 单选模式顶栏整条 GONE，列表会直接贴到面板顶部，第一条源名就顶到最上面；
-        // 补 16dp 顶部留白（取值 = 逆向 `adapter_site_simple` 下划线的 marginTop，
-        // 首行与行间距同一套节奏）。面板自身 paddingTop 4dp，合计距窗口顶 20dp。
+        // 单选模式顶栏整条 GONE，列表会直接贴到面板顶部；按原版首页侧边栏实测补内边距：
+        // 左右 16dp（叠加面板 4dp = 20dp，白胶囊因此不顶满整行）、顶部 12dp（叠加面板 4dp = 16dp）。
+        // 图1 实测：面板 384px 宽，行 302px、胶囊 270px，首行行顶距窗口顶 32px。
         if (!isMulti) {
-            val inset = (SINGLE_TOP_INSET_DP * context.resources.displayMetrics.density).toInt()
-            list.setPadding(0, inset, 0, 0)
+            val density = context.resources.displayMetrics.density
+            val horizontal = (SINGLE_LIST_INSET_HORIZONTAL_DP * density).toInt()
+            val top = (SINGLE_LIST_INSET_TOP_DP * density).toInt()
+            list.setPadding(horizontal, top, horizontal, 0)
         }
         // 列表本身不接收焦点，焦点始终落在行上，行才会绘制白底黑字。
         list.isFocusable = false
@@ -230,7 +234,7 @@ internal class SourceSidebar private constructor(
     private inner class Adapter : RecyclerView.Adapter<Adapter.Holder>() {
 
         override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): Holder {
-            // 两份逆向数据对应两种行：单选（首页）= `adapter_site_simple` 只有一行文字，
+            // 两份逆向数据对应两种行：单选（首页）= `adapter_v2_site` 只有一行文字，
             // 多选（换源）= `adapter_search_site` 多一颗 20dp 勾选圈。
             val layout = if (isMulti) {
                 R.layout.adapter_source_sidebar_item
@@ -271,8 +275,10 @@ internal class SourceSidebar private constructor(
         private const val SIDEBAR_DIM = 0.25f
         /** 窗口宽度 = 屏宽 ÷ 5（逆向 SearchSiteDialog `ss2.Z()`：`g2.d(App.l) / 5`）。 */
         private const val SIDEBAR_WIDTH_DIVISOR = 5
-        /** 单选模式列表顶部留白 = 逆向 `adapter_site_simple` 下划线的 `marginTop`。 */
-        private const val SINGLE_TOP_INSET_DP = 16f
+        /** 单选模式列表左右内边距：叠加面板 4dp = 20dp，与图1 实测的行宽 302px 一致。 */
+        private const val SINGLE_LIST_INSET_HORIZONTAL_DP = 16f
+        /** 单选模式列表顶部内边距：叠加面板 4dp = 16dp，与图1 实测的首行行顶 32px 一致。 */
+        private const val SINGLE_LIST_INSET_TOP_DP = 12f
         private const val FOCUS_RETRY_COUNT = 6
         private const val FOCUS_RETRY_DELAY_MS = 50L
 
