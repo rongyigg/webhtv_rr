@@ -132,7 +132,7 @@ internal class SourceSidebar private constructor(
      * 源多时由列表在窗口内滚动（列表上限 = 屏高减去顶部按钮与面板内边距）。
      */
     private fun applyWindowLayout() {
-        val metrics = resources.displayMetrics
+        val metrics = context.resources.displayMetrics
         val reserved = (SIDEBAR_RESERVED_HEIGHT_DP * metrics.density).toInt()
         list.setMaxHeight((metrics.heightPixels - reserved).coerceAtLeast(0))
         window?.setLayout(
