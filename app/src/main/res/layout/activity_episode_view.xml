@@ -9,11 +9,13 @@
        用 9 / 82 / 9 的 weight 实现，不依赖百分比布局库。
     3. 面板 = @drawable/shape_dialog_source_shell（#9914171F + 16dp 圆角，与 Compose
        `HeroDialogShell` 同值）+ 18dp 内边距。
-    4. 自上而下：播放线路标题 → 32dp 线路栏 → 选集控制栏（32dp）→ 固定 4 排网格（176dp）。
+    4. 自上而下：播放线路标题 → 28dp 线路栏 → 选集控制栏（28dp）→ 固定 4 排网格（176dp）。
 
     尺寸全部来自 Compose 版常量，一处都不许在代码里重复写：
-      线路/控制栏高 32dp、字号 14sp、左右内边距 14dp、线路间距 12dp、控制栏间距 8dp；
+      线路/控制栏高 28dp、字号 14sp、左右内边距 8dp、线路间距 12dp、控制栏间距 8dp；
       网格 4 排 × 38dp + 3 × 8dp = 176dp（EPISODE_GRID_ROWS / EPISODE_CELL_HEIGHT / EPISODE_GRID_GAP）。
+      胶囊的 28dp / 14sp / 8dp 三处数值**逐项对齐播放页选集面板**的 @style/OsdChip，
+      与播放页呼出的选集面板保持同一档体量（原 32dp / 14dp 内边距偏胖）。
 -->
 <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/root"
@@ -78,11 +80,11 @@
                 android:layout_width="0dp"
                 android:layout_height="8dp" />
 
-            <!-- 线路栏：横向 RecyclerView，32dp 高、12dp 间距、chip 14sp -->
+            <!-- 线路栏：横向 RecyclerView，28dp 高（= 播放页 OsdChip）、12dp 间距、chip 14sp -->
             <androidx.recyclerview.widget.RecyclerView
                 android:id="@+id/flagRecycler"
                 android:layout_width="match_parent"
-                android:layout_height="32dp"
+                android:layout_height="28dp"
                 android:clipToPadding="false"
                 android:focusable="false"
                 android:descendantFocusability="afterDescendants"
@@ -92,10 +94,10 @@
                 android:layout_width="0dp"
                 android:layout_height="16dp" />
 
-            <!-- ============ 选集控制栏：标题 + 列数 + 排序 + 分页（同一行 32dp） ============ -->
+            <!-- ============ 选集控制栏：标题 + 列数 + 排序 + 分页（同一行 28dp） ============ -->
             <LinearLayout
                 android:layout_width="match_parent"
-                android:layout_height="32dp"
+                android:layout_height="28dp"
                 android:gravity="center_vertical"
                 android:orientation="horizontal">
 
@@ -130,8 +132,8 @@
                     android:focusable="true"
                     android:focusableInTouchMode="true"
                     android:gravity="center"
-                    android:paddingStart="14dp"
-                    android:paddingEnd="14dp"
+                    android:paddingStart="8dp"
+                    android:paddingEnd="8dp"
                     android:textColor="@color/white"
                     android:textSize="14sp"
                     android:singleLine="true" />
@@ -149,8 +151,8 @@
                     android:focusable="true"
                     android:focusableInTouchMode="true"
                     android:gravity="center"
-                    android:paddingStart="14dp"
-                    android:paddingEnd="14dp"
+                    android:paddingStart="8dp"
+                    android:paddingEnd="8dp"
                     android:textColor="@color/white"
                     android:textSize="14sp"
                     android:singleLine="true" />

@@ -17,7 +17,11 @@ import com.fongmi.android.tv.ui.activity.isActionCommand
  * 与 Compose 版逐条对应：
  * - `label = episode.getDisplayName()` → [Holder.bind] 的 `text.text`（desc + name，TMDB 刮削后是 S01E02 标题）；
  * - `playing = episode === playingEpisode` → **引用相等**判定，不同线路的集数互不干扰，
- *   命中后：文字变红 + 右下角 Lottie 均衡器动画（原版 `adapter_episode.xml` 同款）；
+ *   命中后：文字变红 + 右下角 Lottie 均衡器动画（原版 `adapter_episode.xml` 同款）。
+ *   播放态只认**真实起播**写入的对象（`EpisodeViewDialog.onCellConfirm`），
+ *   历史集 / 首集 / 换线路后的第一集都不许预置，否则就是「假数据红字」；
+ * - 文字颜色四态：焦点纯白 → 动作指令半透明白 → 真实播放集红 → 常态白，
+ *   焦点态背景是实心红渐变，任何非白字都会糊掉，所以焦点优先级最高；
  * - `actionOnly = episode.isActionCommand()` → 更暗底色 + 灰字（列表已在弹窗层过滤，这里是兜底）；
  * - 方向键**不在这里处理**：与 Compose 版一致，统一由网格层（RecyclerView 的 OnKeyListener）
  *   接管，保证「边缘整列翻组」的判断只有一处。
@@ -48,6 +52,8 @@ internal class EpisodeAdapter(
         // 用 bindingAdapterPosition 而不是闭包里的 position：整批替换后旧下标会失效。
         holder.itemView.setOnClickListener { onCellConfirm(holder.bindingAdapterPosition) }
         holder.itemView.setOnFocusChangeListener { _, hasFocus ->
+            // 焦点态是实心红底，文字必须当场刷成纯白；失焦后再回到真实播放态 / 动作指令 / 常态色。
+            holder.applyTextColor(hasFocus)
             if (hasFocus) onCellFocused(holder.bindingAdapterPosition)
         }
     }
@@ -58,15 +64,15 @@ internal class EpisodeAdapter(
         private val text: TextView = view.findViewById(R.id.text)
         private val lottie: LottieAnimationView = view.findViewById(R.id.lottie)
 
+        private var playing = false
+        private var actionOnly = false
+
         fun bind(episode: Episode, playing: Boolean, actionOnly: Boolean) {
+            this.playing = playing
+            this.actionOnly = actionOnly
             text.text = episode.displayName
-            text.setTextColor(
-                when {
-                    actionOnly -> ACTION_TEXT
-                    playing -> PLAYING_TEXT
-                    else -> Color.WHITE
-                },
-            )
+            // 重新绑定可能发生在「格子正持有焦点」时（整批替换后焦点不丢），所以要读当前焦点态。
+            applyTextColor(cell.isFocused)
             // 当前播放集：右下角均衡器动画（负边距压在格子角上，父级 clipChildren=false）。
             lottie.visibility = if (playing && !actionOnly) View.VISIBLE else View.GONE
             if (lottie.visibility == View.VISIBLE) lottie.playAnimation() else lottie.cancelAnimation()
@@ -77,6 +83,27 @@ internal class EpisodeAdapter(
             // 必须放在 cell.isSelected 之后：ViewGroup.setSelected 会把状态下发给所有子 View，
             // 先设 root 再设 text 才能让 text 自己保持 selected（跑马灯只在 selected 时滚动）。
             text.isSelected = true
+        }
+
+        /**
+         * 文字颜色四态，优先级从高到低：
+         * 1. 焦点 → 纯白（背景是实心红渐变，红字 / 灰字在上面都看不清）；
+         * 2. 动作指令 → 半透明白；
+         * 3. 真实播放集 → 红字（原版设计，只在**真正起播过**时出现）；
+         * 4. 其余 → 纯白。
+         *
+         * 焦点态不写死在 XML 的 textColor 里：cell 的焦点态不会自动下发给子 TextView
+         * （只有 selected / activated 会 dispatch），所以必须由这里显式重刷。
+         */
+        fun applyTextColor(focused: Boolean) {
+            text.setTextColor(
+                when {
+                    focused -> Color.WHITE
+                    actionOnly -> ACTION_TEXT
+                    playing -> PLAYING_TEXT
+                    else -> Color.WHITE
+                },
+            )
         }
     }
 

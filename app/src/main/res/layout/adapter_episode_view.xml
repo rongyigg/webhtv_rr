@@ -3,8 +3,12 @@
     选集格子：结构逐字照抄 ref_docs/adapter_episode.xml。
 
     - 根 FrameLayout 就是可聚焦本体，高 38dp、4dp 圆角（Compose 版是 34dp / 6dp，
-      这里按需求回到原版 38dp / 4dp）。
-    - 文字 16sp 居中、单行 marquee 跑马灯（超长集名不硬截断）。
+      这里按需求回到原版 38dp / 4dp；高度不改，网格 176dp = 4 × 38 + 3 × 8 才不会破）。
+    - 文字 14sp 居中、单行 marquee 跑马灯（超长集名不硬截断）。
+      字号**与播放页选集卡完全一致**（app/src/leanback/res/layout/adapter_osd_episode.xml 的 14sp），
+      原来的 16sp 在 38dp 高的格子里偏大、显得挤。
+    - 文字颜色由 EpisodeAdapter 按「焦点 / 动作指令 / 真实播放 / 常态」四态设置，
+      焦点红底卡片一律纯白字（cell 的焦点态不会下发给子 TextView，必须代码显式重刷）。
     - 右下角 LottieAnimationView（20×25dp，负边距压在格子角上）只在「当前播放集」显示，
       动画资源 @raw/equalizer 与原版一致。
     - 负边距需要父级 clipChildren / clipToPadding = false，否则动画会被裁掉。
@@ -37,7 +41,7 @@
         android:paddingEnd="8dp"
         android:singleLine="true"
         android:textColor="@color/white"
-        android:textSize="16sp" />
+        android:textSize="14sp" />
 
     <com.airbnb.lottie.LottieAnimationView
         android:id="@+id/lottie"

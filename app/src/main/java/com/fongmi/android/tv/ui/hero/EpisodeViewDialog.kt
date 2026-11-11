@@ -52,7 +52,8 @@ import com.fongmi.android.tv.utils.Notify
  * - 打开落在历史集（[lastWatchedEpisodeIndex]），无历史落第 1 集；
  * - 线路栏 ←/→ 在线路间移动、端点消费；↓ 进控制栏；↑ 消费；
  * - 控制栏 ←/→ 在「列数 / 排序 / 分页」之间滑动，端点消费；↓ 进网格（落回同一集）；↑ 回线路栏；
- * - 网格 ←/→ 组内移动，**任意一行**的最左列按 ← 切上一组、最右列按 → 切下一组；
+ * - 网格 ←/→ 组内移动，**任意一行**的最左列按 ← 切上一组、最右列按 → 切下一组，
+ *   切组时顶部分页栏同步滚到新标签、焦点落到新组对应格；
  *   末行 ↓ 只消费，不会把焦点漏到弹窗外。
  */
 internal class EpisodeViewDialog(
@@ -97,7 +98,13 @@ internal class EpisodeViewDialog(
     /** 焦点 / 当前集直接用 `Episode` 对象本身做锚点（不同线路的集数互不干扰）。 */
     private var anchorEpisode: Episode? = null
 
-    /** 正在播放的集：红字 + Lottie 高亮，切线路后按该线路的集数重置。 */
+    /**
+     * 正在播放的集：红字 + Lottie 高亮。
+     *
+     * **只允许由真实起播写入**（[onCellConfirm]）。历史集、首集、换线路后的第一集都**不许**预置，
+     * 否则就是「没播放过的集数自己变红」的假数据 Bug：本弹窗没有播放态数据源，
+     * 打开时它必须是 null，颜色只由真实播放态或焦点决定。
+     */
     private var playingEpisode: Episode? = null
 
     /** 控制栏下标：0 = 列数、1 = 排序、2 起为分页按钮。 */
@@ -227,7 +234,9 @@ internal class EpisodeViewDialog(
         page = initialIndex / pageSize()
         anchorCell = initialIndex % pageSize()
         anchorEpisode = ordered.getOrNull(initialIndex)
-        playingEpisode = anchorEpisode
+        // 【假数据 Bug 根因】历史集只是「上次看到哪」，不是「正在播放」：这里绝不能把
+        // anchorEpisode 当成播放集，否则每次打开都会把第 1 集（或无历史时的首集）标红。
+        playingEpisode = null
         pageItems = ordered.drop(page * pageSize()).take(pageSize())
     }
 
@@ -283,6 +292,9 @@ internal class EpisodeViewDialog(
 
         if (rebuildGroups) rebuildGroups()
         groupAdapter.selected = page
+        // 换线路 / 切列数 / 翻排序会重排分页（标签数量与文案都变），标签列表刚被整片刷新、
+        // 滚动位置回到 0，这里把顶部分页栏带回当前组，否则选中的标签可能落在屏幕外。
+        groupRecycler.scrollToPosition(page)
         syncChipSelection(groupRecycler, page)
     }
 
@@ -320,7 +332,9 @@ internal class EpisodeViewDialog(
         page = 0
         anchorCell = 0
         anchorEpisode = ordered.firstOrNull()
-        playingEpisode = anchorEpisode
+        // 换线路 = 换一套集数对象，旧线路的播放集在新线路上没有对应关系，播放态必须归零；
+        // 新线路的第 1 集同样不能继承红字（它只是落点，没播放过）。
+        playingEpisode = null
         refresh()
     }
 
@@ -406,6 +420,9 @@ internal class EpisodeViewDialog(
         pageItems = items
         episodeAdapter.submit(items, playingEpisode)
         groupAdapter.selected = target
+        // 边缘翻页时焦点始终留在网格里，用户看不到标签栏，必须把顶部分页栏一起滚到新组，
+        // 否则「1-8 → 9-16」切了页，上面高亮的还是旧的（甚至在屏幕外）。
+        groupRecycler.scrollToPosition(target)
         syncChipSelection(groupRecycler, target)
         requestCellFocus(index)
     }
@@ -443,12 +460,23 @@ internal class EpisodeViewDialog(
      *
      * 翻页判定只看列：任意一行的**最左一列**按 ← = 上一组，**最右一列**按 → = 下一组，
      * 所以不必先把焦点挪到右下角才能翻页；上下键永远不翻页，末行 ↓ 只消费。
-     * 公式与 Compose `handleGridKey` 逐字一致。
+     * 公式与 Compose `handleGridKey` 逐字一致，唯一差异是「当前格」取**真实焦点位置**
+     * （`findFocus()` + `getChildAdapterPosition`），不再只信可能过期的 [anchorCell]。
      */
     private fun handleGridKey(keyCode: Int): Boolean {
         if (pageItems.isEmpty()) return false
         val lastIndex = pageItems.lastIndex
-        val base = anchorCell.coerceIn(0, lastIndex)
+        // 以**真实焦点格**为准：anchorCell 只在落焦时写入，重建列表 / 焦点还在控制栏时会过期，
+        // 过期值会把「最左列按 ←」判成组内左移（或反过来），边界翻页就失灵。
+        // 取不到焦点格（例如焦点在别处）时才退回 anchorCell。
+        val focusedPosition = episodeRecycler.findFocus()
+            ?.let { episodeRecycler.getChildAdapterPosition(it) }
+            ?: RecyclerView.NO_POSITION
+        val base = if (focusedPosition in 0..lastIndex) {
+            focusedPosition
+        } else {
+            anchorCell.coerceIn(0, lastIndex)
+        }
         val columns = columns()
         val column = base % columns
         val row = base / columns
