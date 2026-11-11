@@ -265,7 +265,6 @@ class HeroSearchActivity : AppCompatActivity() {
         keyboardRecycler.layoutManager = GridLayoutManager(this, SEARCH_KEY_COLUMNS)
         keyboardRecycler.adapter = keyAdapter
         keyboardRecycler.itemAnimator = null
-        keyboardRecycler.setHasFixedSize(true)
 
         // ---- 历史 / 热搜 / 建议：Flexbox 自动换行 ----
         historyAdapter = SearchChipAdapter(onClick = ::requestSearch, onDown = ::focusResultsFromChips)
