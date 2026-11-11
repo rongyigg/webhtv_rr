@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  侧边栏顶栏「全选 / 全不选」按钮背景（对应逆向 selector_search_action_background）。
+
+  两态：focused > normal。
+  - focused → 纯白胶囊（shape_search_action_focused），文字 / 圆圈经 selector_site_item_text
+    与 selector_check_circle 自动转黑；
+  - normal  → 半透明白胶囊（shape_search_action），深色面板上呈现一层淡淡的填充。
+
+  两个 shape 都带 inset 8dp：图1 实测 39dp 顶栏里胶囊高 23dp（上下各缩 8dp）、
+  宽 184dp 的按钮里胶囊宽 152dp（左右各缩 8dp），圆角 20dp 落在 23dp 高上就是完整端头。
+-->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <item
+        android:state_focused="true"
+        android:drawable="@drawable/shape_search_action_focused" />
+    <item android:drawable="@drawable/shape_search_action" />
+</selector>

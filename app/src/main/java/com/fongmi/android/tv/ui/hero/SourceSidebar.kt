@@ -10,13 +10,13 @@ import android.view.KeyEvent
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
+import android.widget.ImageView
 import android.widget.TextView
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.fongmi.android.tv.R
 import com.fongmi.android.tv.bean.Site
 import com.fongmi.android.tv.ui.custom.CustomRecyclerView
-import com.google.android.material.checkbox.MaterialCheckBox
 
 /**
  * 侧边栏的两种使用场景。
@@ -36,18 +36,20 @@ internal enum class SourceSidebarMode {
  * 结构与尺寸照搬逆向原版 `dialog_site.xml` / `adapter_site.xml` / `s82.java`
  * （本工程落地文件：`dialog_source_sidebar.xml` = 需求中的 `activity_site_view.xml`，
  * `adapter_source_sidebar_item.xml` = 需求中的 `adapter_site_view.xml`，本类 = 需求中的 `s82.java`）：
- * 窗口宽 = 屏宽 ÷ 5（20%，逆向 SearchSiteDialog `ss2.Z()`）、高随内容（WRAP_CONTENT），40dp 行高、20dp 勾选圈、顶部「全选 / 全不选」。
+ * 窗口宽 = 屏宽 ÷ 5（20%，逆向 SearchSiteDialog `ss2.Z()`）、高 = 全屏（MATCH_PARENT），
+ * 39dp 行高、14sp 文字、20dp 勾选圈、顶部「全选 / 全不选」对称胶囊按钮。
  *
  * 视觉按逆向原版极简风固定：
  * - 行 focused → 纯白胶囊（`shape_site_item_focused_white`，inset 8dp/4dp + 20dp 圆角）+ 黑字；
  * - 行 normal → 透明底 + 白字；
- * - 没有选中态：点击即切源 / 勾选，行外围的选中白框已彻底删除；
- * - 勾选圈 → `selector_site_item_check` 四态：未勾选白色空心圆，已勾选白色实心圆 + 对勾；
- *   行聚焦白胶囊上自动切黑色空心 / 黑色实心 + 白勾，避免白圈消失；
- * - 行底 1dp `shape_line_tapered` 下划线，左右各 24dp。
+ * - 焦点之外没有选中白框：点击即切源 / 勾选；
+ * - 勾选圈 → `selector_check_circle`（20dp、2dp 环）四态，由行的 state_selected 驱动：
+ *   未勾选空心环，已勾选环 + 对勾；行聚焦白胶囊上自动转黑；
+ * - 行底 1dp `shape_line_tapered` 下划线，左右各 12dp。
  *
- * 行布局的 `@id/item` 就是根节点，因此 `ViewHolder.itemView` 与画背景的 View 是同一个，
- * 焦点态一定作用在可见的背景上（旧版是「外层容器 + 内层 item」两层，状态打在外层，永远不显示）。
+ * 行布局的根是纵向容器（行 + 下划线），真正可聚焦、画白胶囊的是 `@id/item`；
+ * ViewHolder 单独持有它（`row`），焦点、点击、勾选态全部打在它身上，
+ * 文字与圆圈用 duplicateParentState 继承，三者永远同步。
  *
  * 数据来自 [HeroSourceEntry]，条目里装的是**真实 [Site]**：
  * - [SourceSidebarMode.Single]：确定键 → `onSiteSelected(site)` 并关闭；
@@ -125,23 +127,21 @@ internal class SourceSidebar private constructor(
     }
 
     /**
-     * 窗口尺寸严格照抄逆向原版：宽度 = 屏宽 ÷ 5（20%），高度随内容（WRAP_CONTENT）。
+     * 窗口尺寸严格照抄逆向原版：宽度 = 屏宽 ÷ 5（20%），高度 = 全屏。
      *
      * 【比例红线】图1 的侧边栏就是 `dialog_search_site` 的右侧页（SearchSiteDialog `ss2`），
      * 宽度取 `ss2.Z()` = `g2.d(App.l) / 5`，即屏宽的 1/5；
      * 不是 `kz2`（换源站源网格：1 列 0.4f / 3 列 0.8f）那套比例，抄错会整整宽一倍。
      *
-     * 宽度必须在窗口层给：布局根节点是 match_parent，父宽由窗口决定，
-     * 顶部两个 weight=1 的按钮才会严格等分；高度不给死值，源少时面板贴内容，
-     * 源多时由列表在窗口内滚动（列表上限 = 屏高减去顶部按钮与面板内边距）。
+     * 【高度】逆向 `dialog_search_site.xml` 根节点是 match_parent、列表 0dp + weight=1，
+     * 所以窗口高度必须给 MATCH_PARENT：面板从屏幕顶部贴到底部，顶栏距顶只有 4dp，
+     * 列表在剩余高度里滚动。给 WRAP_CONTENT 会让面板被 Gravity.END 垂直居中，
+     * 顶部凭空多出半屏空白（图2 顶栏下移、首行下移的根因）。
      */
     private fun applyWindowLayout() {
-        val metrics = context.resources.displayMetrics
-        val reserved = (SIDEBAR_RESERVED_HEIGHT_DP * metrics.density).toInt()
-        list.setMaxHeight((metrics.heightPixels - reserved).coerceAtLeast(0))
         window?.setLayout(
-            metrics.widthPixels / SIDEBAR_WIDTH_DIVISOR,
-            WindowManager.LayoutParams.WRAP_CONTENT,
+            context.resources.displayMetrics.widthPixels / SIDEBAR_WIDTH_DIVISOR,
+            WindowManager.LayoutParams.MATCH_PARENT,
         )
     }
 
@@ -153,6 +153,10 @@ internal class SourceSidebar private constructor(
         selectNone = findViewById(R.id.none)
         selectAll.nextFocusDownId = R.id.recycler
         selectNone.nextFocusDownId = R.id.recycler
+        // 逆向 ss2.b0()：全选按钮默认 selected（圈内打勾），全不选默认未 selected（空心环）。
+        // setSelected 会向下派发给两个 16dp 圈，selector_check_circle 据此显示「√ / 空」。
+        selectAll.isSelected = true
+        selectNone.isSelected = false
 
         list = findViewById(R.id.recycler)
         list.layoutManager = LinearLayoutManager(context)
@@ -172,7 +176,7 @@ internal class SourceSidebar private constructor(
     /** 布局可能尚未完成、ViewHolder 还取不到，这里重试几次，保证焦点一定落在行上。 */
     private fun focusRow(position: Int, attempt: Int = 0) {
         val holder = list.findViewHolderForAdapterPosition(position)
-        if (holder != null && holder.itemView.requestFocus()) return
+        if (holder != null && holder.row.requestFocus()) return
         if (attempt < FOCUS_RETRY_COUNT) {
             list.postDelayed({ focusRow(position, attempt + 1) }, FOCUS_RETRY_DELAY_MS)
             return
@@ -224,24 +228,26 @@ internal class SourceSidebar private constructor(
         override fun onBindViewHolder(holder: Holder, position: Int) {
             holder.name.text = entries[position].label
             // 单选模式隐藏勾选圈时必须保留占位（INVISIBLE 而不是 GONE），
-            // 否则文字区会因少了 20dp 圈 + 8dp 间距而变宽，两种模式的焦点块宽度不一致。
+            // 否则文字区会因少了 24dp 圈列而变宽，两种模式的焦点块宽度不一致。
             holder.check.visibility = if (isMulti) View.VISIBLE else View.INVISIBLE
-            holder.check.isChecked = checked[position]
-            // 禁用状态下 MaterialCheckBox 仍可能播放勾选动画；直接跳到终态，复用时不会闪一下。
-            holder.check.jumpDrawablesToCurrentState()
-            // 勾选状态只由右侧圆圈表达，行背景只有焦点胶囊，不再给整行打选中态（白框）。
-            holder.itemView.nextFocusUpId = if (isMulti && position == 0) R.id.all else View.NO_ID
-            holder.itemView.setOnClickListener { onConfirm(holder.bindingAdapterPosition) }
+            // 逆向 ns2.onBindViewHolder：勾选态用 setSelected 打在行上，
+            // 圈（duplicateParentState）继承行的 state_selected，selector_check_circle 据此显示 √。
+            // ViewGroup.setSelected 会向下派发，行内的文字 / 圈一起拿到 state_selected。
+            holder.row.isSelected = checked[position]
+            holder.row.nextFocusUpId = if (isMulti && position == 0) R.id.all else View.NO_ID
+            holder.row.setOnClickListener { onConfirm(holder.bindingAdapterPosition) }
             // 左右键在列表内被消费，不会把焦点甩出侧边栏。
-            holder.itemView.setOnKeyListener { _, keyCode, event ->
+            holder.row.setOnKeyListener { _, keyCode, event ->
                 event.action == KeyEvent.ACTION_DOWN &&
                     (keyCode == KeyEvent.KEYCODE_DPAD_LEFT || keyCode == KeyEvent.KEYCODE_DPAD_RIGHT)
             }
         }
 
         inner class Holder(view: View) : RecyclerView.ViewHolder(view) {
+            /** 逆向 `@id/item`：真正可聚焦、画白胶囊的那一行。 */
+            val row: View = view.findViewById(R.id.item)
             val name: TextView = view.findViewById(R.id.text)
-            val check: MaterialCheckBox = view.findViewById(R.id.check)
+            val check: ImageView = view.findViewById(R.id.check)
         }
     }
 
@@ -250,8 +256,6 @@ internal class SourceSidebar private constructor(
         private const val SIDEBAR_DIM = 0.25f
         /** 窗口宽度 = 屏宽 ÷ 5（逆向 SearchSiteDialog `ss2.Z()`：`g2.d(App.l) / 5`）。 */
         private const val SIDEBAR_WIDTH_DIVISOR = 5
-        /** 列表高度上限要扣掉的纵向空间：顶部 40dp 按钮 + 面板上下内边距 + 余量。 */
-        private const val SIDEBAR_RESERVED_HEIGHT_DP = 96f
         private const val FOCUS_RETRY_COUNT = 6
         private const val FOCUS_RETRY_DELAY_MS = 50L
 

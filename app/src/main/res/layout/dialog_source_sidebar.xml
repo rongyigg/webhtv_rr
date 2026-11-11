@@ -1,52 +1,44 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  接口源侧边栏面板（需求中的 activity_site_view.xml；本工程实际文件名为 dialog_source_sidebar.xml）。
+  接口源侧边栏面板。尺寸与排版逐字照抄逆向 `dialog_search_site.xml`（图1 的实际面板）。
 
-  版式对照逆向原版 dialog_site.xml / kz2.java：
-  1. 根节点 = 0dp 直角的深色半透明面板（@drawable/shape_dialog_source），四角贴边，
-     不再有 12dp 圆角与窗口透明背景之间的漏底缝隙；
-  2. 顶部 action 区 = 「全选 / 全不选」两个等宽按钮，左右各留 40dp 空位，
-     使两个按钮严格左右对称；左侧空位就是预留给小房子 / 返回键的位置
-     （本侧边栏由系统返回键关闭，暂不新增图标，只保留占位）；
-  3. 按钮焦点背景沿用行选择器 selector_site_item_background（白色胶囊 + 黑字）。
-     需求提到的 selector_config_delete_background 在本工程不存在，该选择器提供同样的
-     「焦点白色胶囊、其余透明」效果，故用它替代，不另造红框；
-  4. 列表 = CustomRecyclerView，占满剩余高度，行布局见 adapter_source_sidebar_item.xml。
+  - 根：match_parent × match_parent，深色半透明直角底（shape_dialog_source），
+    paddingTop 4dp / paddingBottom 16dp / paddingStart·End 4dp；
+  - 顶栏 39dp：两个 0dp + weight=1 的按钮严格等分整行（没有任何左右占位），
+    每个按钮 = 12sp 文字 + 6dp 间距 + 16dp 圆圈，水平居中；
+    背景 selector_search_action_background：常态半透明胶囊（inset 8dp），
+    焦点纯白胶囊 + 黑字；
+  - 两个圈都指向 selector_check_circle，靠 duplicateParentState 继承按钮的 selected：
+    全选按钮默认 selected（圈内打勾），全不选默认未 selected（空心环），与图1 一致；
+  - 顶栏下方 1dp shape_line_tapered 下划线，左右各 12dp；
+  - 列表 0dp + weight=1 占满剩余高度，行布局见 adapter_source_sidebar_item.xml。
 
-  宽度不写死：窗口在 SourceSidebar.onStart 的 applyWindowLayout 里按屏宽 0.4f 设定，
-  根节点 match_parent 跟随窗口，顶部两个 0dp + weight=1 的按钮因此天然等分、严格对称。
-  高度 match_parent：面板随窗口铺满，列表（wrap_content + maxHeight 上限）在窗口内滚动。
+  宽度不写死：窗口在 SourceSidebar.onStart 的 applyWindowLayout 里按屏宽 ÷ 5 设定，
+  根节点 match_parent 跟随窗口，两个 weight=1 的按钮因此天然等分、严格对称。
+  高度同样是 match_parent，窗口高度给 MATCH_PARENT，面板从屏幕顶部贴到底部。
 -->
 <androidx.appcompat.widget.LinearLayoutCompat xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:background="@drawable/shape_dialog_source"
-    android:baselineAligned="false"
     android:orientation="vertical"
     android:paddingStart="4dp"
-    android:paddingTop="8dp"
+    android:paddingTop="4dp"
     android:paddingEnd="4dp"
     android:paddingBottom="16dp">
 
     <androidx.appcompat.widget.LinearLayoutCompat
         android:id="@+id/bulkBar"
         android:layout_width="match_parent"
-        android:layout_height="40dp"
-        android:gravity="center_vertical"
+        android:layout_height="39dp"
         android:orientation="horizontal">
-
-        <!-- 预留小房子 / 返回键位置；左右各 40dp，保证中间两个按钮绝对对称。 -->
-        <Space
-            android:id="@+id/homeSlot"
-            android:layout_width="40dp"
-            android:layout_height="40dp" />
 
         <androidx.appcompat.widget.LinearLayoutCompat
             android:id="@+id/all"
             android:layout_width="0dp"
-            android:layout_height="40dp"
+            android:layout_height="match_parent"
             android:layout_weight="1"
-            android:background="@drawable/selector_site_item_background"
+            android:background="@drawable/selector_search_action_background"
             android:clickable="true"
             android:focusable="true"
             android:focusableInTouchMode="true"
@@ -56,8 +48,8 @@
             android:orientation="horizontal">
 
             <androidx.appcompat.widget.AppCompatTextView
-                android:layout_width="match_parent"
-                android:layout_height="match_parent"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
                 android:duplicateParentState="true"
                 android:gravity="center"
                 android:includeFontPadding="false"
@@ -65,14 +57,22 @@
                 android:text="@string/source_sidebar_select_all"
                 android:textColor="@color/selector_site_item_text"
                 android:textSize="12sp" />
+
+            <androidx.appcompat.widget.AppCompatImageView
+                android:id="@+id/allCheck"
+                android:layout_width="16dp"
+                android:layout_height="16dp"
+                android:layout_marginStart="6dp"
+                android:background="@drawable/selector_check_circle"
+                android:duplicateParentState="true" />
         </androidx.appcompat.widget.LinearLayoutCompat>
 
         <androidx.appcompat.widget.LinearLayoutCompat
             android:id="@+id/none"
             android:layout_width="0dp"
-            android:layout_height="40dp"
+            android:layout_height="match_parent"
             android:layout_weight="1"
-            android:background="@drawable/selector_site_item_background"
+            android:background="@drawable/selector_search_action_background"
             android:clickable="true"
             android:focusable="true"
             android:focusableInTouchMode="true"
@@ -82,8 +82,8 @@
             android:orientation="horizontal">
 
             <androidx.appcompat.widget.AppCompatTextView
-                android:layout_width="match_parent"
-                android:layout_height="match_parent"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
                 android:duplicateParentState="true"
                 android:gravity="center"
                 android:includeFontPadding="false"
@@ -91,17 +91,29 @@
                 android:text="@string/source_sidebar_select_none"
                 android:textColor="@color/selector_site_item_text"
                 android:textSize="12sp" />
-        </androidx.appcompat.widget.LinearLayoutCompat>
 
-        <Space
-            android:layout_width="40dp"
-            android:layout_height="40dp" />
+            <androidx.appcompat.widget.AppCompatImageView
+                android:id="@+id/noneCheck"
+                android:layout_width="16dp"
+                android:layout_height="16dp"
+                android:layout_marginStart="6dp"
+                android:background="@drawable/selector_check_circle"
+                android:duplicateParentState="true" />
+        </androidx.appcompat.widget.LinearLayoutCompat>
     </androidx.appcompat.widget.LinearLayoutCompat>
+
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:layout_marginStart="12dp"
+        android:layout_marginEnd="12dp"
+        android:background="@drawable/shape_line_tapered" />
 
     <com.fongmi.android.tv.ui.custom.CustomRecyclerView
         android:id="@+id/recycler"
         android:layout_width="match_parent"
-        android:layout_height="wrap_content"
+        android:layout_height="0dp"
+        android:layout_weight="1"
         android:clipChildren="false"
         android:clipToPadding="false"
         android:overScrollMode="never" />

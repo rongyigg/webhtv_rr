@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 顶栏按钮焦点：纯白胶囊（与行焦点同一套视觉），inset 8dp 与常态完全一致，切换时不跳动。 -->
+<inset xmlns:android="http://schemas.android.com/apk/res/android"
+    android:insetLeft="8dp"
+    android:insetRight="8dp"
+    android:insetTop="8dp"
+    android:insetBottom="8dp">
+
+    <shape android:shape="rectangle">
+        <solid android:color="#FFFFFF" />
+        <corners android:radius="20dp" />
+    </shape>
+
+</inset>
