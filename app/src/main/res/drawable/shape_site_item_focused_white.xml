@@ -1,7 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  侧边栏行焦点：90% 白胶囊（#E6FFFFFF）+ 4dp 小圆角。
-  inset 8dp/4dp 照抄逆向原版的行内留白，不改成大圆角、不用红框。
+  侧边栏行焦点：纯白胶囊（#FFFFFF）+ 20dp 圆角。
+  inset 8dp/4dp 照抄逆向原版的行内留白：胶囊比 40dp 行高矮一点，
+  行底 1dp shape_line_tapered 下划线因此留在胶囊外面，不会被白底吃掉。
+  20dp 圆角落在 32dp 高的胶囊上就是完整的胶囊端头（圆角超过半高时按半高收敛）。
 -->
 <inset xmlns:android="http://schemas.android.com/apk/res/android"
     android:insetLeft="8dp"
@@ -10,8 +12,8 @@
     android:insetBottom="4dp">
 
     <shape android:shape="rectangle">
-        <solid android:color="#E6FFFFFF" />
-        <corners android:radius="4dp" />
+        <solid android:color="#FFFFFF" />
+        <corners android:radius="20dp" />
     </shape>
 
 </inset>

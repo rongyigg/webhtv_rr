@@ -13,12 +13,13 @@
      「焦点白色胶囊、其余透明」效果，故用它替代，不另造红框；
   4. 列表 = CustomRecyclerView，占满剩余高度，行布局见 adapter_source_sidebar_item.xml。
 
-  宽度固定 280dp：顶部两个 0dp + weight=1 的按钮需要确定的父宽度才能等分；
-  旧版 wrap_content + 内容撑宽会让两个按钮一大一小，无法做到对称。
+  宽度不写死：窗口在 SourceSidebar.onStart 的 applyWindowLayout 里按屏宽 0.4f 设定，
+  根节点 match_parent 跟随窗口，顶部两个 0dp + weight=1 的按钮因此天然等分、严格对称。
+  高度 wrap_content：源少时面板贴内容，源多时由 CustomRecyclerView 在窗口内滚动。
 -->
 <androidx.appcompat.widget.LinearLayoutCompat xmlns:android="http://schemas.android.com/apk/res/android"
-    android:layout_width="280dp"
-    android:layout_height="match_parent"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
     android:background="@drawable/shape_dialog_source"
     android:baselineAligned="false"
     android:orientation="vertical"
@@ -100,8 +101,7 @@
     <com.fongmi.android.tv.ui.custom.CustomRecyclerView
         android:id="@+id/recycler"
         android:layout_width="match_parent"
-        android:layout_height="0dp"
-        android:layout_weight="1"
+        android:layout_height="wrap_content"
         android:clipChildren="false"
         android:clipToPadding="false"
         android:overScrollMode="never" />

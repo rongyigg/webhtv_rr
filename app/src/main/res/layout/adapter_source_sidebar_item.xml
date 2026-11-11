@@ -5,8 +5,8 @@
   结构严格按逆向原版 adapter_site.xml + s82.java：
   - 根 FrameLayout 就是可聚焦的行本体，高 40dp，背景 selector_site_item_background；
     单选 / 多选共用同一套行布局；
-  - 文字 width=0dp + weight=1 + gravity=center，横向占满文字区并居中；
-    焦点时 selector_site_item_text 把文字反转为黑色；
+  - 文字 width=0dp + weight=1 + gravity=center + 18sp，横向占满文字区并居中；
+    焦点时 selector_site_item_text 把文字反转为纯黑 #000000，其余状态纯白 #FFFFFF；
   - 右侧 MaterialCheckBox 20×20dp（原版 24dp，按需求缩小），
     enabled/focusable/clickable 全部 false，只作为状态显示；
     android:button 指向 selector_site_item_check，画出白色空心圆 / 白色实心带勾，
@@ -47,7 +47,7 @@
             android:includeFontPadding="false"
             android:singleLine="true"
             android:textColor="@color/selector_site_item_text"
-            android:textSize="13sp" />
+            android:textSize="18sp" />
 
         <com.google.android.material.checkbox.MaterialCheckBox
             android:id="@+id/check"

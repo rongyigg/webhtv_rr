@@ -2,10 +2,12 @@
 <!--
   接口源侧边栏行背景（对应需求中的 selector_site_item_background）。
 
-  三态顺序：focused > selected > normal。
-  - focused  → 90% 白胶囊 + 4dp 小圆角，文字由 selector_site_item_text 反转为黑色；
-  - selected → 透明底 + 1dp 半透明白细框（当前接口源 / 全选态），绝不使用红框；
+  只有两态：focused > normal。
+  - focused  → 纯白胶囊（#FFFFFF + 20dp 圆角），文字由 selector_site_item_text 反转为黑色；
   - normal   → 全透明，行与深色面板融为一体。
+
+  这里刻意没有 state_selected：点击行就是「切源并关窗」或「勾选」，
+  选中态白框已彻底删除，只剩普通透明态和白色胶囊焦点态。
 
   焦点态用 inset 8dp/4dp 保留行距，白胶囊不会顶满 40dp 行高，
   行底 1dp 下划线因此落在胶囊之外，不会被白底吞掉。
@@ -14,8 +16,5 @@
     <item
         android:state_focused="true"
         android:drawable="@drawable/shape_site_item_focused_white" />
-    <item
-        android:state_selected="true"
-        android:drawable="@drawable/shape_site_item_selected_white" />
     <item android:drawable="@android:color/transparent" />
 </selector>
