@@ -34,10 +34,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
@@ -66,11 +63,9 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.Shadow
-import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
-import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
@@ -115,6 +110,7 @@ import com.fongmi.android.tv.setting.TmdbSitePolicy
 import com.fongmi.android.tv.ui.helper.TmdbMatcher
 import com.fongmi.android.tv.ui.helper.TmdbRatingFormatter
 import com.fongmi.android.tv.ui.hero.ChangeSourceDialog
+import com.fongmi.android.tv.ui.hero.EpisodeViewDialog
 import com.fongmi.android.tv.ui.hero.HeroAccentColor
 import com.fongmi.android.tv.ui.hero.HeroDialogShell
 import com.fongmi.android.tv.ui.hero.HeroFocusBrush
@@ -142,7 +138,7 @@ import kotlinx.coroutines.withContext
  * - 没有才用 `extra_vod_id` 调 `SiteViewModel.detailContent(siteKey, vodId, refresh = true)`
  *   （首次进页就绕过旧缓存），观察 `SiteViewModel.result` 拿真实 [Vod]：
  *   简介 / 年份 / 地区 / 分类 / 导演 / 主演全部用真实字段，
- *   `Vod.flags[].episodes` 是 [HeroPlayDialog] 与起播的唯一数据源；
+ *   `Vod.flags[].episodes` 是 [EpisodeViewDialog] 与起播的唯一数据源；
  * - 特殊 ID 完全照抄原版 `VideoActivity.checkId()`：`push://` 换成 [SiteApi.PUSH] + 去前缀的 id；
  *   **只有**空 ID 和 `msearch:` 直接显示空态（原版 `setEmpty(false)`）；
  *   其余 id（含 `atvp_detail:` 这类插件内部 id）一律正常发详情请求，和原版一致，绝不自行拦截。
@@ -155,7 +151,7 @@ import kotlinx.coroutines.withContext
  * 3. [HeroDetailMaskVertical]：上 55% 全透明，底部渐到 0.9 黑（`bg_hero_mask_v`，与首页同参数）。
  * 4. 右上角浮动小海报 150dp × 210dp、marginTop 72dp、marginEnd 80dp、内边距 4dp。
  * 5. 左下内容区（整体贴底、paddingBottom 32dp）：剧名/Logo → 元数据 → 简介 → 按钮组 → **演职员行**。
- *    线路与选集已整体移出主页面，收进 [HeroPlayDialog]。
+ *    线路与选集已整体移出主页面，收进纯 View 弹窗 [EpisodeViewDialog]。
  *
  * 尺寸/字号/边距逐条对照 `ref_docs/activity_detail.xml`（下文简称 XML，行号即该文件行号），
  * 本次需求（Logo 位、简介 4 行、按钮顺序、演职员可聚焦）与 XML 冲突处以需求为准：
@@ -170,7 +166,7 @@ import kotlinx.coroutines.withContext
  * 焦点契约：
  * - 默认落在「播放」；←/→ 在按钮间移动。
  * - 「播放」按 ↓ → 演职员行（落在上次停留的演员）；演员行 ↑ → 回到「播放」；行内 ←/→ 横移，↓ 消费。
- * - 点「播放」→ [HeroPlayDialog]：按 `lastWatchedEpisodeIndex` 强制吸附历史集（-1 落第 1 集），
+ * - 点「播放」→ [EpisodeViewDialog]（纯 View Dialog）：按 `lastWatchedEpisodeIndex` 强制吸附历史集（-1 落第 1 集），
  *   并把该集所在分组自动切好。
  * - 点某位演员 → [HeroActorDialog]（立即弹出、数据异步加载）；关闭后焦点**回到被点的那位演员**。
  * - 纯展示文本（剧名/元数据/简介）没有任何 `focusable` / `clickable` 修饰符。
@@ -653,7 +649,7 @@ private const val PLAY_FALLBACK_WAIT_MS = 10_000L
 private const val ATVP_FOLDER_PREFIX = "atvp_detail:"
 
 /** 这条集数的地址是不是动作指令（`msubinfo-...`，兼容整串带前导 `$` 的写法）。 */
-private fun Episode.isActionCommand(): Boolean {
+internal fun Episode.isActionCommand(): Boolean {
     val raw = getUrl().trim()
     if (raw.isEmpty()) return false
     // 以 `$` 开头的整串本身就是动作指令（`$msubinfo-...` / `$msubsearch-...`），
@@ -1676,26 +1672,35 @@ private fun HeroDetailScreen(
         val episodeVodId = episodeVod?.id.orEmpty().ifBlank {
             if (episodeSiteKey == siteKey) vodId else ""
         }
-        HeroPlayDialog(
-            // 真实线路：`Vod.flags` 原样传入，某条线路没集数时弹窗内部显示「该线路暂无集数」。
-            flags = playFlags,
-            // 历史进度还没接本地库：-1 = 没看过，焦点落第 1 集。
-            lastWatchedEpisodeIndex = -1,
-            // 选中真实 (线路, 集) 后直接走原版起播入口，不自己拼 Intent。
-            onEpisodeSelected = { flag, episode ->
-                // 先关弹窗再起播：VideoActivity 是另一个页面，弹窗留在背后会闪一下。
-                showPlayDialog = false
-                startEpisode(
-                    activity,
-                    episodeSiteKey,
-                    episodeVod,
-                    episodeVodId,
-                    flag,
-                    episode,
-                )
-            },
-            onDismiss = { showPlayDialog = false },
-        )
+        // 纯 View 选集弹窗：`EpisodeViewDialog` 是独立 Dialog 窗口（不是 Composable），
+        // 所以用 DisposableEffect 对齐原来 Compose `Dialog` 的生命周期：
+        // 进入条件成立就 show，条件消失 / 换了一份 flags 就 dispose 并 dismiss，绝不重复弹窗。
+        val dialogContext = LocalContext.current
+        DisposableEffect(playFlags) {
+            val dialog = EpisodeViewDialog(
+                context = dialogContext,
+                // 真实线路：`Vod.flags` 原样传入，某条线路没集数时弹窗内部显示「该线路暂无集数」。
+                flags = playFlags,
+                // 历史进度还没接本地库：-1 = 没看过，焦点落第 1 集。
+                lastWatchedEpisodeIndex = -1,
+                // 选中真实 (线路, 集) 后直接走原版起播入口，不自己拼 Intent。
+                onEpisodeSelected = { flag, episode ->
+                    // 先关弹窗再起播：VideoActivity 是另一个页面，弹窗留在背后会闪一下。
+                    showPlayDialog = false
+                    startEpisode(
+                        activity,
+                        episodeSiteKey,
+                        episodeVod,
+                        episodeVodId,
+                        flag,
+                        episode,
+                    )
+                },
+                onDismiss = { showPlayDialog = false },
+            )
+            dialog.show()
+            onDispose { dialog.dismiss() }
+        }
     }
 
     // 演员详情：点击即弹出，数据在弹窗内部异步加载。
@@ -2274,768 +2279,6 @@ private fun HeroDetailActionButton(
     }
 }
 
-// ---------------------------------------------------------------------------
-// 选集弹窗：外壳 + 线路栏 + 单行控制栏 + 固定 4 排网格（零内部滚动）
-// ---------------------------------------------------------------------------
-
-/**
- * 选集弹窗（终稿）。
- *
- * 版式自上而下（尺寸逐条对照 `ref_docs/`）：
- * 1. 外壳 [HeroDialogShell]：`#9914171F` 半透明深灰蓝 + 16dp 大圆角 + 18dp 内边距。
- * 2. 「播放线路」：4dp × 16dp 红竖条 + 15sp 加粗标题（不可聚焦），下方 32dp / 14sp 线路按钮。
- *    —— 顶部原来的「选集徽章 + 剧名」整行已删除，弹窗第一行就是播放线路。
- * 3. 「选集」控制栏：**单行** Row，依次为红竖条 + 15sp「选集」（不可聚焦）、少列/多列、
- *    正序/倒序、分组按钮；按钮统一 32dp 高 / 14sp，全部可聚焦，←/→ 在本行内滑动。
- * 4. 选集网格：固定 [EPISODE_GRID_ROWS] 排，高度 = 排数 × 34dp + 间距，`userScrollEnabled = false`
- *    禁止内部滚动；卡片 34dp / 16sp 居中 + `basicMarquee()` 防溢出。
- *
- * 分组是「4 排 × 当前列数」的动态分页（多列 16 集一组 / 少列 8 集一组），
- * 所以不管剧集总数是 50 还是几百集，网格永远只有 4 排，翻页全靠边缘按键，绝不滚动。
- *
- * 历史记忆（本阶段用参数注入，接库后只换数据来源、不动这里的逻辑）：
- * - [lastWatchedEpisodeIndex] 是**0 基集索引**（0 = 第 1 集），-1 表示新剧。
- * - 新剧：焦点落第 1 集；老剧：分组先自动切到该集所在组，再把焦点落到该集本身。
- * - 用户按确定键时回调 [onEpisodeSelected]，直接带出真实的 `(Flag, Episode)` 组合。
- *
- * 焦点契约：
- * - 打开落在历史集（`lastWatchedEpisodeIndex`）；新剧落第 1 集。
- * - 线路栏 ←/→ 在线路间移动，端点消费；↓ 进控制栏；↑ 消费。
- * - 控制栏 ←/→ 在「列数 / 排序 / 分组」之间滑动；↓ 进网格（尽量落回同一集）；↑ 回线路栏。
- * - 网格组内 ←/→/↑/↓ 正常移动；**任意一行**的最右一列按 → 切下一组（普通行落同行第 1 列，
- *   最后一行落新组最后一集），**任意一行**的最左一列按 ← 切上一组（落上一组同行最右一列）。
- * - 列数 / 排序写进 SharedPreferences，下次打开弹窗沿用上次选择；返回键关闭弹窗。
- */
-@Composable
-internal fun HeroPlayDialog(
-    flags: List<Flag>,
-    lastWatchedEpisodeIndex: Int = -1,
-    onEpisodeSelected: (Flag, Episode) -> Unit = { _, _ -> },
-    onDismiss: () -> Unit,
-) {
-    // 一条线路都没有时不弹空壳；有线路但某条没集数，由下面的网格区显示「该线路暂无集数」。
-    if (flags.isEmpty()) return
-
-    // 列数 / 排序本地持久化：换剧、关弹窗、杀进程后再进来仍是上次的选择。
-    val context = LocalContext.current
-    val prefs = remember(context) {
-        context.getSharedPreferences(DIALOG_PREFS_NAME, Context.MODE_PRIVATE)
-    }
-    // 排序只有「正序 / 倒序」两态：默认正序，点一次整体翻转。
-    var descending by remember { mutableStateOf(prefs.getBoolean(DIALOG_PREF_DESCENDING, false)) }
-    // 列数只有「多列(4) / 少列(2)」两态：默认多列。
-    var fewColumns by remember { mutableStateOf(prefs.getBoolean(DIALOG_PREF_FEW_COLUMNS, false)) }
-
-    // 当前线路：线路栏「焦点即选中」，网格始终只渲染它的 `episodes`。
-    var selectedFlag by remember { mutableIntStateOf(0) }
-    val currentFlag = flags[selectedFlag.coerceIn(0, flags.lastIndex)]
-
-    // 【动作指令过滤】网盘聚合 / 猫源把「📄 媒体信息 / 🔍 全局搜索 / ➕ 稍后再看」伪装成集数
-    // （`📄 媒体信息$msubinfo-db%3A...`）。这类 url 不是播放地址，直接**从选集里剔掉**，
-    // 不再灰显：用户看到的每一格都保证能起播。
-    val lineEpisodes = remember(flags) {
-        flags.map { flag -> flag.episodes.orEmpty().filterNot { it.isActionCommand() } }
-    }
-    // 全部线路过滤后都没集数 = 这个源只给了动作指令，UI 显示「该源无可用剧集」。
-    val hasPlayableEpisode = lineEpisodes.any { it.isNotEmpty() }
-
-    // 基准表直接用源站返回的 `Episode` 顺序：**不再按集号重排**。
-    // 很多源的集名根本没有数字（`Episode.number` 全是 0），按 number 排序会把顺序打乱；
-    // 源站顺序本身就是正序，历史索引 / 倒序镜像都以它为坐标原点。
-    val ascending = remember(lineEpisodes, selectedFlag) {
-        lineEpisodes.getOrElse(selectedFlag.coerceIn(0, lineEpisodes.lastIndex)) { emptyList() }
-    }
-    val ordered = remember(descending, ascending) { if (descending) ascending.asReversed() else ascending }
-    val columns = if (fewColumns) EPISODE_COLUMNS_FEW else EPISODE_COLUMNS_MANY
-    // 组容量 = 4 排 × 当前列数：多列 16 集 / 少列 8 集，永远刚好填满 4 排。
-    val pageSize = EPISODE_GRID_ROWS * columns
-    val pageCount = ((ordered.size + pageSize - 1) / pageSize).coerceAtLeast(1)
-
-    // 历史索引 → 升序下标；-1（新剧）或越界统一收敛到第 1 集。
-    val watchedIndex = remember(lastWatchedEpisodeIndex, ascending) {
-        if (lastWatchedEpisodeIndex in ascending.indices) lastWatchedEpisodeIndex else 0
-    }
-    // 升序下标 → 当前排序下的显示下标（倒序时整体镜像），据此算初始分组。
-    val initialIndex = remember(watchedIndex, descending, ascending) {
-        (if (descending) ascending.lastIndex - watchedIndex else watchedIndex).coerceAtLeast(0)
-    }
-    val initialEpisode = remember(ordered, initialIndex) { ordered.getOrNull(initialIndex) }
-
-    var page by remember { mutableIntStateOf(initialIndex / pageSize) }
-    /** 焦点集在「当前组内」的下标；焦点不在网格时保留最后一次有效值。 */
-    var anchorCell by remember { mutableIntStateOf(initialIndex % pageSize) }
-    /** 焦点 / 当前集直接用 `Episode` 对象本身做锚点（不同线路的集数互不干扰）。 */
-    var anchorEpisode by remember { mutableStateOf(initialEpisode) }
-    /** 正在播放的集：只做红字高亮，切线路后按该线路的集数重置。 */
-    var playingEpisode by remember { mutableStateOf(initialEpisode) }
-    var focusedFlag by remember { mutableIntStateOf(0) }
-    // 焦点是否还在「线路 / 控制栏 / 选集网格」的下半区。
-    // 只在线路栏上时为 false；一旦进入控制栏或网格就为 true ——
-    // 此时当前线路、当前分组都要留下红框（《焦点总结》规则 ②），让用户始终知道在放哪条线路、哪一组。
-    var contentFocused by remember { mutableStateOf(false) }
-    /** 控制栏下标：0 = 列数、1 = 排序、2 起为分组按钮。 */
-    var focusedControl by remember { mutableIntStateOf(CONTROL_COLUMNS) }
-
-    val pageItems = remember(ordered, page, pageSize) {
-        ordered.drop(page * pageSize).take(pageSize)
-    }
-
-    // 待落焦格 / 待落焦按钮：-1 = 不抢焦点；serial 让同一目标连续请求也能重新触发。
-    var pendingCell by remember { mutableIntStateOf(initialIndex % pageSize) }
-    var cellSerial by remember { mutableIntStateOf(0) }
-    var pendingControl by remember { mutableIntStateOf(-1) }
-    var controlSerial by remember { mutableIntStateOf(0) }
-
-    // 切线路：集数长度 / 顺序都可能不同，分组与焦点回到新线路第 1 集。
-    // 首次组合不重置（保留上面的历史集落点），只在 selectedFlag 真正变化时执行。
-    var lastFlagIndex by remember { mutableIntStateOf(selectedFlag) }
-    LaunchedEffect(selectedFlag) {
-        if (lastFlagIndex == selectedFlag) return@LaunchedEffect
-        lastFlagIndex = selectedFlag
-        page = 0
-        anchorCell = 0
-        anchorEpisode = ordered.firstOrNull()
-        playingEpisode = anchorEpisode
-        pendingCell = -1
-    }
-
-    val flagRequesters = remember(flags.size) { List(flags.size) { FocusRequester() } }
-    val columnsRequester = remember { FocusRequester() }
-    val sortRequester = remember { FocusRequester() }
-    // 分组按钮走 LazyRow（剧集多时分组会溢出），requesters 随页数重建。
-    val groupRequesters = remember(pageCount) { List(pageCount) { FocusRequester() } }
-    // 网格 item 用「组内下标」做 key：切组时节点原样复用，焦点不会被整片销毁重建成空档。
-    val cellRequesters = remember(pageSize) { List(pageSize) { FocusRequester() } }
-    val groupListState = rememberLazyListState()
-
-    fun focusFlag(index: Int) {
-        if (requestDetailFocus(flagRequesters, index)) focusedFlag = index
-    }
-
-    /** 控制栏落焦：登记目标，真正的滚动 / 请求交给下面的 LaunchedEffect（越界时夹到首尾）。 */
-    fun focusControl(index: Int) {
-        val target = index.coerceIn(0, CONTROL_GROUP_START + pageCount - 1)
-        focusedControl = target
-        pendingControl = target
-        controlSerial++
-    }
-
-    /** 组内落焦：把下标收敛到当前组内，越界时夹到首尾。 */
-    fun focusCell(index: Int) {
-        if (pageItems.isEmpty()) return
-        val target = if (index < 0) 0 else index.coerceAtMost(pageItems.lastIndex)
-        anchorCell = target
-        anchorEpisode = pageItems[target]
-        pendingCell = target
-        cellSerial++
-    }
-
-    /** 换组落焦：写入新组状态并把目标格排进请求队列。 */
-    fun landOnPage(target: Int, items: List<Episode>, index: Int) {
-        page = target
-        anchorCell = index
-        anchorEpisode = items[index]
-        pendingCell = index
-        cellSerial++
-    }
-
-    /**
-     * 右切下一组：普通行落「新组同一行的第 1 列」；
-     * 最后一行落「新组最后一集」（继续往下看，不再从行首重新扫）。
-     * 已是最后一组时什么都不做，事件由调用方消费，绝不越界。
-     */
-    fun pageForward(row: Int, fromLastRow: Boolean) {
-        val target = page + 1
-        if (target !in 0 until pageCount) return
-        val items = ordered.drop(target * pageSize).take(pageSize)
-        if (items.isEmpty()) return
-        val index = if (fromLastRow) items.lastIndex else (row * columns).coerceAtMost(items.lastIndex)
-        landOnPage(target, items, index)
-    }
-
-    /** 左切上一组：落「上一组同一行的最右一列」；该行没有格子时落上一组最后一集。 */
-    fun pageBackward(row: Int) {
-        val target = page - 1
-        if (target !in 0 until pageCount) return
-        val items = ordered.drop(target * pageSize).take(pageSize)
-        if (items.isEmpty()) return
-        val index = if (row > items.lastIndex / columns) {
-            items.lastIndex
-        } else {
-            (row * columns + columns - 1).coerceAtMost(items.lastIndex)
-        }
-        landOnPage(target, items, index)
-    }
-
-    /** 从控制栏进入网格：优先落回当前集，找不到就落第 1 格。 */
-    fun enterGrid() {
-        val index = pageItems.indexOfFirst { it === anchorEpisode }
-        focusCell(if (index >= 0) index else 0)
-    }
-
-    /** 点分组按钮：只换组，焦点留在按钮上（不抢进网格）。 */
-    fun selectPage(target: Int) {
-        if (target !in 0 until pageCount) return
-        val items = ordered.drop(target * pageSize).take(pageSize)
-        if (items.isEmpty()) return
-        page = target
-        anchorCell = 0
-        anchorEpisode = items.first()
-        pendingCell = -1
-    }
-
-    /** 排序翻转：按「集对象」重新定位分组；焦点留在 Toggle 上，不把焦点抢进网格。 */
-    fun toggleSort() {
-        val current = anchorEpisode
-        val next = !descending
-        val reordered = ascending.let { if (next) it.asReversed() else it }
-        descending = next
-        prefs.edit().putBoolean(DIALOG_PREF_DESCENDING, next).apply()
-        val index = reordered.indexOfFirst { it === current }
-        if (index >= 0) {
-            page = index / pageSize
-            anchorCell = index % pageSize
-        }
-        pendingCell = -1
-    }
-
-    /** 列数切换：组容量从 16 ↔ 8 变化，按「全局集下标」重算分组与组内位置。 */
-    fun toggleColumns() {
-        val lastEpisode = (ordered.size - 1).coerceAtLeast(0)
-        val episodeIndex = (page * pageSize + anchorCell).coerceIn(0, lastEpisode)
-        fewColumns = !fewColumns
-        prefs.edit().putBoolean(DIALOG_PREF_FEW_COLUMNS, fewColumns).apply()
-        val newSize = EPISODE_GRID_ROWS * (if (fewColumns) EPISODE_COLUMNS_FEW else EPISODE_COLUMNS_MANY)
-        val newPageCount = ((ordered.size + newSize - 1) / newSize).coerceAtLeast(1)
-        page = (episodeIndex / newSize).coerceIn(0, newPageCount - 1)
-        anchorCell = episodeIndex % newSize
-        // 焦点留在列数按钮上，等用户按 ↓ 再进网格，避免切列数时焦点乱跳。
-        pendingCell = -1
-    }
-
-    /**
-     * 网格方向键：组内上下左右移动 + 「整列」边缘翻页。
-     *
-     * 翻页判定只看列：任意一行的**最左一列**按 ← = 上一组，**最右一列**按 → = 下一组，
-     * 所以不必先把焦点挪到右下角才能翻页；两端的落点见 [pageForward] / [pageBackward]。
-     * 上下键永远不翻页，末行 ↓ 只消费。
-     */
-    fun handleGridKey(key: Key): Boolean {
-        if (pageItems.isEmpty()) return false
-        val lastIndex = pageItems.lastIndex
-        val base = anchorCell.coerceIn(0, lastIndex)
-        val column = base % columns
-        val row = base / columns
-        val lastRow = lastIndex / columns
-        return when (key) {
-            Key.DirectionLeft -> {
-                if (column == 0) pageBackward(row) else focusCell(base - 1)
-                true
-            }
-
-            Key.DirectionRight -> {
-                when {
-                    column == columns - 1 -> pageForward(row, fromLastRow = row == lastRow)
-                    base == lastIndex -> pageForward(row, fromLastRow = true)
-                    else -> focusCell(base + 1)
-                }
-                true
-            }
-
-            Key.DirectionUp -> {
-                if (row > 0) focusCell(base - columns) else focusControl(focusedControl)
-                true
-            }
-
-            Key.DirectionDown -> {
-                if (base + columns <= lastIndex) focusCell(base + columns)
-                true
-            }
-
-            else -> false
-        }
-    }
-
-    // 网格落焦：Lazy 项要先组合出来 `requestFocus` 才拿得到节点，所以逐帧重试。
-    LaunchedEffect(page, pageSize, pendingCell, cellSerial) {
-        val target = pendingCell
-        if (target < 0 || target !in pageItems.indices) return@LaunchedEffect
-        repeat(FOCUS_RETRY_FRAMES) {
-            if (requestDetailFocus(cellRequesters, target)) {
-                pendingCell = -1
-                return@LaunchedEffect
-            }
-            withFrameNanos { }
-        }
-    }
-
-    // 控制栏落焦：分组按钮在 LazyRow 里，先滚到可视区再请求焦点。
-    LaunchedEffect(pageCount, pendingControl, controlSerial) {
-        val target = pendingControl
-        if (target < 0) return@LaunchedEffect
-        if (target >= CONTROL_GROUP_START) {
-            runCatching { groupListState.scrollToItem(target - CONTROL_GROUP_START) }
-        }
-        repeat(FOCUS_RETRY_FRAMES) {
-            if (requestControlFocus(columnsRequester, sortRequester, groupRequesters, target)) {
-                pendingControl = -1
-                return@LaunchedEffect
-            }
-            withFrameNanos { }
-        }
-    }
-
-    // 打开弹窗时把「历史集所在分组」按钮滚进可视区，和网格自动切组保持一致。
-    LaunchedEffect(Unit) {
-        runCatching { groupListState.scrollToItem(page.coerceIn(0, (pageCount - 1).coerceAtLeast(0))) }
-    }
-
-    Dialog(
-        onDismissRequest = onDismiss,
-        properties = DialogProperties(
-            dismissOnBackPress = true,
-            dismissOnClickOutside = false,
-            usePlatformDefaultWidth = false,
-        ),
-    ) {
-        // 全屏遮罩 + 居中面板；遮罩让底图继续透出来一点，形成「半透明」层次。
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(DIALOG_SCRIM),
-            contentAlignment = Alignment.Center,
-        ) {
-            HeroDialogShell(modifier = Modifier.fillMaxWidth(DIALOG_WIDTH_FRACTION)) {
-                // ---- 播放线路：4dp 红竖条标题 + 32dp 横排（标题纯展示，不可聚焦）----
-                HeroSectionTitle(text = "播放线路", fontSize = DIALOG_SECTION_TITLE_SP.sp)
-                Spacer(modifier = Modifier.height(DIALOG_TITLE_GAP))
-                LazyRow(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(DIALOG_FLAG_ROW_HEIGHT),
-                    horizontalArrangement = Arrangement.spacedBy(DIALOG_FLAG_GAP),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    itemsIndexed(
-                        items = flags,
-                        // 线路名可能重复（不同解析线路都叫「线路一」），key 里带上稳定下标。
-                        key = { index, flag -> Flag.stableKey(flag, index) },
-                    ) { index, flag ->
-                        HeroFlagChip(
-                            label = flag.getShow(),
-                            selected = index == selectedFlag,
-                            moduleFocused = contentFocused,
-                            requester = flagRequesters[index],
-                            // 焦点回到线路栏 = 暂时离开下半区：红框收起，只留当前项的焦点块。
-                            // 【焦点即选中】焦点移到哪条线路就切到哪条，不用再按确定键。
-                            // 线路切换是纯本地状态（不联网），所以立即生效、不做防抖。
-                            onFocused = {
-                                focusedFlag = index
-                                contentFocused = false
-                                selectedFlag = index
-                            },
-                            // 确定键保留（兼容原有按键习惯）：焦点即选中之后这里通常已是同一个值。
-                            onConfirm = { selectedFlag = index },
-                            // 线路栏 ↑ 上方只有不可聚焦的分区标题，直接消费。
-                            onMoveUp = { },
-                            onMoveDown = { focusControl(focusedControl) },
-                            onMoveLeft = { if (index > 0) focusFlag(index - 1) },
-                            onMoveRight = { if (index < flags.lastIndex) focusFlag(index + 1) },
-                        )
-                    }
-                }
-                Spacer(modifier = Modifier.height(DIALOG_SECTION_GAP))
-
-                // ---- 选集单行控制栏：标题（不可聚焦）+ 列数 + 排序 + 分组，按钮 32dp / 14sp ----
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(DIALOG_TOGGLE_HEIGHT),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    HeroSectionTitle(text = "选集", fontSize = DIALOG_SECTION_TITLE_SP.sp)
-                    Spacer(modifier = Modifier.width(DIALOG_CONTROL_GAP))
-                    HeroToggleButton(
-                        label = if (fewColumns) "少列" else "多列",
-                        moduleFocused = contentFocused,
-                        requester = columnsRequester,
-                        onFocused = {
-                            focusedControl = CONTROL_COLUMNS
-                            contentFocused = true
-                        },
-                        onConfirm = { toggleColumns() },
-                        onMoveUp = { focusFlag(focusedFlag) },
-                        onMoveDown = { enterGrid() },
-                        onMoveLeft = { focusControl(CONTROL_COLUMNS - 1) },
-                        onMoveRight = { focusControl(CONTROL_COLUMNS + 1) },
-                    )
-                    Spacer(modifier = Modifier.width(DIALOG_CONTROL_GAP))
-                    HeroToggleButton(
-                        label = if (descending) "倒序" else "正序",
-                        moduleFocused = contentFocused,
-                        requester = sortRequester,
-                        onFocused = {
-                            focusedControl = CONTROL_SORT
-                            contentFocused = true
-                        },
-                        onConfirm = { toggleSort() },
-                        onMoveUp = { focusFlag(focusedFlag) },
-                        onMoveDown = { enterGrid() },
-                        onMoveLeft = { focusControl(CONTROL_SORT - 1) },
-                        onMoveRight = { focusControl(CONTROL_SORT + 1) },
-                    )
-                    Spacer(modifier = Modifier.width(DIALOG_CONTROL_GAP))
-                    // 分组按钮：剧集多时一行放不下，LazyRow 会把焦点按钮滚进可视区。
-                    LazyRow(
-                        state = groupListState,
-                        modifier = Modifier
-                            .weight(1f)
-                            .height(DIALOG_TOGGLE_HEIGHT),
-                        horizontalArrangement = Arrangement.spacedBy(DIALOG_CONTROL_GAP),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        items(count = pageCount, key = { index -> index }) { index ->
-                            val start = index * pageSize + 1
-                            val end = minOf((index + 1) * pageSize, ordered.size)
-                            val controlIndex = CONTROL_GROUP_START + index
-                            HeroToggleButton(
-                                // 空线路（episodes 为空）时只有一个分组，别显示成「1-0」。
-                                label = if (ordered.isEmpty()) "0" else "$start-$end",
-                                selected = index == page,
-                                moduleFocused = contentFocused,
-                                requester = groupRequesters[index],
-                                onFocused = {
-                                    focusedControl = controlIndex
-                                    contentFocused = true
-                                    // 【焦点即选中】焦点移到哪个分组就切到哪一组，下方集数网格立刻刷新。
-                                    // 纯本地状态（`ordered` 已全部在内存里），不联网、无需防抖；
-                                    // `selectPage` 内部会 `pendingCell = -1`，不会把焦点抢进网格。
-                                    selectPage(index)
-                                },
-                                // 确定键保留（兼容原有按键习惯）。
-                                onConfirm = { selectPage(index) },
-                                onMoveUp = { focusFlag(focusedFlag) },
-                                onMoveDown = { enterGrid() },
-                                onMoveLeft = { focusControl(controlIndex - 1) },
-                                onMoveRight = { focusControl(controlIndex + 1) },
-                            )
-                        }
-                    }
-                }
-                Spacer(modifier = Modifier.height(DIALOG_CONTROL_GAP))
-
-                // ---- 固定 4 排网格：高度写死、userScrollEnabled = false，翻组只走边缘按键 ----
-                if (pageItems.isEmpty()) {
-                    // 线路存在但没有任何集数：显示提示，不弹空网格，也绝不把整部剧判成「无可用剧集」。
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(EPISODE_GRID_HEIGHT),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Text(
-                            // 全部线路过滤后都没集数 → 这个源只给了动作指令；
-                            // 只有当前线路为空 → 单条线路没集数。
-                            text = if (hasPlayableEpisode) "该线路暂无集数" else "该源无可用剧集",
-                            color = Color(0x99FFFFFF),
-                            fontSize = DIALOG_SECTION_TITLE_SP.sp,
-                        )
-                    }
-                } else {
-                    LazyVerticalGrid(
-                        columns = GridCells.Fixed(columns),
-                        userScrollEnabled = false,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(EPISODE_GRID_HEIGHT)
-                            // 边界切组统一在网格层拦截：格子本身不处理方向键。
-                            .onKeyEvent { event ->
-                                event.type == KeyEventType.KeyDown && handleGridKey(event.key)
-                            },
-                        horizontalArrangement = Arrangement.spacedBy(EPISODE_GRID_GAP),
-                        verticalArrangement = Arrangement.spacedBy(EPISODE_GRID_GAP),
-                    ) {
-                        pageItems.forEachIndexed { index, episode ->
-                            item(key = index) {
-                                HeroEpisodeCell(
-                                    // 原版推荐文案：`desc + name`（TMDB 刮削后是「S01E02 标题」，普通源就是集名）。
-                                    label = episode.getDisplayName(),
-                                    playing = episode === playingEpisode,
-                                    // 动作指令（媒体信息 / 全局搜索 / 稍后再看 / 取消追剧）已在 `lineEpisodes`
-                                    // 里被过滤掉，这里的灰显只作兜底（未来若有别的入口绕过过滤）。
-                                    actionOnly = episode.isActionCommand(),
-                                    requester = cellRequesters[index],
-                                    onFocused = {
-                                        anchorCell = index
-                                        anchorEpisode = episode
-                                        // 焦点进网格：线路 / 分组保持红框（规则 ②）。
-                                        contentFocused = true
-                                    },
-                                    onConfirm = {
-                                        // 【关键防线】动作指令绝不能进起播：本站没有这套动作的分发器，
-                                        // 送进 VideoActivity 只会拿 `msubinfo-...` 当 URL 请求，必然失败。
-                                        if (episode.isActionCommand()) {
-                                            Log.e(
-                                                TAG_DETAIL,
-                                                "动作集数不可播放: name=${episode.getName()} url=${episode.getUrl()} " +
-                                                    "flag=${currentFlag.getFlag()}",
-                                            )
-                                            Notify.show("该线路仅用于元数据操作")
-                                        } else {
-                                            playingEpisode = episode
-                                            // 直接把真实 (线路, 集) 交给详情页，由它调用原版起播入口。
-                                            // TODO(接入历史库)：这里补 History.push，目前只负责起播。
-                                            onEpisodeSelected(currentFlag, episode)
-                                        }
-                                    },
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-/**
- * 播放线路项：32dp 高 / 14sp（`ref_docs/adapter_v2_site.xml` 的 39dp 按需求压到 32dp）。
- *
- * 三态（《焦点总结》）：
- * - 聚焦 → [HeroFocusBrush] 红渐变色块 + 白字；
- * - 失焦但仍是当前线路、且焦点在下半区 → 红框描边 + 弱底（规则 ②）；
- * - 其余 → 常态深灰底白字（规则 ③）。
- */
-@Composable
-private fun HeroFlagChip(
-    label: String,
-    selected: Boolean,
-    moduleFocused: Boolean,
-    requester: FocusRequester,
-    onFocused: () -> Unit,
-    onConfirm: () -> Unit,
-    onMoveUp: () -> Unit,
-    onMoveDown: () -> Unit,
-    onMoveLeft: () -> Unit,
-    onMoveRight: () -> Unit,
-) {
-    val interaction = remember { MutableInteractionSource() }
-    val isFocused by interaction.collectIsFocusedAsState()
-    val selectedRing = selected && !isFocused && moduleFocused
-
-    Box(
-        modifier = Modifier
-            .height(DIALOG_FLAG_ROW_HEIGHT)
-            .focusRequester(requester)
-            .onFocusChanged { if (it.isFocused) onFocused() }
-            .onPreviewKeyEvent { event ->
-                if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
-                when (event.key) {
-                    Key.DirectionUp -> {
-                        onMoveUp()
-                        true
-                    }
-
-                    Key.DirectionDown -> {
-                        onMoveDown()
-                        true
-                    }
-
-                    Key.DirectionLeft -> {
-                        onMoveLeft()
-                        true
-                    }
-
-                    Key.DirectionRight -> {
-                        onMoveRight()
-                        true
-                    }
-
-                    else -> false
-                }
-            }
-            .clip(DIALOG_FLAG_SHAPE)
-            // 底色只表达「是否是当前线路」：当前线路弱亮，其余深灰。
-            // 焦点态下面再盖一层不透明红渐变，完全盖住这个底色。
-            .background(if (selected) DIALOG_FLAG_SELECTED_BG else DIALOG_FLAG_IDLE_BG)
-            // 焦点态用全局红渐变整块填充（实心块统一色）。
-            .then(
-                if (isFocused) {
-                    Modifier.background(HeroFocusBrush, DIALOG_FLAG_SHAPE)
-                } else {
-                    Modifier
-                },
-            )
-            .then(
-                if (selectedRing) {
-                    Modifier.border(DIALOG_FLAG_RING_STROKE, HeroAccentColor, DIALOG_FLAG_SHAPE)
-                } else {
-                    Modifier
-                },
-            )
-            .clickable(interactionSource = interaction, indication = null, onClick = onConfirm)
-            .padding(horizontal = DIALOG_FLAG_H_PADDING),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(
-            text = label,
-            color = Color.White,
-            fontSize = DIALOG_FLAG_SP.sp,
-            fontWeight = if (selected || isFocused) FontWeight.Medium else FontWeight.Normal,
-            maxLines = 1,
-        )
-    }
-}
-
-/**
- * 控制栏按钮：32dp 高 / 14sp（列数、排序、分组三处共用）。
- *
- * 与线路按钮同一套三态：聚焦 → 红渐变色块；失焦但仍选中且焦点在下半区 → 红框；
- * 其余 → 深灰底白字（规则 ②③）。
- */
-@Composable
-private fun HeroToggleButton(
-    label: String,
-    requester: FocusRequester,
-    onFocused: () -> Unit,
-    onConfirm: () -> Unit,
-    onMoveUp: () -> Unit,
-    onMoveDown: () -> Unit,
-    onMoveLeft: () -> Unit,
-    onMoveRight: () -> Unit,
-    selected: Boolean = false,
-    moduleFocused: Boolean = false,
-) {
-    val interaction = remember { MutableInteractionSource() }
-    val isFocused by interaction.collectIsFocusedAsState()
-    val selectedRing = selected && !isFocused && moduleFocused
-
-    Box(
-        modifier = Modifier
-            .height(DIALOG_TOGGLE_HEIGHT)
-            .focusRequester(requester)
-            .onFocusChanged { if (it.isFocused) onFocused() }
-            .onPreviewKeyEvent { event ->
-                if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
-                when (event.key) {
-                    Key.DirectionUp -> {
-                        onMoveUp()
-                        true
-                    }
-
-                    Key.DirectionDown -> {
-                        onMoveDown()
-                        true
-                    }
-
-                    Key.DirectionLeft -> {
-                        onMoveLeft()
-                        true
-                    }
-
-                    Key.DirectionRight -> {
-                        onMoveRight()
-                        true
-                    }
-
-                    else -> false
-                }
-            }
-            .clip(DIALOG_TOGGLE_SHAPE)
-            .background(if (selected) DIALOG_TOGGLE_SELECTED_BG else DIALOG_TOGGLE_IDLE_BG)
-            .then(
-                if (isFocused) {
-                    Modifier.background(HeroFocusBrush, DIALOG_TOGGLE_SHAPE)
-                } else {
-                    Modifier
-                },
-            )
-            .then(
-                if (selectedRing) {
-                    Modifier.border(DIALOG_TOGGLE_RING_STROKE, HeroAccentColor, DIALOG_TOGGLE_SHAPE)
-                } else {
-                    Modifier
-                },
-            )
-            .clickable(interactionSource = interaction, indication = null, onClick = onConfirm)
-            .padding(horizontal = DIALOG_TOGGLE_H_PADDING),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(
-            text = label,
-            color = Color.White,
-            fontSize = DIALOG_TOGGLE_SP.sp,
-            fontWeight = FontWeight.Medium,
-            maxLines = 1,
-        )
-    }
-}
-
-/**
- * 选集格子：高 34dp、16sp 居中、单行 `basicMarquee()` 防溢出。
- * 焦点态 = [HeroFocusBrush] 渐变红块 + `HeroAccentColor` 2dp 环；当前播放集红字。
- * 方向键不在这里处理：统一交给网格层的 `onKeyEvent`，保证边界切组判断只有一处。
- */
-@Composable
-private fun HeroEpisodeCell(
-    label: String,
-    playing: Boolean,
-    // 动作指令集数（`msubinfo-...` 等）：不是播放地址，灰显 + 确定键只提示、不起播。
-    actionOnly: Boolean,
-    requester: FocusRequester,
-    onFocused: () -> Unit,
-    onConfirm: () -> Unit,
-) {
-    val interaction = remember { MutableInteractionSource() }
-    val isFocused by interaction.collectIsFocusedAsState()
-
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(EPISODE_CELL_HEIGHT)
-            .focusRequester(requester)
-            .onFocusChanged { if (it.isFocused) onFocused() }
-            .clip(EPISODE_CELL_SHAPE)
-            .background(
-                when {
-                    // 动作项永远不亮焦点红块：它不能被误认为「可播放」。
-                    // 焦点态与其他实心块共用首页 Tab 同源的 [HeroFocusBrush]。
-                    isFocused && !actionOnly -> HeroFocusBrush
-                    actionOnly -> SolidColor(EPISODE_CELL_ACTION_BACKGROUND)
-                    else -> SolidColor(EPISODE_CELL_BACKGROUND)
-                },
-            )
-            .then(
-                if (isFocused && !actionOnly) {
-                    Modifier.border(EPISODE_CELL_BORDER, HeroAccentColor, EPISODE_CELL_SHAPE)
-                } else {
-                    Modifier
-                },
-            )
-            .clickable(interactionSource = interaction, indication = null, onClick = onConfirm),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(
-            text = label,
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = EPISODE_CELL_H_PADDING)
-                // 超长剧集名不省略号硬截断，跑马灯滚动显示（adapter_episode.xml 的 marquee）。
-                .basicMarquee(iterations = Int.MAX_VALUE),
-            color = when {
-                actionOnly -> EPISODE_CELL_ACTION_TEXT
-                playing -> HeroAccentColor
-                else -> Color.White
-            },
-            fontSize = EPISODE_CELL_SP.sp,
-            maxLines = 1,
-            softWrap = false,
-            overflow = TextOverflow.Ellipsis,
-            textAlign = TextAlign.Center,
-        )
-    }
-}
-
 /**
  * 在已挂载的 FocusRequester 列表里安全请求焦点：未组合的 Lazy 项会抛异常，这里降级返回 false。
  */
@@ -3055,21 +2298,6 @@ private fun focusAction(requesters: List<FocusRequester>, index: Int, onFocused:
  */
 private fun focusCast(requesters: List<FocusRequester>, index: Int) {
     requestDetailFocus(requesters, index)
-}
-
-/**
- * 控制栏下标 → 焦点：0 = 列数，1 = 排序，2 起为分组按钮。
- * 未组合的分组按钮（LazyRow 里滑出可视区）会抛异常，这里降级返回 false 由调用方重试。
- */
-private fun requestControlFocus(
-    columnsRequester: FocusRequester,
-    sortRequester: FocusRequester,
-    groupRequesters: List<FocusRequester>,
-    index: Int,
-): Boolean = when (index) {
-    CONTROL_COLUMNS -> runCatching { columnsRequester.requestFocus() }.isSuccess
-    CONTROL_SORT -> runCatching { sortRequester.requestFocus() }.isSuccess
-    else -> requestDetailFocus(groupRequesters, index - CONTROL_GROUP_START)
 }
 
 /** 按钮组定义：图标、图标尺寸、文案全部集中在这里，新增按钮只改这个列表。 */
@@ -3539,88 +2767,3 @@ private val DETAIL_ACTION_ICON_GAP = 4.dp
 private val DETAIL_ACTION_H_PADDING = 16.dp
 private val DETAIL_ACTION_SHAPE = RoundedCornerShape(4.dp)
 private val DETAIL_ACTION_IDLE_BACKGROUND = Color(0x1AFFFFFF) // white_10
-
-// ---------------------------------------------------------------------------
-// 统一弹窗外壳：外壳实现与常量已抽到 HeroCommonUi.HeroDialogShell（选集 / 换源共用）
-// ---------------------------------------------------------------------------
-private const val DIALOG_WIDTH_FRACTION = 0.82f
-
-/**
- * 弹窗背后的自绘遮罩。
- *
- * Compose `Dialog` 不能像 `Window.setDimAmount()` 那样直接调窗口暗度（项目内也没有
- * `DialogWindowProvider` 先例），所以选集弹窗用这层全屏自绘遮罩代替窗口 dim。
- * 取 50%：与换源弹窗的 `DIM_AMOUNT = 0.5f`、工程既有
- * `TmdbDetailActivity 0.56` / `ChoiceDialog 0.58` 同一量级，背景必须能透出来，
- * 不能再回到 60% 那种「纯黑 + 纯红」的刺眼组合。
- *
- * 【色相】不再用纯黑 `0x80000000`：纯黑会把背景色相全部压成 0，看起来就是一块死黑。
- * 改成逆向 ref_docs/shape_dialog_source.xml 的 `#14171F` 同一色相
- * （面板底色 [HeroCommonUi] 的 `#9914171F` 也是它），亮度下降但色温保留，
- * 背景透出来的部分仍然是「被压暗的画面」而不是「黑布」。
- */
-private val DIALOG_SCRIM = Color(0x8014171F)
-
-// 选集弹窗本地偏好（SharedPreferences）：跨剧、退弹窗、杀进程都保持上次的列数与排序
-private const val DIALOG_PREFS_NAME = "hero_detail_ui"
-private const val DIALOG_PREF_FEW_COLUMNS = "episode_few_columns"
-private const val DIALOG_PREF_DESCENDING = "episode_descending"
-
-// 顶部「选集徽章 + 剧名」整行已按需求删除，弹窗第一行直接是「播放线路」
-
-// 分区间距：标题下 8dp、区块之间 16dp、控制栏到网格 8dp
-private val DIALOG_TITLE_GAP = 8.dp
-private val DIALOG_SECTION_GAP = 16.dp
-private val DIALOG_CONTROL_GAP = 8.dp
-private const val DIALOG_SECTION_TITLE_SP = 15f
-
-// 播放线路：32dp 高 / 14sp；深灰底白字，焦点红底白字
-private val DIALOG_FLAG_ROW_HEIGHT = 32.dp
-private val DIALOG_FLAG_GAP = 12.dp
-private val DIALOG_FLAG_H_PADDING = 14.dp
-private val DIALOG_FLAG_SHAPE = RoundedCornerShape(4.dp)
-private const val DIALOG_FLAG_SP = 14f
-private val DIALOG_FLAG_IDLE_BG = Color(0x1AFFFFFF)
-private val DIALOG_FLAG_SELECTED_BG = Color(0x33FFFFFF)
-// 规则 ②：失焦但仍选中时补的 1.5dp 红框，宽度与首页分类 Tab / 搜索页胶囊一致。
-private val DIALOG_FLAG_RING_STROKE = 1.5.dp
-
-// 控制栏按钮（列数 / 排序 / 分组）：32dp 高 / 14sp；深灰底白字，焦点红底白字
-private val DIALOG_TOGGLE_HEIGHT = 32.dp
-private val DIALOG_TOGGLE_H_PADDING = 14.dp
-private val DIALOG_TOGGLE_SHAPE = RoundedCornerShape(4.dp)
-private const val DIALOG_TOGGLE_SP = 14f
-private val DIALOG_TOGGLE_IDLE_BG = Color(0x1AFFFFFF)
-private val DIALOG_TOGGLE_SELECTED_BG = Color(0x33FFFFFF)
-private val DIALOG_TOGGLE_RING_STROKE = 1.5.dp
-
-/** 单行控制栏下标：0 = 列数、1 = 排序、2 起为分组按钮。 */
-private const val CONTROL_COLUMNS = 0
-private const val CONTROL_SORT = 1
-private const val CONTROL_GROUP_START = 2
-
-/** Lazy 项从请求焦点到真正拿到节点要几帧，多给几帧兜住首帧未 attach。 */
-private const val FOCUS_RETRY_FRAMES = 10
-
-// ---------------------------------------------------------------------------
-// 选集网格：固定 4 排、格高 34dp、间距 8dp，高度写死且禁止内部滚动
-// 组容量 = 4 排 × 当前列数 → 多列 16 集 / 少列 8 集，翻组只靠边缘按键
-// ---------------------------------------------------------------------------
-private const val EPISODE_GRID_ROWS = 4
-private val EPISODE_GRID_GAP = 8.dp
-private val EPISODE_CELL_HEIGHT = 34.dp
-
-/** 固定 4 排的总高度：4 × 34dp + 3 × 8dp = 160dp，一行都不许裁切。 */
-private val EPISODE_GRID_HEIGHT =
-    EPISODE_CELL_HEIGHT * EPISODE_GRID_ROWS + EPISODE_GRID_GAP * (EPISODE_GRID_ROWS - 1)
-private const val EPISODE_COLUMNS_MANY = 4
-private const val EPISODE_COLUMNS_FEW = 2
-private val EPISODE_CELL_SHAPE = RoundedCornerShape(6.dp)
-private val EPISODE_CELL_BORDER = 2.dp
-private val EPISODE_CELL_H_PADDING = 8.dp
-private val EPISODE_CELL_BACKGROUND = Color(0x14FFFFFF)
-
-// 动作指令集数（`msubinfo-...` 等）专用：底色更暗、字更灰，和「可播放的集数」一眼分开。
-private val EPISODE_CELL_ACTION_BACKGROUND = Color(0x0AFFFFFF)
-private val EPISODE_CELL_ACTION_TEXT = Color(0x66FFFFFF)
-private const val EPISODE_CELL_SP = 16f

@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    选集弹窗的「胶囊按钮」：播放线路 chip、列数 / 排序按钮、分页标签三处共用。
+
+    结构照抄 ref_docs/adapter_episode.xml 的同层思路：根节点就是可聚焦的本体，
+    不再套一层容器 —— RecyclerView.ViewHolder 直接操作 itemView，
+    若把背景 / focusable 放在内层，adapter 设置的 isSelected 会落在不画背景的外层。
+
+    尺寸与 Compose 版一致：高 32dp、14sp、左右内边距 14dp。
+    三态背景见 @drawable/selector_episode_chip_background（全局胶囊 / 胶囊红框 / 半透明胶囊）。
+-->
+<TextView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/text"
+    android:layout_width="wrap_content"
+    android:layout_height="32dp"
+    android:background="@drawable/selector_episode_chip_background"
+    android:focusable="true"
+    android:focusableInTouchMode="true"
+    android:gravity="center"
+    android:paddingStart="14dp"
+    android:paddingEnd="14dp"
+    android:textColor="@color/white"
+    android:textSize="14sp"
+    android:singleLine="true"
+    android:ellipsize="end" />

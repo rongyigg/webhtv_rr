@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    选集格子：结构逐字照抄 ref_docs/adapter_episode.xml。
+
+    - 根 FrameLayout 就是可聚焦本体，高 38dp、4dp 圆角（Compose 版是 34dp / 6dp，
+      这里按需求回到原版 38dp / 4dp）。
+    - 文字 16sp 居中、单行 marquee 跑马灯（超长集名不硬截断）。
+    - 右下角 LottieAnimationView（20×25dp，负边距压在格子角上）只在「当前播放集」显示，
+      动画资源 @raw/equalizer 与原版一致。
+    - 负边距需要父级 clipChildren / clipToPadding = false，否则动画会被裁掉。
+
+    三态背景见 @drawable/selector_episode_cell_background。
+-->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:id="@+id/cell"
+    android:layout_width="match_parent"
+    android:layout_height="38dp"
+    android:background="@drawable/selector_episode_cell_background"
+    android:clipChildren="false"
+    android:clipToPadding="false"
+    android:focusable="true"
+    android:focusableInTouchMode="true">
+
+    <TextView
+        android:id="@+id/text"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center"
+        android:ellipsize="marquee"
+        android:focusable="false"
+        android:focusableInTouchMode="false"
+        android:gravity="center"
+        android:importantForAccessibility="no"
+        android:marqueeRepeatLimit="marquee_forever"
+        android:paddingStart="8dp"
+        android:paddingEnd="8dp"
+        android:singleLine="true"
+        android:textColor="@color/white"
+        android:textSize="16sp" />
+
+    <com.airbnb.lottie.LottieAnimationView
+        android:id="@+id/lottie"
+        android:layout_width="20dp"
+        android:layout_height="25dp"
+        android:layout_gravity="end|bottom"
+        android:layout_marginEnd="-9dp"
+        android:layout_marginBottom="-12dp"
+        android:visibility="gone"
+        app:lottie_loop="true"
+        app:lottie_rawRes="@raw/equalizer" />
+</FrameLayout>

@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    选集格子（adapter_episode_view.xml）的三态背景，全部走全局样式：
+
+    focused   → @drawable/bg_global_focus_solid_red        实心红渐变 + 4dp 圆角
+    selected  → @drawable/bg_global_selected_red_border    细线红框 1.5dp + 4dp 圆角（当前播放集）
+    activated → @drawable/shape_episode_cell_action        动作指令伪集数的更暗底色
+    normal    → @drawable/shape_episode_cell_normal        #1AFFFFFF + 4dp 圆角
+
+    四份背景同形（4dp 圆角）、都不带 <padding>，焦点 / 选中 / 常态切换时格子尺寸不跳。
+    状态顺序即优先级：focused > selected > activated > normal。
+-->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <item
+        android:state_focused="true"
+        android:drawable="@drawable/bg_global_focus_solid_red" />
+    <item
+        android:state_selected="true"
+        android:drawable="@drawable/bg_global_selected_red_border" />
+    <item
+        android:state_activated="true"
+        android:drawable="@drawable/shape_episode_cell_action" />
+    <item android:drawable="@drawable/shape_episode_cell_normal" />
+</selector>

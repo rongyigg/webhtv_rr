@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    选集格子常态：#1AFFFFFF 半透明白 + 4dp 圆角（ref_docs/adapter_episode.xml 的 38dp 小卡片形态）。
+
+    圆角固定 4dp：与焦点态 @drawable/bg_global_focus_solid_red、
+    选中态 @drawable/bg_global_selected_red_border 三份完全同形，
+    焦点进出时格子外形不跳动。
+    刻意不带 <padding>：文字内边距写在 adapter_episode_view.xml 上。
+-->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+
+    <solid android:color="@color/white_10" />
+
+    <corners android:radius="4dp" />
+
+</shape>

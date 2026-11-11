@@ -107,6 +107,7 @@ import com.fongmi.android.tv.model.SiteViewModel
 import com.fongmi.android.tv.setting.Setting
 import com.fongmi.android.tv.setting.SiteBlockSetting
 import com.fongmi.android.tv.ui.hero.ACCENT_RED
+import com.fongmi.android.tv.ui.hero.EpisodeViewDialog
 import com.fongmi.android.tv.ui.hero.FIRST_KEY_INDEX
 import com.fongmi.android.tv.ui.hero.HERO_KEYS
 import com.fongmi.android.tv.ui.hero.HOUSE_KEY_INDEX
@@ -537,7 +538,7 @@ private fun HeroSearchScreen(
     /**
      * 点卡片直达选集：**不再先跳详情页**。
      *
-     * - `vod.flags` 非空（下钻 / 分类结果常常直接带线路）→ 立刻弹 [HeroPlayDialog]；
+     * - `vod.flags` 非空（下钻 / 分类结果常常直接带线路）→ 立刻弹 [EpisodeViewDialog]；
      * - 没有 flags → 先请求一次 `detailContent`，结果回来后由 `result` 观察者直接弹选集。
      */
     fun openPlayDialog(vod: Vod, site: Site) {
@@ -1183,33 +1184,41 @@ private fun HeroSearchScreen(
         }
 
         // 点卡片直达选集：线路到手就弹这里，不再先跳详情页。
-        // HeroPlayDialog 自己是一个 Dialog 窗口，放在 Column 里也不占任何布局。
+        // EpisodeViewDialog 自己是一个独立 Dialog 窗口，放在 Column 里也不占任何布局。
         if (showPlayDialog && playFlags.isNotEmpty()) {
             val episodeVod = playVod
             val episodeSite = playSite
-            HeroPlayDialog(
-                flags = playFlags,
-                // 搜索页还没有接历史库：-1 = 新剧，焦点落第 1 集。
-                lastWatchedEpisodeIndex = -1,
-                onEpisodeSelected = { flag, episode ->
-                    showPlayDialog = false
-                    val activity = context as? Activity
-                    if (activity == null) {
-                        Notify.show("缺少 Activity，无法起播")
-                    } else if (episodeSite != null) {
-                        // 起播复用详情页那一个公开入口（只调 VideoActivity.startDirect）。
-                        startEpisode(
-                            activity,
-                            episodeSite.key,
-                            episodeVod,
-                            episodeVod?.id.orEmpty(),
-                            flag,
-                            episode,
-                        )
-                    }
-                },
-                onDismiss = { showPlayDialog = false },
-            )
+            val dialogContext = LocalContext.current
+            // 纯 View 弹窗不是 Composable：用 DisposableEffect 对齐原 Compose `Dialog` 的生命周期，
+            // 条件成立即 show、条件消失即 dismiss，重组时不会叠出第二个窗口。
+            DisposableEffect(playFlags) {
+                val dialog = EpisodeViewDialog(
+                    context = dialogContext,
+                    flags = playFlags,
+                    // 搜索页还没有接历史库：-1 = 新剧，焦点落第 1 集。
+                    lastWatchedEpisodeIndex = -1,
+                    onEpisodeSelected = { flag, episode ->
+                        showPlayDialog = false
+                        val activity = dialogContext as? Activity
+                        if (activity == null) {
+                            Notify.show("缺少 Activity，无法起播")
+                        } else if (episodeSite != null) {
+                            // 起播复用详情页那一个公开入口（只调 VideoActivity.startDirect）。
+                            startEpisode(
+                                activity,
+                                episodeSite.key,
+                                episodeVod,
+                                episodeVod?.id.orEmpty(),
+                                flag,
+                                episode,
+                            )
+                        }
+                    },
+                    onDismiss = { showPlayDialog = false },
+                )
+                dialog.show()
+                onDispose { dialog.dismiss() }
+            }
         }
     }
 }

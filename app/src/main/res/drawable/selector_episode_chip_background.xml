@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    选集弹窗「胶囊按钮」的三态背景：播放线路 chip、列数 / 排序按钮、分页标签共用。
+
+    focused  → @drawable/bg_global_focus_capsule           实心红渐变胶囊（28dp 全圆角）
+    selected → @drawable/bg_global_selected_capsule_border  失焦但仍选中：同形透明底 + 1.5dp 细线红框
+    normal   → @drawable/shape_source_site_chip_normal     普通半透明胶囊（@color/white_10）
+
+    为什么选中态用 capsule 款而不是 bg_global_selected_red_border：
+    后者是 4dp 小圆角的**矩形卡片**款（选集格子在用），套在 32dp 高的胶囊上
+    会在「焦点胶囊 → 失焦圆角矩形」之间跳形。胶囊的正确搭档是胶囊红框，
+    与首页分类 Tab、换源弹窗站点标签用的是同一对。
+
+    三份背景都不带 <padding>：内边距写在 adapter_episode_chip.xml 与
+    activity_episode_view.xml 的两个按钮上，换态不改尺寸。
+-->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <item
+        android:state_focused="true"
+        android:drawable="@drawable/bg_global_focus_capsule" />
+    <item
+        android:state_selected="true"
+        android:drawable="@drawable/bg_global_selected_capsule_border" />
+    <item android:drawable="@drawable/shape_source_site_chip_normal" />
+</selector>

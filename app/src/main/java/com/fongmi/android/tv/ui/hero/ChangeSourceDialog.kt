@@ -15,9 +15,6 @@ import android.view.ViewGroup
 import android.view.WindowManager
 import android.widget.FrameLayout
 import android.widget.TextView
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.ui.platform.ComposeView
-import androidx.compose.ui.platform.ViewCompositionStrategy
 import androidx.lifecycle.Observer
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.ViewModelStore
@@ -34,7 +31,6 @@ import com.fongmi.android.tv.model.SearchProgress
 import com.fongmi.android.tv.model.SiteViewModel
 import com.fongmi.android.tv.setting.SiteBlockSetting
 import com.fongmi.android.tv.setting.SiteHealthStore
-import com.fongmi.android.tv.ui.activity.HeroPlayDialog
 import com.fongmi.android.tv.ui.activity.startEpisode
 import com.fongmi.android.tv.utils.Notify
 import kotlin.math.min
@@ -218,27 +214,6 @@ internal class ChangeSourceDialog private constructor(
     /** 补详情时记住是谁：回包后要按这个源起播。 */
     private var pendingPlaySite: Site? = null
     private var pendingPlayVod: Vod? = null
-
-    // ------------------------------------------------------------------
-    // 选集层（Compose `HeroPlayDialog`）
-    // ------------------------------------------------------------------
-    /**
-     * 选集层要渲染的数据。用 `mutableStateOf` 而不是普通字段：
-     * ComposeView 里的组合要跟着它重组。
-     */
-    private val playState = mutableStateOf<PlayRequest?>(null)
-
-    /**
-     * 选集层的 ComposeView 宿主。
-     *
-     * **挂到 Activity 的 `android.R.id.content` 上**，而不是挂到 Dialog 窗口：
-     * 本弹窗是 `Dialog(context, theme)` 直接构造的，窗口的 decorView 没有 ViewTree
-     * lifecycle / viewModelStore / savedState owner，Compose 组合会直接抛
-     * `IllegalStateException: ViewTreeLifecycleOwner not found`；
-     * Activity 的内容视图自带这三个 owner，复用它最稳。
-     * `HeroPlayDialog` 自己又是一个 Compose Dialog 窗口，所以会盖在换源弹窗之上。
-     */
-    private var playHost: ComposeView? = null
 
     /** 是否已经跑过首轮数据（预搜索直出 / 全局并发搜索）。 */
     private var started = false
@@ -837,7 +812,7 @@ internal class ChangeSourceDialog private constructor(
      * 结果卡确定键：**都不跳详情页**。
      *
      * - folder 条目（`vod_tag=folder` / `atvp_detail:` 前缀）→ 弹窗内下探目录；
-     * - 普通剧集 → 拉一次 `detailContent` 拿线路，然后弹 [HeroPlayDialog]。
+     * - 普通剧集 → 拉一次 `detailContent` 拿线路，然后弹 [EpisodeViewDialog]。
      */
     private fun openResult(vod: Vod, site: Site) {
         if (vod.isDrillDownFolder()) {
@@ -867,62 +842,45 @@ internal class ChangeSourceDialog private constructor(
     }
 
     // ------------------------------------------------------------------
-    // 选集层（Compose `HeroPlayDialog`，挂在 Activity 内容视图上）
+    // 选集层（纯 View `EpisodeViewDialog`，独立 Dialog 窗口）
     // ------------------------------------------------------------------
 
-    /** 渲染选集层：第一次调用时创建 ComposeView 并挂到 Activity 的 `android.R.id.content`。 */
+    /**
+     * 选集弹窗实例。
+     *
+     * 纯 View 的 `EpisodeViewDialog` 自己就是一个 Dialog 窗口，不需要再挂 ComposeView 宿主；
+     * 同一时刻只允许一个，重复点卡片时先关旧的再开新的。
+     */
+    private var playDialog: EpisodeViewDialog? = null
+
+    /** 渲染选集层：直接构造纯 View 弹窗（窗口层级盖在换源弹窗之上）。 */
     private fun showPlay(flags: List<Flag>, vod: Vod?, siteKey: String, vodId: String) {
         if (flags.isEmpty()) return
-        if (ensurePlayHost() == null) return
-        playState.value = PlayRequest(flags = flags, vod = vod, siteKey = siteKey, vodId = vodId)
-    }
-
-    private fun ensurePlayHost(): ComposeView? {
-        playHost?.let { return it }
         val activity = context.findHostActivity()
         if (activity == null) {
             Log.e(TAG, "没有 Activity，无法显示选集层")
             Notify.show("无法打开选集：缺少 Activity")
-            return null
+            return
         }
-        val view = ComposeView(activity)
-        // Activity 销毁时自动销毁组合，避免把 composition 留在已经没用的 View 上。
-        view.setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
-        // 0×0：这里只负责承载组合，真正的 UI 是 HeroPlayDialog 自己的 Dialog 窗口。
-        view.layoutParams = ViewGroup.LayoutParams(0, 0)
-        view.setContent {
-            val request = playState.value
-            if (request != null) {
-                HeroPlayDialog(
-                    flags = request.flags,
-                    // 换源 / 搜索场景还没接历史库：-1 = 新剧，焦点落第 1 集。
-                    lastWatchedEpisodeIndex = -1,
-                    onEpisodeSelected = { flag, episode ->
-                        playState.value = null
-                        startEpisode(
-                            activity,
-                            request.siteKey,
-                            request.vod,
-                            request.vodId,
-                            flag,
-                            episode,
-                        )
-                    },
-                    onDismiss = { playState.value = null },
-                )
-            }
-        }
-        (activity.findViewById<ViewGroup>(android.R.id.content))?.addView(view)
-        playHost = view
-        return view
+        playDialog?.dismiss()
+        playDialog = EpisodeViewDialog(
+            // 用 Activity 作宿主：窗口主题 / 尺寸 / 起播入口都在它身上。
+            context = activity,
+            flags = flags,
+            // 换源 / 搜索场景还没接历史库：-1 = 新剧，焦点落第 1 集。
+            lastWatchedEpisodeIndex = -1,
+            onEpisodeSelected = { flag, episode ->
+                startEpisode(activity, siteKey, vod, vodId, flag, episode)
+            },
+            onDismiss = { playDialog = null },
+        ).also { it.show() }
     }
 
     override fun dismiss() {
         super.dismiss()
-        // 选集层挂在宿主 Activity 上，必须随弹窗一起摘掉，绝不留一个 0×0 的组合在页面上。
-        playState.value = null
-        playHost?.let { view -> (view.parent as? ViewGroup)?.removeView(view) }
-        playHost = null
+        // 选集层是独立窗口，必须随换源弹窗一起关掉，绝不留一个孤儿窗口。
+        playDialog?.dismiss()
+        playDialog = null
     }
 
     /** 返回键：有下探层级先退一级，到顶才关弹窗。 */
@@ -1235,23 +1193,14 @@ internal class ChangeSourceDialog private constructor(
 // 弹窗内的顶层辅助声明
 // ---------------------------------------------------------------------------
 
-/** 选集层要渲染的数据：线路 + 这部剧 + 起播源 key + 起播用的剧集 id。 */
-private data class PlayRequest(
-    val flags: List<Flag>,
-    val vod: Vod?,
-    val siteKey: String,
-    val vodId: String,
-)
-
 /** 下探栈的一层：从哪个源的哪个 folder 条目展开。 */
 private data class DrillEntry(val site: Site, val vod: Vod)
 
 /**
  * 从任意 Context 找到承载窗口的 Activity。
  *
- * 弹窗用的是 `Dialog(context, theme)`，`context` 可能是 Activity，也可能是
- * ContextThemeWrapper；选集层的 ComposeView 必须挂到 Activity 的 content 上（那里才有
- * ViewTreeLifecycleOwner / ViewModelStore / SavedStateRegistry），所以要逐层拆包装。
+ * 弹窗用的是 `Dialog(context, theme)`，`context` 可能是 Activity，也可能是 ContextThemeWrapper；
+ * 选集层（`EpisodeViewDialog`）的宿主窗口与起播入口都需要真正的 Activity，所以要逐层拆包装。
  */
 private fun Context.findHostActivity(): Activity? {
     var current = this

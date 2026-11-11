@@ -1,0 +1,209 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    详情页选集弹窗（EpisodeViewDialog）的纯 View 布局，结构逐行对照 Compose 版
+    `HeroPlayDialog`（HeroDetailActivity.kt L2593-2798）：
+
+    1. 全屏自绘遮罩 #8014171F（= Compose `DIALOG_SCRIM = Color(0x8014171F)`，
+       不用窗口 dim，避免与换源弹窗的 0.56 叠成两层黑）。
+    2. 面板宽 = 屏宽 82%（Compose `DIALOG_WIDTH_FRACTION = 0.82f`），
+       用 9 / 82 / 9 的 weight 实现，不依赖百分比布局库。
+    3. 面板 = @drawable/shape_dialog_source_shell（#9914171F + 16dp 圆角，与 Compose
+       `HeroDialogShell` 同值）+ 18dp 内边距。
+    4. 自上而下：播放线路标题 → 32dp 线路栏 → 选集控制栏（32dp）→ 固定 4 排网格（176dp）。
+
+    尺寸全部来自 Compose 版常量，一处都不许在代码里重复写：
+      线路/控制栏高 32dp、字号 14sp、左右内边距 14dp、线路间距 12dp、控制栏间距 8dp；
+      网格 4 排 × 38dp + 3 × 8dp = 176dp（EPISODE_GRID_ROWS / EPISODE_CELL_HEIGHT / EPISODE_GRID_GAP）。
+-->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#8014171F"
+    android:clipChildren="false"
+    android:clipToPadding="false">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center_vertical"
+        android:orientation="horizontal"
+        android:clipChildren="false"
+        android:clipToPadding="false">
+
+        <!-- 左右留白各占 9%，中间面板 82% -->
+        <Space
+            android:layout_width="0dp"
+            android:layout_height="0dp"
+            android:layout_weight="9" />
+
+        <LinearLayout
+            android:id="@+id/panel"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="82"
+            android:background="@drawable/shape_dialog_source_shell"
+            android:orientation="vertical"
+            android:padding="18dp"
+            android:clipChildren="false"
+            android:clipToPadding="false">
+
+            <!-- ============ 播放线路：4dp 红竖条 + 15sp 加粗标题（不可聚焦） ============ -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <View
+                    android:layout_width="4dp"
+                    android:layout_height="16dp"
+                    android:background="@drawable/shape_hero_section_bar" />
+
+                <Space
+                    android:layout_width="8dp"
+                    android:layout_height="0dp" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="@string/episode_title_flags"
+                    android:textColor="@color/white"
+                    android:textSize="15sp"
+                    android:textStyle="bold"
+                    android:singleLine="true" />
+            </LinearLayout>
+
+            <Space
+                android:layout_width="0dp"
+                android:layout_height="8dp" />
+
+            <!-- 线路栏：横向 RecyclerView，32dp 高、12dp 间距、chip 14sp -->
+            <androidx.recyclerview.widget.RecyclerView
+                android:id="@+id/flagRecycler"
+                android:layout_width="match_parent"
+                android:layout_height="32dp"
+                android:clipToPadding="false"
+                android:focusable="false"
+                android:descendantFocusability="afterDescendants"
+                android:overScrollMode="never" />
+
+            <Space
+                android:layout_width="0dp"
+                android:layout_height="16dp" />
+
+            <!-- ============ 选集控制栏：标题 + 列数 + 排序 + 分页（同一行 32dp） ============ -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="32dp"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <View
+                    android:layout_width="4dp"
+                    android:layout_height="16dp"
+                    android:background="@drawable/shape_hero_section_bar" />
+
+                <Space
+                    android:layout_width="8dp"
+                    android:layout_height="0dp" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="@string/episode_title_select"
+                    android:textColor="@color/white"
+                    android:textSize="15sp"
+                    android:textStyle="bold"
+                    android:singleLine="true" />
+
+                <Space
+                    android:layout_width="8dp"
+                    android:layout_height="0dp" />
+
+                <!-- 列数：多列 / 少列（纯本地状态，点一次翻转） -->
+                <TextView
+                    android:id="@+id/columnsButton"
+                    android:layout_width="wrap_content"
+                    android:layout_height="match_parent"
+                    android:background="@drawable/selector_episode_chip_background"
+                    android:focusable="true"
+                    android:focusableInTouchMode="true"
+                    android:gravity="center"
+                    android:paddingStart="14dp"
+                    android:paddingEnd="14dp"
+                    android:textColor="@color/white"
+                    android:textSize="14sp"
+                    android:singleLine="true" />
+
+                <Space
+                    android:layout_width="8dp"
+                    android:layout_height="0dp" />
+
+                <!-- 排序：正序 / 倒序 -->
+                <TextView
+                    android:id="@+id/sortButton"
+                    android:layout_width="wrap_content"
+                    android:layout_height="match_parent"
+                    android:background="@drawable/selector_episode_chip_background"
+                    android:focusable="true"
+                    android:focusableInTouchMode="true"
+                    android:gravity="center"
+                    android:paddingStart="14dp"
+                    android:paddingEnd="14dp"
+                    android:textColor="@color/white"
+                    android:textSize="14sp"
+                    android:singleLine="true" />
+
+                <Space
+                    android:layout_width="8dp"
+                    android:layout_height="0dp" />
+
+                <!-- 分页标签：剧集多时一行放不下，横向滚动；焦点即选中 -->
+                <androidx.recyclerview.widget.RecyclerView
+                    android:id="@+id/groupRecycler"
+                    android:layout_width="0dp"
+                    android:layout_height="match_parent"
+                    android:layout_weight="1"
+                    android:clipToPadding="false"
+                    android:focusable="false"
+                    android:descendantFocusability="afterDescendants"
+                    android:overScrollMode="never" />
+            </LinearLayout>
+
+            <Space
+                android:layout_width="0dp"
+                android:layout_height="8dp" />
+
+            <!-- ============ 固定 4 排网格（176dp）+ 空态提示 ============ -->
+            <FrameLayout
+                android:layout_width="match_parent"
+                android:layout_height="176dp">
+
+                <androidx.recyclerview.widget.RecyclerView
+                    android:id="@+id/episodeRecycler"
+                    android:layout_width="match_parent"
+                    android:layout_height="176dp"
+                    android:clipChildren="false"
+                    android:clipToPadding="false"
+                    android:focusable="false"
+                    android:descendantFocusability="afterDescendants"
+                    android:overScrollMode="never" />
+
+                <TextView
+                    android:id="@+id/episodeEmpty"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:gravity="center"
+                    android:textColor="#99FFFFFF"
+                    android:textSize="15sp"
+                    android:visibility="gone" />
+            </FrameLayout>
+        </LinearLayout>
+
+        <Space
+            android:layout_width="0dp"
+            android:layout_height="0dp"
+            android:layout_weight="9" />
+    </LinearLayout>
+</FrameLayout>

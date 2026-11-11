@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    区块标题前的 4dp × 16dp 红色小竖条。
+
+    这是 HeroCommonUi.kt `HeroSectionTitle`（Compose）的 View 等价物：
+    Compose 版 = 4dp × 16dp 圆角 2dp 的 HeroAccentColor(#FF0000) 色块 + 8dp 间距 + 15sp 加粗白字。
+    色值直接对齐 HeroAccentColor，不引用 @color/osd_focus（那个是 #E53935，偏暗一档）。
+    刻意不带 <padding>：尺寸完全由使用处的 layout_width / layout_height 决定。
+-->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+
+    <solid android:color="#FFFF0000" />
+
+    <corners android:radius="2dp" />
+
+</shape>

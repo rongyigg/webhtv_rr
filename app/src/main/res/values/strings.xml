@@ -2456,4 +2456,18 @@
     <!-- 结果卡左上角类型标签（adapter_tmdb_match.xml L24-31 typeLabel：剧集 / 电影） -->
     <string name="home_tmdb_match_type_tv">TV</string>
     <string name="home_tmdb_match_type_movie">MOV</string>
+
+    <!--
+      详情页选集弹窗（activity_episode_view.xml / EpisodeViewDialog）。
+      文案与 Compose 版 HeroPlayDialog 逐字一致，不改词。
+    -->
+    <string name="episode_title_flags">播放线路</string>
+    <string name="episode_title_select">选集</string>
+    <string name="episode_columns_many">多列</string>
+    <string name="episode_columns_few">少列</string>
+    <string name="episode_sort_asc">正序</string>
+    <string name="episode_sort_desc">倒序</string>
+    <string name="episode_line_empty">该线路暂无集数</string>
+    <string name="episode_source_empty">该源无可用剧集</string>
+    <string name="episode_action_only">该线路仅用于元数据操作</string>
 </resources>

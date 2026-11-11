@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    动作指令集数（`msubinfo-...` / `$msubsearch-...`）专用底色：#0AFFFFFF，比常态 #1AFFFFFF 更暗。
+
+    与 Compose 版 `EPISODE_CELL_ACTION_BACKGROUND = Color(0x0AFFFFFF)` 同值，
+    配合代码里的灰字（0x66FFFFFF）让「不能起播的伪集数」一眼可辨。
+    这些项在进列表前已被 `filterNot { it.isActionCommand() }` 过滤，
+    这层底色只是未来若有别的入口绕过过滤时的兜底。
+-->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+
+    <solid android:color="#0AFFFFFF" />
+
+    <corners android:radius="4dp" />
+
+</shape>
