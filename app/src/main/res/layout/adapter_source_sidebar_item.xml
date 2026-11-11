@@ -2,23 +2,26 @@
 <!--
   接口源侧边栏列表行（需求中的 adapter_site_view.xml；本工程实际文件名为 adapter_source_sidebar_item.xml）。
 
-  结构严格按逆向原版 adapter_site.xml + s82.java：
-  - 根 FrameLayout 就是可聚焦的行本体，高 40dp，背景 selector_site_item_background；
-    单选 / 多选共用同一套行布局；
-  - 【状态链红线】根 FrameLayout 拿到 focused 后，中间 LinearLayoutCompat 必须
-    duplicateParentState="true" 才能继续下发，文字 / 勾选圈的 duplicateParentState="true"
-    才真正继承到焦点。少了中间这一层，子控件的父节点永远不 focused，
-    就会出现「白胶囊上还是白字白圈」的白底白字；
-  - 文字 width=0dp + weight=1 + gravity=center + 18sp，横向占满文字区并居中；
+  尺寸与排版逐字照抄逆向 adapter_site.xml + s82.java：
+  - 行本体 = 包住「文字 + 勾选框」的 LinearLayoutCompat，高 40dp、宽 match_parent，
+    背景 selector_site_item_background（白胶囊焦点），paddingStart / paddingEnd 各 8dp；
+  - 文字 0dp + weight=1 + match_parent 高 + gravity=center + 18sp + singleLine + marquee，
     焦点时 selector_site_item_text 反转为纯黑 #000000，其余状态纯白 #FFFFFF；
-  - 右侧 MaterialCheckBox 24×24dp，marginEnd 16dp 不贴边（行本身还有 8dp paddingEnd）；
-    enabled/focusable/clickable 全部 false，只作为状态显示；
-    android:button 指向 selector_site_item_check（24dp 空心圆 / 空心圆 + 对勾），
+  - 勾选框 MaterialCheckBox 24×24dp + marginStart 12dp，
+    enabled / focusable / clickable 全 false，只作为状态显示；
+    minWidth / minHeight / padding 全部 0dp，压掉 Material 默认的大触碰区，
+    保证它老老实实是 24dp、绝不撑爆 40dp 行高；
+    android:button 指向 selector_site_item_check（空心圆 / 空心圆 + 对勾），
     颜色由 selector_site_item_check_tint 决定：常态 #FFFFFF，行聚焦 #000000；
-  - 行底 1dp View 使用原版 shape_line_tapered（左右透明、中间 10% 白），
-    左右各 24dp；焦点胶囊 inset 上下 4dp，下划线落在胶囊之外，不会被白底吞掉。
+  - 行底 1dp View 使用原版 shape_line_tapered（左右透明、中间 10% 白），左右各 24dp；
+    焦点胶囊 inset 上下 4dp，下划线落在胶囊之外，不会被白底吞掉。
 
-  为什么不用 LinearLayout 做根：文字需要 weight=1，而 1dp 下划线要压在行底，
+  【状态链红线】根 FrameLayout 是可聚焦的点击热区，白胶囊背景挂在里面那层
+  LinearLayoutCompat 上；中间层必须 duplicateParentState="true" 才能把 focused
+  继续下发给文字 / 勾选框（它们自己也 duplicateParentState="true"），
+  少了这一层就会出现「白胶囊上还是白字白圈」的白底白字。
+
+  为什么用 FrameLayout 做根：文字需要 weight=1 撑开，而 1dp 下划线要压在行底，
   FrameLayout 根 + 内部横向 LinearLayout 能同时满足「weight 居中」和「底部叠线」。
 -->
 <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
@@ -26,14 +29,14 @@
     android:id="@+id/item"
     android:layout_width="match_parent"
     android:layout_height="40dp"
-    android:background="@drawable/selector_site_item_background"
     android:clickable="true"
     android:focusable="true"
     android:focusableInTouchMode="true">
 
     <androidx.appcompat.widget.LinearLayoutCompat
         android:layout_width="match_parent"
-        android:layout_height="match_parent"
+        android:layout_height="40dp"
+        android:background="@drawable/selector_site_item_background"
         android:duplicateParentState="true"
         android:gravity="center_vertical"
         android:orientation="horizontal"
@@ -58,7 +61,7 @@
             android:id="@+id/check"
             android:layout_width="24dp"
             android:layout_height="24dp"
-            android:layout_marginStart="8dp"
+            android:layout_marginStart="12dp"
             android:layout_marginEnd="16dp"
             android:background="@null"
             android:button="@drawable/selector_site_item_check"
