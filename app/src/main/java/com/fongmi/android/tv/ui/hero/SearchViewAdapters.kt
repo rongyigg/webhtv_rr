@@ -32,13 +32,12 @@ import kotlin.math.roundToInt
 /**
  * 一个键位。
  *
- * 与 Compose 版 `HERO_KEYS` 逐项对应（`ref_docs/xd1.java` L27）：
- * 第一行 `(占位, <, >, ⌫, 键盘, 房子, A)`，之后 B-Z、0-9，共 42 格 = 6 行 × 7 列。
+ * 与逆向数据 `ref_docs/xd1.java` L27 逐项对应：
+ * 第一行 `(二维码, <, >, ⌫, 键盘, 房子, A)`，之后 B-Z、0-9，共 42 格 = 6 行 × 7 列。
+ * 首格在原版是 `ic_keyboard_remote`（远程输入入口），本仓库没有这张图，
+ * 用同为二维码造型的 [R.drawable.ic_qr] 顶上，动作按「预留、无作用」处理。
  */
 internal sealed interface SearchKey {
-
-    /** 左上角空格：不显示、不可聚焦。 */
-    data object Placeholder : SearchKey
 
     data class Text(val value: String) : SearchKey
 
@@ -55,10 +54,13 @@ internal enum class SearchKeyAction {
 
     /** 全局接口源侧边栏。 */
     House,
+
+    /** 二维码入口：原版是远程输入，本仓库只保留图标，不做任何事。 */
+    None,
 }
 
 internal val SEARCH_KEYS: List<SearchKey> = buildList {
-    add(SearchKey.Placeholder)
+    add(SearchKey.Icon(R.drawable.ic_qr, SearchKeyAction.None))
     add(SearchKey.Icon(R.drawable.ic_keyboard_left, SearchKeyAction.CursorLeft))
     add(SearchKey.Icon(R.drawable.ic_keyboard_right, SearchKeyAction.CursorRight))
     add(SearchKey.Icon(R.drawable.ic_keyboard_back, SearchKeyAction.Backspace))
@@ -70,7 +72,6 @@ internal val SEARCH_KEYS: List<SearchKey> = buildList {
 
 internal const val SEARCH_KEY_COLUMNS = 7
 internal const val SEARCH_KEY_ROWS = 6
-internal const val SEARCH_PLACEHOLDER_INDEX = 0
 internal const val SEARCH_FIRST_KEY_INDEX = 1
 internal const val SEARCH_HOUSE_KEY_INDEX = 5
 internal const val SEARCH_KEYWORD_MAX_LENGTH = 19
@@ -89,13 +90,11 @@ internal class SearchKeyAdapter(
     private companion object {
         const val TYPE_TEXT = 0
         const val TYPE_ICON = 1
-        const val TYPE_PLACEHOLDER = 2
     }
 
     override fun getItemCount(): Int = SEARCH_KEYS.size
 
     override fun getItemViewType(position: Int): Int = when (SEARCH_KEYS[position]) {
-        is SearchKey.Placeholder -> TYPE_PLACEHOLDER
         is SearchKey.Icon -> TYPE_ICON
         is SearchKey.Text -> TYPE_TEXT
     }
@@ -113,19 +112,6 @@ internal class SearchKeyAdapter(
     override fun onBindViewHolder(holder: Holder, position: Int) {
         val view = holder.itemView
         when (val key = SEARCH_KEYS[position]) {
-            is SearchKey.Placeholder -> {
-                // 空格：既没有背景也不参与焦点，位置由 GridLayoutManager 自然留出。
-                // `setOnClickListener` 会把 clickable 重新置 true，所以这里直接提前返回。
-                view.isFocusable = false
-                view.isFocusableInTouchMode = false
-                view.isClickable = false
-                view.background = null
-                view.setOnClickListener(null)
-                view.setOnKeyListener(null)
-                (view as? TextView)?.text = ""
-                return
-            }
-
             is SearchKey.Icon -> {
                 view.isFocusable = true
                 view.isFocusableInTouchMode = true

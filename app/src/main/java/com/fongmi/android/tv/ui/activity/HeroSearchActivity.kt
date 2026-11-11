@@ -14,6 +14,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.view.ViewTreeObserver
 import android.view.inputmethod.EditorInfo
+import android.view.inputmethod.InputMethodManager
 import android.widget.ImageView
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
@@ -45,7 +46,6 @@ import com.fongmi.android.tv.ui.hero.SEARCH_KEY_COLUMNS
 import com.fongmi.android.tv.ui.hero.SEARCH_KEY_ROWS
 import com.fongmi.android.tv.ui.hero.SEARCH_KEYWORD_MAX_LENGTH
 import com.fongmi.android.tv.ui.hero.SEARCH_KEYS
-import com.fongmi.android.tv.ui.hero.SEARCH_PLACEHOLDER_INDEX
 import com.fongmi.android.tv.ui.hero.SearchChipAdapter
 import com.fongmi.android.tv.ui.hero.SearchGapDecoration
 import com.fongmi.android.tv.ui.hero.SearchKey
@@ -85,8 +85,8 @@ import kotlin.math.roundToInt
  *    │   │   └─ 键盘 7×6 格，每格 34.57×35dp（键背景 inset 2.5dp → 可见键 30dp）
  *    │   └─ 右列（NestedScrollView）：历史（2 行）+ 热搜 / 建议（3 行）
  *    └─ resultSection(marginTop 12dp, GONE)
- *        ├─ 站点 Tab 行 38dp（26dp 胶囊 + 2dp + 10dp）
- *        └─ 海报区 215dp（117×215dp 卡片，间距 16dp）
+ *        ├─ 站点 Tab 行 38dp（26dp 胶囊 + 2dp + 10dp 与海报行的距离）
+ *        └─ 海报区 215dp（120×180dp 海报 + 13sp 剧名，间距 16dp）
  * ```
  * 上半区 540 - 24 - 12 - 38 - 215 = 251dp；左列 32 + 8 + 210 = 250dp，刚好塞满。
  *
@@ -306,8 +306,11 @@ class HeroSearchActivity : AppCompatActivity() {
 
     private fun setupInput() {
         input.filters = arrayOf(InputFilter.LengthFilter(SEARCH_KEYWORD_MAX_LENGTH))
-        // 电视端不弹系统输入法：文字只由页面内的虚拟键盘写入。
+        // 聚焦不弹系统输入法：文字默认由页面内的虚拟键盘写入，
+        // 只有在输入框上按确定键（见 [showSystemInput]）才把系统输入法拉起来。
         input.showSoftInputOnFocus = false
+        // 离开输入框就收起系统输入法，避免它盖住下半区结果。
+        input.setOnFocusChangeListener { _, hasFocus -> if (!hasFocus) hideSystemInput() }
         input.setOnKeyListener { _, keyCode, event ->
             if (event.action != KeyEvent.ACTION_DOWN) return@setOnKeyListener false
             when (keyCode) {
@@ -320,7 +323,7 @@ class HeroSearchActivity : AppCompatActivity() {
                 KeyEvent.KEYCODE_ENTER,
                 KeyEvent.KEYCODE_NUMPAD_ENTER,
                 -> {
-                    confirmSearch()
+                    showSystemInput()
                     true
                 }
 
@@ -431,6 +434,8 @@ class HeroSearchActivity : AppCompatActivity() {
                 // 原版这个位置是「键盘布局切换键」；本页没有符号键盘页，改为清空输入。
                 SearchKeyAction.Keyboard -> input.setText("")
                 SearchKeyAction.House -> openSourceSidebar()
+                // 二维码入口：原版是远程输入，本仓库只保留图标，点了不做任何事。
+                SearchKeyAction.None -> Unit
             }
 
             else -> Unit
@@ -450,7 +455,7 @@ class HeroSearchActivity : AppCompatActivity() {
         val column = position % SEARCH_KEY_COLUMNS
         return when (keyCode) {
             KeyEvent.KEYCODE_DPAD_LEFT -> {
-                if (column > 0 && position - 1 > SEARCH_PLACEHOLDER_INDEX) {
+                if (column > 0) {
                     focusKeyboard(position - 1)
                 }
                 true
@@ -491,11 +496,30 @@ class HeroSearchActivity : AppCompatActivity() {
     }
 
     private fun focusInput() {
+        input.showSoftInputOnFocus = false
         if (!input.requestFocus()) window.decorView.post { input.requestFocus() }
     }
 
+    /**
+     * 输入框上按确定键：这一次才拉起系统输入法。
+     *
+     * `showSoftInputOnFocus` 保持 false（聚焦输入框不会自动弹），
+     * 这里用 `showSoftInput` 显式请求，系统输入法仍可正常输入、回车仍走
+     * [EditorInfo.IME_ACTION_DONE] → [confirmSearch]。
+     */
+    private fun showSystemInput() {
+        val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager ?: return
+        input.requestFocus()
+        imm.showSoftInput(input, InputMethodManager.SHOW_IMPLICIT)
+    }
+
+    private fun hideSystemInput() {
+        val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager ?: return
+        imm.hideSoftInputFromWindow(input.windowToken, 0)
+    }
+
     private fun focusKeyboard(index: Int) {
-        val target = index.coerceIn(SEARCH_FIRST_KEY_INDEX, SEARCH_KEYS.lastIndex)
+        val target = index.coerceIn(0, SEARCH_KEYS.lastIndex)
         if (!keyAdapter.focusKey(keyboardRecycler, target)) {
             keyboardRecycler.post { keyAdapter.focusKey(keyboardRecycler, target) }
         }
@@ -639,6 +663,8 @@ class HeroSearchActivity : AppCompatActivity() {
             input.setText(value)
             input.setSelection(value.length)
         }
+        // 用系统输入法敲完回车：先收键盘，再把焦点交给结果区。
+        hideSystemInput()
         recordHistory(value)
         performSearch(value, focusSite = true)
     }
@@ -678,7 +704,7 @@ class HeroSearchActivity : AppCompatActivity() {
         siteViewModel.searchContent(sites, text, false)
 
         // 4. 结果区刚显示出来，等一次布局再把焦点落到「全部」。
-        if (focusSite) siteRecycler.post { focusSite(0) }
+        if (focusSite) focusSite(0)
     }
 
     private fun openResult(vod: Vod) {
@@ -915,11 +941,26 @@ class HeroSearchActivity : AppCompatActivity() {
         selectedSite = target
         focusedSite = target
         render()
-        siteRecycler.post {
-            if (!siteAdapter.focusTab(siteRecycler, target)) {
-                siteRecycler.post { siteAdapter.focusTab(siteRecycler, target) }
-            }
-        }
+        siteRecycler.post { focusTabWhenLaidOut(target) }
+    }
+
+    /**
+     * 等站点 Tab 真正量好、放好再落焦点。
+     *
+     * 结果区刚从 GONE 变 VISIBLE 时 `findViewByPosition` 还是 null，单纯再 post 一次
+     * 仍可能早于这一帧的布局（「搜索完焦点掉不回全部」就是这么来的）；
+     * 这里用一次性的全局布局回调兜底，布局一完成立刻落焦点。
+     */
+    private fun focusTabWhenLaidOut(index: Int) {
+        if (siteAdapter.focusTab(siteRecycler, index)) return
+        siteRecycler.viewTreeObserver.addOnGlobalLayoutListener(
+            object : ViewTreeObserver.OnGlobalLayoutListener {
+                override fun onGlobalLayout() {
+                    siteRecycler.viewTreeObserver.removeOnGlobalLayoutListener(this)
+                    siteAdapter.focusTab(siteRecycler, index)
+                }
+            },
+        )
     }
 
     private fun onSiteFocused(index: Int) {
@@ -1204,8 +1245,8 @@ class HeroSearchActivity : AppCompatActivity() {
         private const val BACKDROP_SAMPLE_HEIGHT = 90
         private const val BACKDROP_BLUR_RADIUS = 8
 
-        // 右列「历史」与「热搜 / 建议」之间的间隔。
-        private const val RIGHT_SECTION_GAP_DP = 16
+        // 右列「历史」与「热搜 / 建议」之间的间隔（原版 recordLayout 的 marginBottom 4dp）。
+        private const val RIGHT_SECTION_GAP_DP = 4
 
         // 站点 Tab 间距 12dp（原版 dz2 `setHorizontalSpacing(12dp)`）；结果卡间距 16dp。
         private const val SITE_ITEM_GAP_DP = 12

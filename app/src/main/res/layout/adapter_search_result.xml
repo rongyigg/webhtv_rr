@@ -1,80 +1,78 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-    搜索页结果卡（原版 ref_docs/adapter_search.xml + 截图实测 117×215dp）。
+    搜索页结果卡（原版 `adapter_vod_rect.xml` + `vs3(Style.rect())` 的 rect 卡，尺寸全部来自逆向数据）。
 
-    FrameLayout 117×215dp（foreground = 全局海报焦点框 selector_vod，1.5dp 红描边）
-    └─ LinearLayout（vertical）
-        ├─ FrameLayout 117×181dp：海报 + 左上站点标签 + 左下集数标签
-        └─ 剧名 117×34dp：16sp、居中、单行省略
-
-    圆角：整卡背景 shape_search_poster（6dp）+ clipToOutline，海报被同一轮廓裁圆，
-    上下圆角一致；名称区就是这层背景本身，不再叠第二块底板。
+    - 海报 120×180dp（`adapter_vod_rect.xml` L24-25）：7 张卡 + 6 × 16dp 间距 = 936dp，
+      比可视宽度 912dp 多 24dp，第 7 张正好在屏幕右缘被裁 —— 与截图完全一致；
+    - 剧名 13sp / `white_80` / 居中单行 / marginTop 8dp（同文件 L46-57）；
+    - 焦点红框只包海报：`selector_vod` 挂在 `imageWrapper` 上，`duplicateParentState`
+      把根节点的 focused 状态透传下来；剧名在框外，所以不会再「框住卡片和字」，
+      框的上下四角也都是圆角（此前框住整卡、底边被屏幕裁掉才看着像下直角）；
+    - 海报圆角 6dp + `clipToOutline`（截图实测半径 ≈ 11px = 5.5dp），与框的 8dp 半径视觉贴合。
 -->
-<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
-    android:layout_width="117dp"
-    android:layout_height="215dp"
-    android:background="@drawable/shape_search_poster"
-    android:clipToOutline="true"
+<androidx.appcompat.widget.LinearLayoutCompat xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="120dp"
+    android:layout_height="wrap_content"
+    android:clipChildren="false"
+    android:clipToPadding="false"
     android:focusable="true"
     android:focusableInTouchMode="true"
-    android:foreground="@drawable/selector_vod">
+    android:orientation="vertical">
 
-    <androidx.appcompat.widget.LinearLayoutCompat
-        android:layout_width="match_parent"
-        android:layout_height="match_parent"
-        android:orientation="vertical">
+    <FrameLayout
+        android:id="@+id/imageWrapper"
+        android:layout_width="120dp"
+        android:layout_height="180dp"
+        android:clipChildren="false"
+        android:clipToPadding="false"
+        android:duplicateParentState="true"
+        android:foreground="@drawable/selector_vod">
 
-        <FrameLayout
+        <androidx.appcompat.widget.AppCompatImageView
+            android:id="@+id/image"
             android:layout_width="match_parent"
-            android:layout_height="181dp">
-
-            <androidx.appcompat.widget.AppCompatImageView
-                android:id="@+id/image"
-                android:layout_width="match_parent"
-                android:layout_height="match_parent"
-                android:background="@color/black_20"
-                android:contentDescription="@null"
-                android:scaleType="centerCrop" />
-
-            <androidx.appcompat.widget.AppCompatTextView
-                android:id="@+id/site"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_gravity="top|start"
-                android:background="@drawable/shape_vod_site"
-                android:ellipsize="end"
-                android:maxWidth="96dp"
-                android:singleLine="true"
-                android:textColor="@color/white"
-                android:textSize="13sp"
-                android:visibility="gone" />
-
-            <androidx.appcompat.widget.AppCompatTextView
-                android:id="@+id/remark"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_gravity="bottom|start"
-                android:background="@drawable/shape_vod_remark"
-                android:ellipsize="end"
-                android:singleLine="true"
-                android:textColor="@color/white"
-                android:textSize="14sp"
-                android:visibility="gone" />
-
-        </FrameLayout>
+            android:layout_height="match_parent"
+            android:background="@drawable/shape_search_poster"
+            android:clipToOutline="true"
+            android:contentDescription="@null"
+            android:scaleType="centerCrop" />
 
         <androidx.appcompat.widget.AppCompatTextView
-            android:id="@+id/name"
-            android:layout_width="match_parent"
-            android:layout_height="34dp"
+            android:id="@+id/site"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="top|start"
+            android:background="@drawable/shape_vod_site"
             android:ellipsize="end"
-            android:gravity="center"
-            android:paddingStart="6dp"
-            android:paddingEnd="6dp"
+            android:maxWidth="96dp"
             android:singleLine="true"
             android:textColor="@color/white"
-            android:textSize="16sp" />
+            android:textSize="13sp"
+            android:visibility="gone" />
 
-    </androidx.appcompat.widget.LinearLayoutCompat>
+        <androidx.appcompat.widget.AppCompatTextView
+            android:id="@+id/remark"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="bottom|start"
+            android:background="@drawable/shape_vod_remark"
+            android:ellipsize="end"
+            android:singleLine="true"
+            android:textColor="@color/white"
+            android:textSize="14sp"
+            android:visibility="gone" />
 
-</FrameLayout>
+    </FrameLayout>
+
+    <androidx.appcompat.widget.AppCompatTextView
+        android:id="@+id/name"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:ellipsize="end"
+        android:gravity="center"
+        android:singleLine="true"
+        android:textColor="@color/white_80"
+        android:textSize="13sp" />
+
+</androidx.appcompat.widget.LinearLayoutCompat>

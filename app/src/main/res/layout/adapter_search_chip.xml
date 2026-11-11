@@ -1,13 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
     搜索页「历史 / 热搜 / 建议」胶囊（ref_docs/adapter_search_record.xml、adapter_search_word.xml）。
-    16sp / 26dp 高 / 12dp 圆角 / 外边距 6dp（行节距 = 26 + 6 + 6 = 38dp）；
+    16sp / 24dp 高 / 12dp 圆角 / 外边距 6dp（行节距 = 24 + 6 + 6 = 36dp，3 行 = 108dp，正好与键盘末行齐平）；
     横向内边距 6dp，让半透明底紧贴文字（不写大块 padding）。
 -->
 <androidx.appcompat.widget.AppCompatTextView xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/text"
     android:layout_width="wrap_content"
-    android:layout_height="26dp"
+    android:layout_height="24dp"
     android:layout_margin="6dp"
     android:background="@drawable/selector_search_chip"
     android:ellipsize="end"

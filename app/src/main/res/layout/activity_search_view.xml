@@ -15,8 +15,8 @@
        │   │   └─ 键盘 RecyclerView（7 列 × 6 行 × 35dp = 210dp，marginTop 8dp）
        │   └─ 右列（weight 1，NestedScrollView）：历史 + 热搜 / 建议
        └─ resultSection（marginTop 12dp，GONE）
-           ├─ 站点 Tab 行 38dp（26dp 胶囊 + 2dp paddingBottom + 10dp 视觉留白）
-           └─ 海报区 215dp（117×215dp 卡片，卡间距 16dp）
+           ├─ 站点 Tab 行 38dp（26dp 胶囊 + 2dp paddingBottom + 10dp marginBottom）
+           └─ 海报区 215dp（120×180dp 海报 + 13sp 剧名，卡间距 16dp）
 
     尺寸核对（截图实测）：
     - 根左 24dp → 输入框红边 x=144..454px（24+36+12 = 72dp = 144px）✓
@@ -166,7 +166,7 @@
                     android:clipToPadding="false"
                     android:orientation="vertical">
 
-                    <!-- 历史：固定 2 行（2 × 38dp） -->
+                    <!-- 历史：固定 2 行（2 × 36dp，与键盘末行齐平） -->
                     <androidx.appcompat.widget.LinearLayoutCompat
                         android:id="@+id/historySection"
                         android:layout_width="match_parent"
@@ -201,7 +201,7 @@
                         <androidx.recyclerview.widget.RecyclerView
                             android:id="@+id/historyRecycler"
                             android:layout_width="match_parent"
-                            android:layout_height="76dp"
+                            android:layout_height="72dp"
                             android:layout_marginStart="-6dp"
                             android:clipChildren="false"
                             android:clipToPadding="false"
@@ -209,12 +209,12 @@
 
                     </androidx.appcompat.widget.LinearLayoutCompat>
 
-                    <!-- 热搜 / 建议：固定 3 行（3 × 38dp） -->
+                    <!-- 热搜 / 建议：固定 3 行（3 × 36dp，与键盘末行齐平） -->
                     <androidx.appcompat.widget.LinearLayoutCompat
                         android:id="@+id/wordSection"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:layout_marginTop="16dp"
+                        android:layout_marginTop="4dp"
                         android:orientation="vertical"
                         android:visibility="gone">
 
@@ -246,7 +246,7 @@
                         <androidx.recyclerview.widget.RecyclerView
                             android:id="@+id/wordRecycler"
                             android:layout_width="match_parent"
-                            android:layout_height="114dp"
+                            android:layout_height="108dp"
                             android:layout_marginStart="-6dp"
                             android:clipChildren="false"
                             android:clipToPadding="false"
@@ -270,15 +270,17 @@
             android:orientation="vertical"
             android:visibility="gone">
 
-            <!-- 站点 Tab：26dp 胶囊 + 上下留白，整行 38dp；clipToPadding=false 让 1.08 放大不被裁 -->
+            <!-- 站点 Tab：26dp 胶囊 + 2dp paddingBottom = 28dp，再留 10dp 与海报行的距离
+                 （原版 activity_search.xml L154-159：paddingBottom 2dp + marginBottom 10dp）；
+                 clipToPadding=false 让选中 1.08 放大不被裁 -->
             <androidx.recyclerview.widget.RecyclerView
                 android:id="@+id/siteRecycler"
                 android:layout_width="match_parent"
-                android:layout_height="38dp"
+                android:layout_height="28dp"
+                android:layout_marginBottom="10dp"
                 android:clipChildren="false"
                 android:clipToPadding="false"
                 android:overScrollMode="never"
-                android:paddingTop="10dp"
                 android:paddingBottom="2dp" />
 
             <!-- 海报区：高度写死 215dp（原版 FrameLayout），卡片 117×215dp -->
