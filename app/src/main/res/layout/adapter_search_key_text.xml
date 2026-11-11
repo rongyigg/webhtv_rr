@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    搜索页虚拟键盘：文字键（A-Z / 0-9）。
+    单元格宽度由 GridLayoutManager 按 spanCount=7 均分（242 / 7 ≈ 34.57dp），高度 35dp；
+    键背景 selector_search_key 自带 inset 2.5dp，所以可见键约 29.6×30dp（截图实测 60px）。
+-->
+<androidx.appcompat.widget.AppCompatTextView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="35dp"
+    android:background="@drawable/selector_search_key"
+    android:focusable="true"
+    android:focusableInTouchMode="true"
+    android:gravity="center"
+    android:includeFontPadding="false"
+    android:maxLines="1"
+    android:textColor="@color/white"
+    android:textSize="16sp" />

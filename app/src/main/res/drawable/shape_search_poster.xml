@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    搜索页结果卡底板：半透明黑（@color/black_20）+ 6dp 圆角。
+    整张卡（海报 181dp + 名称 34dp）共用这一层背景，ImageView 靠 clipToOutline 被同一轮廓裁圆，
+    因此上圆角 = 下圆角 = 6dp（截图实测角半径约 11px ≈ 5.5dp）。
+-->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+
+    <solid android:color="@color/black_20" />
+
+    <corners android:radius="6dp" />
+
+</shape>

@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    搜索页虚拟键盘：按键焦点态。
+    与全站「实心焦点块」同一支横向红渐变（home_tab_focus_start → home_tab_focus_end），
+    inset / 圆角与默认态完全一致，聚焦时只有颜色变化、不跳形。
+-->
+<inset xmlns:android="http://schemas.android.com/apk/res/android"
+    android:inset="2.5dp">
+
+    <shape android:shape="rectangle">
+
+        <gradient
+            android:angle="0"
+            android:endColor="@color/home_tab_focus_end"
+            android:startColor="@color/home_tab_focus_start" />
+
+        <corners android:radius="4dp" />
+
+    </shape>
+
+</inset>

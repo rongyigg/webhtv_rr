@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 搜索页「历史 / 热搜 / 建议」胶囊：焦点态（与全站实心焦点块同一支红渐变、12dp 圆角） -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+
+    <gradient
+        android:angle="0"
+        android:endColor="@color/home_tab_focus_end"
+        android:startColor="@color/home_tab_focus_start" />
+
+    <corners android:radius="12dp" />
+
+</shape>

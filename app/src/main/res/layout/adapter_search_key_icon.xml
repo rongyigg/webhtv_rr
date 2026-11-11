@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    搜索页虚拟键盘：图标键（< / > / ⌫ / 键盘布局 / 小房子）。
+    尺寸与文字键完全一致（单元格 34.57×35dp），24dp 图标居中。
+-->
+<androidx.appcompat.widget.AppCompatImageView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="35dp"
+    android:background="@drawable/selector_search_key"
+    android:contentDescription="@null"
+    android:focusable="true"
+    android:focusableInTouchMode="true"
+    android:scaleType="center" />

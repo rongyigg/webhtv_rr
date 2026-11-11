@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    搜索页站点 Tab（原版 dz2 + adapter_type.xml）。
+    26dp 高、14sp、横向内边距 6dp、13dp 圆角；Tab 之间的 12dp 间距由 ItemDecoration 给
+    （原版 dz2 `setHorizontalSpacing(12dp)`），不写在 item 上，避免首尾多出间距。
+    三态背景见 selector_search_site_tab.xml；选中缩放 1.08 / 140ms 由适配器做。
+-->
+<androidx.appcompat.widget.AppCompatTextView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="wrap_content"
+    android:layout_height="26dp"
+    android:background="@drawable/selector_search_site_tab"
+    android:ellipsize="end"
+    android:focusable="true"
+    android:focusableInTouchMode="true"
+    android:gravity="center"
+    android:includeFontPadding="false"
+    android:maxLines="1"
+    android:paddingStart="6dp"
+    android:paddingEnd="6dp"
+    android:textColor="@color/white"
+    android:textSize="14sp" />

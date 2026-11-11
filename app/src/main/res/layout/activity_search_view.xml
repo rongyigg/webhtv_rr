@@ -1,0 +1,316 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Hero 搜索页（纯 View 体系）整页布局。
+
+    结构基准 = ref_docs/activity_search.xml + 两张原版截图（1920×1080，density 2 → 1dp = 2px）：
+
+    FrameLayout（背景层）
+    ├─ backdrop      首页大图 → 160×90 解码 + 盒式模糊 → 铺满（无图时保持 GONE）
+    ├─ scrim         60% 黑遮罩
+    ├─ bottomFade    底部渐隐，托住海报行下方的白字
+    └─ 主 LinearLayout（paddingTop 24dp / 左右 24dp，clipChildren=false）
+       ├─ 上半区（weight=1，横向）
+       │   ├─ 左列 242dp + marginEnd 24dp
+       │   │   ├─ 输入行 32dp：mic 36dp + 12dp + 输入框（weight 1）+ 6dp + 搜索键 32dp
+       │   │   └─ 键盘 RecyclerView（7 列 × 6 行 × 35dp = 210dp，marginTop 8dp）
+       │   └─ 右列（weight 1，NestedScrollView）：历史 + 热搜 / 建议
+       └─ resultSection（marginTop 12dp，GONE）
+           ├─ 站点 Tab 行 38dp（26dp 胶囊 + 2dp paddingBottom + 10dp 视觉留白）
+           └─ 海报区 215dp（117×215dp 卡片，卡间距 16dp）
+
+    尺寸核对（截图实测）：
+    - 根左 24dp → 输入框红边 x=144..454px（24+36+12 = 72dp = 144px）✓
+    - 左列 24 + 242 + 24 = 290dp = 580px → 右侧红条 x=579..586px ✓
+    - 上半区 540 - 24(顶) - 12 - 38 - 215 = 251dp；左列 32 + 8 + 210 = 250dp ✓
+-->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@drawable/bg_search_fallback"
+    android:clipChildren="false"
+    android:clipToPadding="false">
+
+    <!-- ① 模糊后的首页大图（异步算完才显示，避免闪一下未模糊的原图） -->
+    <androidx.appcompat.widget.AppCompatImageView
+        android:id="@+id/backdrop"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:scaleType="centerCrop"
+        android:visibility="gone" />
+
+    <!-- ② 整体压黑 60%：保留色块氛围，压掉细节 -->
+    <View
+        android:id="@+id/scrim"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="@drawable/bg_search_scrim"
+        android:visibility="gone" />
+
+    <!-- ③ 底部渐隐：海报行下方是白字标题，必须有深底托住 -->
+    <View
+        android:id="@+id/bottomFade"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="@drawable/bg_search_bottom_fade"
+        android:visibility="gone" />
+
+    <androidx.appcompat.widget.LinearLayoutCompat
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:clipChildren="false"
+        android:clipToPadding="false"
+        android:orientation="vertical"
+        android:paddingStart="24dp"
+        android:paddingTop="24dp"
+        android:paddingEnd="24dp">
+
+        <!-- 上半区：键盘 + 右侧历史 / 热搜 / 建议 -->
+        <androidx.appcompat.widget.LinearLayoutCompat
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:clipChildren="false"
+            android:orientation="horizontal">
+
+            <!-- 左列：输入行 + 虚拟键盘（242dp = 7 × 34.57dp，与截图列中心完全对齐） -->
+            <androidx.appcompat.widget.LinearLayoutCompat
+                android:layout_width="242dp"
+                android:layout_height="wrap_content"
+                android:layout_marginEnd="24dp"
+                android:clipChildren="false"
+                android:orientation="vertical">
+
+                <androidx.appcompat.widget.LinearLayoutCompat
+                    android:layout_width="match_parent"
+                    android:layout_height="32dp"
+                    android:clipChildren="false"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal">
+
+                    <!-- 麦克风：原版 CustomMic，纯展示（本页没有语音入口，不占用焦点） -->
+                    <androidx.appcompat.widget.AppCompatImageView
+                        android:layout_width="36dp"
+                        android:layout_height="36dp"
+                        android:layout_gravity="center_vertical"
+                        android:layout_marginEnd="12dp"
+                        android:contentDescription="@null"
+                        android:scaleType="center"
+                        android:src="@drawable/ic_search_mic" />
+
+                    <androidx.appcompat.widget.AppCompatEditText
+                        android:id="@+id/keyword"
+                        android:layout_width="0dp"
+                        android:layout_height="32dp"
+                        android:layout_weight="1"
+                        android:background="@drawable/selector_search_input"
+                        android:focusable="true"
+                        android:focusableInTouchMode="true"
+                        android:gravity="center_vertical"
+                        android:hint="@string/search_keyword"
+                        android:imeOptions="actionDone"
+                        android:inputType="text"
+                        android:letterSpacing="0.02"
+                        android:maxLines="1"
+                        android:paddingStart="12dp"
+                        android:paddingEnd="12dp"
+                        android:singleLine="true"
+                        android:textColor="@color/white"
+                        android:textColorHint="@color/white"
+                        android:textSize="14sp" />
+
+                    <!-- 放大镜：32dp，两态复用全局 TMDB 搜索键 selector（默认半透明黑 / 聚焦红渐变） -->
+                    <androidx.appcompat.widget.AppCompatImageView
+                        android:id="@+id/searchButton"
+                        android:layout_width="32dp"
+                        android:layout_height="32dp"
+                        android:layout_marginStart="6dp"
+                        android:background="@drawable/selector_tmdb_search"
+                        android:clickable="true"
+                        android:contentDescription="@null"
+                        android:focusable="true"
+                        android:focusableInTouchMode="true"
+                        android:padding="4dp"
+                        android:scaleType="fitCenter"
+                        android:src="@drawable/ic_keyboard_search" />
+
+                </androidx.appcompat.widget.LinearLayoutCompat>
+
+                <!-- 键盘：7 列 × 6 行，每格 34.57×35dp，键背景 inset 2.5dp → 可见键约 30dp -->
+                <androidx.recyclerview.widget.RecyclerView
+                    android:id="@+id/keyboard"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:clipChildren="false"
+                    android:clipToPadding="false"
+                    android:overScrollMode="never" />
+
+            </androidx.appcompat.widget.LinearLayoutCompat>
+
+            <!-- 右列：历史 + 热搜（无输入）/ 建议（有输入），内容超高时自身滚动 -->
+            <androidx.core.widget.NestedScrollView
+                android:id="@+id/scroll"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="1"
+                android:clipChildren="false"
+                android:clipToPadding="false"
+                android:fillViewport="true"
+                android:overScrollMode="never">
+
+                <androidx.appcompat.widget.LinearLayoutCompat
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:clipChildren="false"
+                    android:clipToPadding="false"
+                    android:orientation="vertical">
+
+                    <!-- 历史：固定 2 行（2 × 38dp） -->
+                    <androidx.appcompat.widget.LinearLayoutCompat
+                        android:id="@+id/historySection"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="vertical"
+                        android:visibility="gone">
+
+                        <androidx.appcompat.widget.LinearLayoutCompat
+                            android:layout_width="match_parent"
+                            android:layout_height="24dp"
+                            android:layout_marginBottom="8dp"
+                            android:gravity="center_vertical"
+                            android:orientation="horizontal">
+
+                            <View
+                                android:layout_width="4dp"
+                                android:layout_height="16dp"
+                                android:background="@drawable/shape_red_bar" />
+
+                            <androidx.appcompat.widget.AppCompatTextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:layout_marginStart="10dp"
+                                android:maxLines="1"
+                                android:text="历史"
+                                android:textColor="@color/white_80"
+                                android:textSize="20sp"
+                                android:textStyle="bold" />
+
+                        </androidx.appcompat.widget.LinearLayoutCompat>
+
+                        <androidx.recyclerview.widget.RecyclerView
+                            android:id="@+id/historyRecycler"
+                            android:layout_width="match_parent"
+                            android:layout_height="76dp"
+                            android:layout_marginStart="-6dp"
+                            android:clipChildren="false"
+                            android:clipToPadding="false"
+                            android:overScrollMode="never" />
+
+                    </androidx.appcompat.widget.LinearLayoutCompat>
+
+                    <!-- 热搜 / 建议：固定 3 行（3 × 38dp） -->
+                    <androidx.appcompat.widget.LinearLayoutCompat
+                        android:id="@+id/wordSection"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="16dp"
+                        android:orientation="vertical"
+                        android:visibility="gone">
+
+                        <androidx.appcompat.widget.LinearLayoutCompat
+                            android:layout_width="match_parent"
+                            android:layout_height="24dp"
+                            android:layout_marginBottom="8dp"
+                            android:gravity="center_vertical"
+                            android:orientation="horizontal">
+
+                            <View
+                                android:layout_width="4dp"
+                                android:layout_height="16dp"
+                                android:background="@drawable/shape_red_bar" />
+
+                            <androidx.appcompat.widget.AppCompatTextView
+                                android:id="@+id/wordTitle"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:layout_marginStart="10dp"
+                                android:maxLines="1"
+                                android:text="热搜"
+                                android:textColor="@color/white_80"
+                                android:textSize="20sp"
+                                android:textStyle="bold" />
+
+                        </androidx.appcompat.widget.LinearLayoutCompat>
+
+                        <androidx.recyclerview.widget.RecyclerView
+                            android:id="@+id/wordRecycler"
+                            android:layout_width="match_parent"
+                            android:layout_height="114dp"
+                            android:layout_marginStart="-6dp"
+                            android:clipChildren="false"
+                            android:clipToPadding="false"
+                            android:overScrollMode="never" />
+
+                    </androidx.appcompat.widget.LinearLayoutCompat>
+
+                </androidx.appcompat.widget.LinearLayoutCompat>
+
+            </androidx.core.widget.NestedScrollView>
+
+        </androidx.appcompat.widget.LinearLayoutCompat>
+
+        <!-- 下半区：站点 Tab + 海报行（12 + 38 + 215 = 265dp，正好是 540 - 24 - 251） -->
+        <androidx.appcompat.widget.LinearLayoutCompat
+            android:id="@+id/resultSection"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:clipChildren="false"
+            android:orientation="vertical"
+            android:visibility="gone">
+
+            <!-- 站点 Tab：26dp 胶囊 + 上下留白，整行 38dp；clipToPadding=false 让 1.08 放大不被裁 -->
+            <androidx.recyclerview.widget.RecyclerView
+                android:id="@+id/siteRecycler"
+                android:layout_width="match_parent"
+                android:layout_height="38dp"
+                android:clipChildren="false"
+                android:clipToPadding="false"
+                android:overScrollMode="never"
+                android:paddingTop="10dp"
+                android:paddingBottom="2dp" />
+
+            <!-- 海报区：高度写死 215dp（原版 FrameLayout），卡片 117×215dp -->
+            <FrameLayout
+                android:layout_width="match_parent"
+                android:layout_height="215dp"
+                android:clipChildren="true"
+                android:clipToPadding="true"
+                android:descendantFocusability="afterDescendants">
+
+                <androidx.recyclerview.widget.RecyclerView
+                    android:id="@+id/posterRecycler"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:clipChildren="false"
+                    android:clipToPadding="false"
+                    android:overScrollMode="never" />
+
+                <!-- 加载 / 空态提示：画在 215dp 容器内部，不改尺寸，也不参与焦点 -->
+                <androidx.appcompat.widget.AppCompatTextView
+                    android:id="@+id/posterEmpty"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_gravity="center"
+                    android:maxLines="2"
+                    android:textColor="#99FFFFFF"
+                    android:textSize="16sp" />
+
+            </FrameLayout>
+
+        </androidx.appcompat.widget.LinearLayoutCompat>
+
+    </androidx.appcompat.widget.LinearLayoutCompat>
+
+</FrameLayout>

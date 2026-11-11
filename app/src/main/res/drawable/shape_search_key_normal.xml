@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    搜索页虚拟键盘：按键默认态。
+    底色 @color/black_20（#33000000，半透明黑，不是纯黑），4dp 圆角。
+    inset 2.5dp 让相邻按键之间留出 5dp 空隙：单元格 34.57×35dp → 可见键约 29.6×30dp（截图实测 60px）。
+-->
+<inset xmlns:android="http://schemas.android.com/apk/res/android"
+    android:inset="2.5dp">
+
+    <shape android:shape="rectangle">
+
+        <solid android:color="@color/black_20" />
+
+        <corners android:radius="4dp" />
+
+    </shape>
+
+</inset>

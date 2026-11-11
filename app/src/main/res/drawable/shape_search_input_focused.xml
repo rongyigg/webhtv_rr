@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    搜索页输入框：焦点态。
+    与默认态同尺寸、同圆角，只把描边换成品牌红（@color/osd_accent），聚焦时不跳形。
+    截图实测：红边 1dp、圆角 4dp、内部透明。
+-->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+
+    <solid android:color="@android:color/transparent" />
+
+    <corners android:radius="4dp" />
+
+    <stroke
+        android:width="1dp"
+        android:color="@color/osd_accent" />
+
+</shape>

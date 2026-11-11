@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    搜索页背景底部渐隐：海报行下方是白字标题，必须有深底托住。
+    0% 透明 → 55% 处 35% 黑 → 100% 92% 黑（与 Compose 版 BACKDROP_BOTTOM_FADE 同色标）。
+-->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+
+    <gradient
+        android:angle="270"
+        android:centerColor="#59000000"
+        android:endColor="#EB000000"
+        android:startColor="#00000000" />
+
+</shape>

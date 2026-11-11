@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 搜索页虚拟键盘：按键两态（默认半透明黑 / 聚焦实心红渐变） -->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <item
+        android:drawable="@drawable/shape_search_key_focused"
+        android:state_focused="true" />
+
+    <item android:drawable="@drawable/shape_search_key_normal" />
+
+</selector>
