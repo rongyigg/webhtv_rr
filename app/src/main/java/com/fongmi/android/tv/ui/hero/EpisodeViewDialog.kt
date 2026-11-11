@@ -29,7 +29,8 @@ import com.fongmi.android.tv.utils.Notify
  * 「播放线路」28dp 线路栏 → 「选集」28dp 控制栏（列数 / 排序 / 分页）→ 固定 4 排网格。
  *
  * 卡片宽度不是平分面板：少列（2 列）时由 [applyGridSideInset] 把多余宽度折成左右等量
- * padding，单卡被夹到 [GRID_MAX_CELL_WIDTH_DP]，两列整体居中，宽高比与播放页选集卡一致。
+ * padding，单卡被夹到 [GRID_MAX_CELL_WIDTH_DP]，两列整体居中。卡片高度锁死 32dp，
+ * 与播放页 OSD 选集卡（adapter_osd_episode.xml）**同高**，背景底板不再被负边距撑破。
  *
  * 逻辑是 Compose 版的**逐行平移**，不是重写：
  *
@@ -46,7 +47,7 @@ import com.fongmi.android.tv.utils.Notify
  * | `DialogProperties(dismissOnBackPress = true)` | 默认 Dialog 行为 + `setCanceledOnTouchOutside(false)` |
  *
  * 三处**有意的差异**（其余一律照抄）：
- * 1. 卡片 38dp / 4dp 圆角 / 右下角 Lottie（需求指定「照抄旧版」，Compose 版是 34dp / 6dp）；
+ * 1. 卡片 32dp / 4dp 圆角 / 右侧垂直居中 Lottie（对齐播放页 OSD 选集卡；Compose 版是 34dp / 6dp）；
  * 2. 列数多列 = 8、少列 = 2（需求指定，Compose 版是 4 / 2）→ 组容量 = 4 排 × 列数 = 32 / 8 集；
  * 3. 焦点态走全局胶囊 @drawable/bg_global_focus_capsule、选中态走全局胶囊红框
  *    @drawable/bg_global_selected_capsule_border（需求指定；Compose 版是 4dp 小圆角 + 自绘渐变）。
@@ -72,7 +73,9 @@ internal class EpisodeViewDialog(
     // ------------------------------------------------------------------
     private val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
     private var descending = prefs.getBoolean(PREF_DESCENDING, false)
-    private var fewColumns = prefs.getBoolean(PREF_FEW_COLUMNS, false)
+    // 无记录 = 少列（2 列）：首次进入 / 清数据 / 换设备一律 2 列，绝不默认 8 列；
+    // 用户手动切到多列会写回 SharedPreferences，之后按记录恢复。
+    private var fewColumns = prefs.getBoolean(PREF_FEW_COLUMNS, true)
 
     /**
      * 动作指令过滤：网盘聚合 / 猫源把「📄 媒体信息 / 🔍 全局搜索 / ➕ 稍后再看」伪装成集数
@@ -290,6 +293,9 @@ internal class EpisodeViewDialog(
         episodeEmpty.setText(if (hasPlayableEpisode) R.string.episode_line_empty else R.string.episode_source_empty)
 
         columnsButton.setText(if (fewColumns) R.string.episode_columns_few else R.string.episode_columns_many)
+        // 选中态与网格列数同源：少列（默认排版）失焦时保留细线红框高亮，切到多列立即取消，
+        // 避免「文字已经变了、按钮还亮着」的错位。焦点态优先级更高，见 selector_episode_chip_background。
+        columnsButton.isSelected = fewColumns
         sortButton.setText(if (descending) R.string.episode_sort_desc else R.string.episode_sort_asc)
 
         // 线路 chip 文案：`Flag.getShow()`（`show` 非空优先，否则 `flag`），与 Compose 版 `flag.show` 同源。
@@ -407,8 +413,10 @@ internal class EpisodeViewDialog(
      * 卡片宽度上限：把「面板比卡片总宽多出来的部分」均分成 RecyclerView 的左右内边距。
      *
      * 播放页选集卡是 6 列网格里的一格（约 145dp 宽 / 32dp 高，宽高比 ≈ 4.5:1）；
-     * 本弹窗卡片固定 38dp 高，按同一比例单卡上限取 [GRID_MAX_CELL_WIDTH_DP] = 176dp
-     * （176 / 38 ≈ 4.6:1），所以少列模式下卡片不会再把 82% 面板一分为二。
+     * 本弹窗卡片本轮也锁到 32dp 高，宽度上限沿用上一轮的 [GRID_MAX_CELL_WIDTH_DP] = 176dp
+     * （176 / 32 = 5.5:1，比 OSD 单卡略宽，但已比「两列平分面板」窄一半），
+     * 所以少列模式下卡片不会再把 82% 面板一分为二。
+     * 想与 OSD 完全同比例就把常量改成 144dp（144 / 32 = 4.5:1），两列仍然居中。
      *
      * 多列（8 列）时 `8 × 176dp + 间距` 远大于面板宽度，算出来是 0，多列布局**完全不变**；
      * 只有少列（2 列）会被真正夹窄并居中。左右内边距相等 = 视觉中心仍与面板中线重合。
@@ -824,7 +832,7 @@ internal class EpisodeViewDialog(
 
     /**
      * 网格间距：列间 8dp 均分、行间 8dp（首行上方不加）。
-     * 总高 = 4 × 38dp + 3 × 8dp = 176dp，与布局里写死的网格高度严丝合缝。
+     * 总高 = 4 × 32dp + 3 × 8dp = 152dp，与布局里写死的网格高度严丝合缝。
      */
     private class GridSpacingDecoration(private val spacing: Int) : RecyclerView.ItemDecoration() {
         override fun getItemOffsets(
@@ -879,8 +887,8 @@ internal class EpisodeViewDialog(
         private const val GRID_GAP_DP = 8
 
         /**
-         * 单张集数卡的宽度上限（dp）：176 / 38 ≈ 4.6:1，与播放页选集卡（145 / 32 ≈ 4.5:1）同比例。
-         * 只作用于少列模式；调大 = 卡片变宽，调小 = 卡片更窄，两列始终居中。
+         * 单张集数卡的宽度上限（dp）：176 / 32 = 5.5:1，比播放页选集卡（约 145 / 32 ≈ 4.5:1）略宽。
+         * 只作用于少列模式；调大 = 卡片变宽，调小 = 卡片更窄（144 即与 OSD 同比例），两列始终居中。
          */
         private const val GRID_MAX_CELL_WIDTH_DP = 176
 

@@ -1253,9 +1253,9 @@ public class Setting {
         Prefers.put("tmdb_episode_grid_mode", gridMode);
     }
 
-    /** 选集面板上次的列数：false = 8 列 24 集/页，true = 2 列 6 集/页。 */
+    /** 选集面板上次的列数：false = 8 列 24 集/页，true = 2 列 6 集/页；无记录默认少列。 */
     public static boolean isOsdFewColumns() {
-        return Prefers.getBoolean("osd_few_columns", false);
+        return Prefers.getBoolean("osd_few_columns", true);
     }
 
     public static void putOsdFewColumns(boolean fewColumns) {

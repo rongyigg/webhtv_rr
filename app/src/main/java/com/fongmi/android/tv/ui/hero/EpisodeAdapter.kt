@@ -17,7 +17,7 @@ import com.fongmi.android.tv.ui.activity.isActionCommand
  * 与 Compose 版逐条对应：
  * - `label = episode.getDisplayName()` → [Holder.bind] 的 `text.text`（desc + name，TMDB 刮削后是 S01E02 标题）；
  * - `playing = episode === playingEpisode` → **引用相等**判定，不同线路的集数互不干扰，
- *   命中后：文字变红 + 右下角 Lottie 均衡器动画（原版 `adapter_episode.xml` 同款）。
+ *   命中后：文字变红 + 右侧垂直居中 Lottie 均衡器动画（位置对齐播放页 OSD 选集卡）。
  *   播放态只认**真实起播**写入的对象（`EpisodeViewDialog.onCellConfirm`），
  *   历史集 / 首集 / 换线路后的第一集都不许预置，否则就是「假数据红字」；
  * - 文字颜色四态：焦点纯白 → 动作指令半透明白 → 真实播放集红 → 常态白，
@@ -73,7 +73,7 @@ internal class EpisodeAdapter(
             text.text = episode.displayName
             // 重新绑定可能发生在「格子正持有焦点」时（整批替换后焦点不丢），所以要读当前焦点态。
             applyTextColor(cell.isFocused)
-            // 当前播放集：右下角均衡器动画（负边距压在格子角上，父级 clipChildren=false）。
+            // 当前播放集：右侧垂直居中均衡器动画（与 OSD 同位置，32dp 卡内不越界）。
             lottie.visibility = if (playing && !actionOnly) View.VISIBLE else View.GONE
             if (lottie.visibility == View.VISIBLE) lottie.playAnimation() else lottie.cancelAnimation()
             // 背景三态见 selector_episode_cell_background：
