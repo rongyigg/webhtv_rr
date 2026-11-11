@@ -28,9 +28,9 @@ import com.fongmi.android.tv.utils.Notify
  * 全屏遮罩 #8014171F → 面板宽 82% / 16dp 圆角 / 18dp 内边距 →
  * 「播放线路」28dp 线路栏 → 「选集」28dp 控制栏（列数 / 排序 / 分页）→ 固定 4 排网格。
  *
- * 卡片宽度不是平分面板：少列（2 列）时由 [applyGridSideInset] 把多余宽度折成左右等量
- * padding，单卡被夹到 [GRID_MAX_CELL_WIDTH_DP]，两列整体居中。卡片高度锁死 32dp，
- * 与播放页 OSD 选集卡（adapter_osd_episode.xml）**同高**，背景底板不再被负边距撑破。
+ * 卡片宽度直接由网格的左右 padding 决定：面板 18dp 内边距之外，RecyclerView 再留 24dp，
+ * 少列 2 列平分剩余宽度、横向撑满视觉空间；卡片高度按本轮红线固定 38dp，
+ * 4 排网格 = 4 × 38 + 3 × 8 = 176dp，背景底板严格等于卡片高度。
  *
  * 逻辑是 Compose 版的**逐行平移**，不是重写：
  *
@@ -47,7 +47,7 @@ import com.fongmi.android.tv.utils.Notify
  * | `DialogProperties(dismissOnBackPress = true)` | 默认 Dialog 行为 + `setCanceledOnTouchOutside(false)` |
  *
  * 三处**有意的差异**（其余一律照抄）：
- * 1. 卡片 32dp / 4dp 圆角 / 右侧垂直居中 Lottie（对齐播放页 OSD 选集卡；Compose 版是 34dp / 6dp）；
+ * 1. 卡片 38dp / 4dp 圆角 / 右侧垂直居中 Lottie（高度按本轮红线 38dp；Lottie 位置对齐 OSD）；
  * 2. 列数多列 = 8、少列 = 2（需求指定，Compose 版是 4 / 2）→ 组容量 = 4 排 × 列数 = 32 / 8 集；
  * 3. 焦点态走全局胶囊 @drawable/bg_global_focus_capsule、选中态走全局胶囊红框
  *    @drawable/bg_global_selected_capsule_border（需求指定；Compose 版是 4dp 小圆角 + 自绘渐变）。
@@ -200,14 +200,8 @@ internal class EpisodeViewDialog(
         episodeRecycler.layoutManager = GridLayoutManager(context, columns())
         episodeRecycler.adapter = episodeAdapter
         episodeRecycler.itemAnimator = null
-        episodeRecycler.addItemDecoration(GridSpacingDecoration(dp(GRID_GAP_DP)))
-        // 【卡片宽度上限】少列（2 列）时两列会平分整个 82% 面板，单卡宽到 370dp 左右，
-        // 黑色半透明底显得又宽又笨重。这里按播放页选集卡的宽高比给单卡一个宽度上限，
-        // 多出来的宽度折成 RecyclerView 左右**等量** padding → 两列变窄且整体居中。
-        // 面板宽度变化（换设备 / 分屏）时重新算一次。
-        episodeRecycler.addOnLayoutChangeListener { _, left, _, right, _, oldLeft, _, oldRight, _ ->
-            if (right - left != oldRight - oldLeft) applyGridSideInset()
-        }
+        // 列间 16dp（两列之间留白适中）、行间 8dp；总高 4 × 38 + 3 × 8 = 176dp。
+        episodeRecycler.addItemDecoration(GridSpacingDecoration(dp(GRID_COLUMN_GAP_DP), dp(GRID_GAP_DP)))
 
         columnsButton.setOnClickListener { toggleColumns() }
         columnsButton.setOnFocusChangeListener { _, hasFocus ->
@@ -283,8 +277,6 @@ internal class EpisodeViewDialog(
         pageItems = ordered.drop(page * pageSize()).take(pageSize())
 
         (episodeRecycler.layoutManager as? GridLayoutManager)?.spanCount = columns()
-        // 列数变了 → 单卡宽度上限的算式也变了，必须重算左右内边距（宽度还没测量时内部会直接返回）。
-        applyGridSideInset()
         episodeAdapter.submit(pageItems, playingEpisode)
 
         val empty = pageItems.isEmpty()
@@ -408,28 +400,6 @@ internal class EpisodeViewDialog(
     // ------------------------------------------------------------------
     // 网格
     // ------------------------------------------------------------------
-
-    /**
-     * 卡片宽度上限：把「面板比卡片总宽多出来的部分」均分成 RecyclerView 的左右内边距。
-     *
-     * 播放页选集卡是 6 列网格里的一格（约 145dp 宽 / 32dp 高，宽高比 ≈ 4.5:1）；
-     * 本弹窗卡片本轮也锁到 32dp 高，宽度上限沿用上一轮的 [GRID_MAX_CELL_WIDTH_DP] = 176dp
-     * （176 / 32 = 5.5:1，比 OSD 单卡略宽，但已比「两列平分面板」窄一半），
-     * 所以少列模式下卡片不会再把 82% 面板一分为二。
-     * 想与 OSD 完全同比例就把常量改成 144dp（144 / 32 = 4.5:1），两列仍然居中。
-     *
-     * 多列（8 列）时 `8 × 176dp + 间距` 远大于面板宽度，算出来是 0，多列布局**完全不变**；
-     * 只有少列（2 列）会被真正夹窄并居中。左右内边距相等 = 视觉中心仍与面板中线重合。
-     */
-    private fun applyGridSideInset() {
-        val width = episodeRecycler.width
-        if (width <= 0) return
-        // 一行卡片总宽 = 列数 × 单卡上限 + 一行分到的总间距（GridSpacingDecoration 每行合计正好 spacing）。
-        val content = columns() * dp(GRID_MAX_CELL_WIDTH_DP) + dp(GRID_GAP_DP)
-        val inset = ((width - content) / 2).coerceAtLeast(0)
-        if (episodeRecycler.paddingLeft == inset && episodeRecycler.paddingRight == inset) return
-        episodeRecycler.setPadding(inset, 0, inset, 0)
-    }
 
     /** 焦点落进网格：把下标收敛到当前组内，越界时夹到首尾。 */
     private fun focusCell(index: Int) {
@@ -831,10 +801,13 @@ internal class EpisodeViewDialog(
     }
 
     /**
-     * 网格间距：列间 8dp 均分、行间 8dp（首行上方不加）。
-     * 总高 = 4 × 32dp + 3 × 8dp = 152dp，与布局里写死的网格高度严丝合缝。
+     * 网格间距：列间 16dp 均分（两列之间正好 16dp），行间 8dp（首行上方不加）。
+     * 总高 = 4 × 38dp + 3 × 8dp = 176dp，与布局里写死的网格高度严丝合缝。
      */
-    private class GridSpacingDecoration(private val spacing: Int) : RecyclerView.ItemDecoration() {
+    private class GridSpacingDecoration(
+        private val columnSpacing: Int,
+        private val rowSpacing: Int,
+    ) : RecyclerView.ItemDecoration() {
         override fun getItemOffsets(
             outRect: Rect,
             view: View,
@@ -847,9 +820,9 @@ internal class EpisodeViewDialog(
             if (span <= 0) return
             val column = position % span
             val row = position / span
-            outRect.left = column * spacing / span
-            outRect.right = spacing - (column + 1) * spacing / span
-            outRect.top = if (row == 0) 0 else spacing
+            outRect.left = column * columnSpacing / span
+            outRect.right = columnSpacing - (column + 1) * columnSpacing / span
+            outRect.top = if (row == 0) 0 else rowSpacing
         }
     }
 
@@ -881,16 +854,13 @@ internal class EpisodeViewDialog(
         private const val COLUMNS_MANY = 8
         private const val COLUMNS_FEW = 2
 
-        /** 间距（dp）：线路栏 12、控制栏 8、网格 8（Compose `DIALOG_FLAG_GAP` / `DIALOG_CONTROL_GAP` / `EPISODE_GRID_GAP`）。 */
+        /** 间距（dp）：线路栏 12、控制栏 8、网格行间 8、网格列间 16。 */
         private const val FLAG_GAP_DP = 12
         private const val CONTROL_GAP_DP = 8
         private const val GRID_GAP_DP = 8
 
-        /**
-         * 单张集数卡的宽度上限（dp）：176 / 32 = 5.5:1，比播放页选集卡（约 145 / 32 ≈ 4.5:1）略宽。
-         * 只作用于少列模式；调大 = 卡片变宽，调小 = 卡片更窄（144 即与 OSD 同比例），两列始终居中。
-         */
-        private const val GRID_MAX_CELL_WIDTH_DP = 176
+        /** 两列之间的水平间距（dp）：16dp，卡片横向撑开后仍留出清晰分栏。 */
+        private const val GRID_COLUMN_GAP_DP = 16
 
         /** 焦点重试：Compose `FOCUS_RETRY_FRAMES = 10`，这里换成 10 次 × 16ms。 */
         private const val FOCUS_RETRY_COUNT = 10

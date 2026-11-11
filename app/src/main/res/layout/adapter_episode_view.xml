@@ -2,17 +2,17 @@
 <!--
     选集格子：结构逐字照抄 ref_docs/adapter_episode.xml。
 
-    - 根 FrameLayout 就是可聚焦本体，高 32dp、4dp 圆角。32dp 与播放页 OSD 选集卡
-      （app/src/leanback/res/layout/adapter_osd_episode.xml）**同高**；背景就是这张卡的
-      背景，卡片多高底板就多高，上下不多一个像素。网格 152dp = 4 × 32 + 3 × 8。
-    - 文字 14sp、单行 marquee 跑马灯（超长集名不硬截断）。
+    - 根 FrameLayout 就是可聚焦本体，高 38dp、4dp 圆角（本轮红线固定高度）。
+      背景就是这张卡的背景，卡片多高底板就多高，上下不多一个像素。
+      网格 176dp = 4 × 38 + 3 × 8。
+    - 文字 14sp、单行 marquee 跑马灯（焦点滚动，失焦按 end 截断）。
       TextView 用 match_parent + gravity=center + includeFontPadding=false 做**真正的**
       垂直居中：不靠 wrap_content 的字形上下留白，也不加任何 paddingTop/Bottom。
-      字号**与播放页选集卡完全一致**（adapter_osd_episode.xml 的 14sp）。
+      跑马灯只在**焦点卡片**上滚动（EpisodeAdapter.applyMarquee），失焦时按 end 截断。
     - 文字颜色由 EpisodeAdapter 按「焦点 / 动作指令 / 真实播放 / 常态」四态设置，
       焦点红底卡片一律纯白字（cell 的焦点态不会下发给子 TextView，必须代码显式重刷）。
-    - 右侧 LottieAnimationView（20×25dp）**垂直居中**，与 OSD 同位置：32dp 卡内 25dp
-      图标上下各留 3.5dp，不用负边距，绝不越出卡片背景。
+    - 右侧 LottieAnimationView（20×25dp）**垂直居中**，与 OSD 同位置：38dp 卡内 25dp
+      图标上下各留 6.5dp，不用负边距，绝不越出卡片背景。
     - clipChildren / clipToPadding = true（与 OSD 一致）：卡片内不放任何越界元素。
 
     三态背景见 @drawable/selector_episode_cell_background。
@@ -21,7 +21,7 @@
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:id="@+id/cell"
     android:layout_width="match_parent"
-    android:layout_height="32dp"
+    android:layout_height="38dp"
     android:background="@drawable/selector_episode_cell_background"
     android:clipChildren="true"
     android:clipToPadding="true"

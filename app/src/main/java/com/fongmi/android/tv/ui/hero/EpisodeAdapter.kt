@@ -54,6 +54,7 @@ internal class EpisodeAdapter(
         holder.itemView.setOnFocusChangeListener { _, hasFocus ->
             // 焦点态是实心红底，文字必须当场刷成纯白；失焦后再回到真实播放态 / 动作指令 / 常态色。
             holder.applyTextColor(hasFocus)
+            holder.applyMarquee(hasFocus)
             if (hasFocus) onCellFocused(holder.bindingAdapterPosition)
         }
     }
@@ -73,7 +74,7 @@ internal class EpisodeAdapter(
             text.text = episode.displayName
             // 重新绑定可能发生在「格子正持有焦点」时（整批替换后焦点不丢），所以要读当前焦点态。
             applyTextColor(cell.isFocused)
-            // 当前播放集：右侧垂直居中均衡器动画（与 OSD 同位置，32dp 卡内不越界）。
+            // 当前播放集：右侧垂直居中均衡器动画（与 OSD 同位置，38dp 卡内不越界）。
             lottie.visibility = if (playing && !actionOnly) View.VISIBLE else View.GONE
             if (lottie.visibility == View.VISIBLE) lottie.playAnimation() else lottie.cancelAnimation()
             // 背景三态见 selector_episode_cell_background：
@@ -81,8 +82,8 @@ internal class EpisodeAdapter(
             cell.isSelected = playing && !actionOnly
             cell.isActivated = actionOnly
             // 必须放在 cell.isSelected 之后：ViewGroup.setSelected 会把状态下发给所有子 View，
-            // 先设 root 再设 text 才能让 text 自己保持 selected（跑马灯只在 selected 时滚动）。
-            text.isSelected = true
+            // 再按焦点覆盖一次，跑马灯才只在**焦点卡片**上滚动；失焦时 ellipsize=end 截断。
+            applyMarquee(cell.isFocused)
         }
 
         /**
@@ -104,6 +105,11 @@ internal class EpisodeAdapter(
                     else -> Color.WHITE
                 },
             )
+        }
+
+        /** 焦点卡片才开跑马灯；失焦恢复 ellipsize=end 截断，避免整屏文字同时滚动。 */
+        fun applyMarquee(focused: Boolean) {
+            text.isSelected = focused
         }
     }
 

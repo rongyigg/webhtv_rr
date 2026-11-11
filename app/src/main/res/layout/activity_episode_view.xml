@@ -9,12 +9,12 @@
        用 9 / 82 / 9 的 weight 实现，不依赖百分比布局库。
     3. 面板 = @drawable/shape_dialog_source_shell（#9914171F + 16dp 圆角，与 Compose
        `HeroDialogShell` 同值）+ 18dp 内边距。
-    4. 自上而下：播放线路标题 → 28dp 线路栏 → 选集控制栏（28dp）→ 固定 4 排网格（152dp）。
+    4. 自上而下：播放线路标题 → 28dp 线路栏 → 选集控制栏（28dp）→ 固定 4 排网格（176dp）。
 
     尺寸全部来自 Compose 版常量，一处都不许在代码里重复写：
       线路/控制栏高 28dp、字号 14sp、左右内边距 8dp、线路间距 12dp、控制栏间距 8dp；
-      网格 4 排 × 32dp + 3 × 8dp = 152dp（EPISODE_GRID_ROWS / EPISODE_CELL_HEIGHT / EPISODE_GRID_GAP）。
-      单卡 32dp 与播放页 OSD 选集卡同高，背景底板严格等于卡片高度。
+      网格 4 排 × 38dp + 3 × 8dp = 176dp（EPISODE_GRID_ROWS / EPISODE_CELL_HEIGHT / EPISODE_GRID_GAP）。
+      单卡 38dp（本轮红线固定高度），网格左右各 24dp、列间 16dp，2 列横向撑开面板。
       胶囊的 28dp / 14sp / 8dp 三处数值**逐项对齐播放页选集面板**的 @style/OsdChip，
       与播放页呼出的选集面板保持同一档体量（原 32dp / 14dp 内边距偏胖）。
 -->
@@ -179,20 +179,20 @@
                 android:layout_height="8dp" />
 
             <!--
-                ============ 固定 4 排网格（152dp）+ 空态提示 ============
-                高度 = 4 排 × 32dp（与 OSD 选集卡同高）+ 3 × 8dp 间距，写死、绝不内部滚动。
-                左右内边距不写死：EpisodeViewDialog.applyGridSideInset() 在运行时按
-                「单卡最大宽度 176dp」把多余宽度折成左右等量 padding（少列 2 列时居中收窄，
-                多列 8 列时算出来是 0、完全不受影响）。
+                ============ 固定 4 排网格（176dp）+ 空态提示 ============
+                高度 = 4 排 × 38dp（本轮红线固定高度）+ 3 × 8dp 行间距，写死、绝不内部滚动。
+                左右各 24dp：卡片横向撑开，2 列平分剩余宽度；不再运行时计算上百 dp 的居中留白。
             -->
             <FrameLayout
                 android:layout_width="match_parent"
-                android:layout_height="152dp">
+                android:layout_height="176dp">
 
                 <androidx.recyclerview.widget.RecyclerView
                     android:id="@+id/episodeRecycler"
                     android:layout_width="match_parent"
-                    android:layout_height="152dp"
+                    android:layout_height="176dp"
+                    android:paddingStart="24dp"
+                    android:paddingEnd="24dp"
                     android:clipChildren="false"
                     android:clipToPadding="false"
                     android:focusable="false"
