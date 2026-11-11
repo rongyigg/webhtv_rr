@@ -33,23 +33,27 @@ internal enum class SourceSidebarMode {
 /**
  * 全局接口源侧边栏（View 体系，独立 Dialog 窗口）。
  *
- * 结构与尺寸照搬逆向原版 `dialog_site.xml` / `adapter_site.xml` / `s82.java`
- * （本工程落地文件：`dialog_source_sidebar.xml` = 需求中的 `activity_site_view.xml`，
- * `adapter_source_sidebar_item.xml` = 需求中的 `adapter_site_view.xml`，本类 = 需求中的 `s82.java`）：
- * 窗口宽 = 屏宽 ÷ 5（20%，逆向 SearchSiteDialog `ss2.Z()`）、高 = 全屏（MATCH_PARENT），
- * 39dp 行高、14sp 文字、20dp 勾选圈、顶部「全选 / 全不选」对称胶囊按钮。
+ * 结构与尺寸照搬逆向原版，两套行布局按模式分开（与逆向 `s82.onCreateViewHolder`
+ * 的 viewType 分支同构，本类 = 需求中的 `s82.java`，
+ * 面板 = 需求中的 `activity_site_view.xml`，落地文件 `dialog_source_sidebar.xml`）：
+ * - 单选（首页）：逆向 `adapter_site_simple.xml` → `adapter_source_sidebar_item_simple.xml`，
+ *   40dp 行、18sp 文字、文字 `weight=1` 铺满整行后居中、下划线左右 24dp + `marginTop 16dp`；
+ * - 多选（换源）：逆向 `adapter_search_site.xml` → `adapter_source_sidebar_item.xml`，
+ *   39dp 行、14sp 文字、20dp 勾选圈、下划线左右 12dp，顶部「全选 / 全不选」对称胶囊按钮。
+ *
+ * 窗口宽 = 屏宽 ÷ 5（20%，逆向 SearchSiteDialog `ss2.Z()`）、高 = 全屏（MATCH_PARENT）。
  *
  * 视觉按逆向原版极简风固定：
  * - 行 focused → 纯白胶囊（`shape_site_item_focused_white`，inset 8dp/4dp + 20dp 圆角）+ 黑字；
  * - 行 normal → 透明底 + 白字；
  * - 焦点之外没有选中白框：点击即切源 / 勾选；
- * - 勾选圈 → `selector_check_circle`（20dp、2dp 环）四态，由行的 state_selected 驱动：
+ * - 勾选圈（仅多选）→ `selector_check_circle`（20dp、2dp 环）四态，由行的 state_selected 驱动：
  *   未勾选空心环，已勾选环 + 对勾；行聚焦白胶囊上自动转黑；
- * - 行底 1dp `shape_line_tapered` 下划线，左右各 12dp。
+ * - 单选模式没有顶栏，列表顶部补 16dp 留白，第一条源名不会顶到面板最上面。
  *
  * 行布局的根是纵向容器（行 + 下划线），真正可聚焦、画白胶囊的是 `@id/item`；
  * ViewHolder 单独持有它（`row`），焦点、点击、勾选态全部打在它身上，
- * 文字与圆圈用 duplicateParentState 继承，三者永远同步。
+ * 文字（以及多选的圆圈）用 duplicateParentState 继承，永远同步。
  *
  * 数据来自 [HeroSourceEntry]，条目里装的是**真实 [Site]**：
  * - [SourceSidebarMode.Single]：确定键 → `onSiteSelected(site)` 并关闭；
@@ -161,6 +165,13 @@ internal class SourceSidebar private constructor(
         list = findViewById(R.id.recycler)
         list.layoutManager = LinearLayoutManager(context)
         list.itemAnimator = null
+        // 单选模式顶栏整条 GONE，列表会直接贴到面板顶部，第一条源名就顶到最上面；
+        // 补 16dp 顶部留白（取值 = 逆向 `adapter_site_simple` 下划线的 marginTop，
+        // 首行与行间距同一套节奏）。面板自身 paddingTop 4dp，合计距窗口顶 20dp。
+        if (!isMulti) {
+            val inset = (SINGLE_TOP_INSET_DP * context.resources.displayMetrics.density).toInt()
+            list.setPadding(0, inset, 0, 0)
+        }
         // 列表本身不接收焦点，焦点始终落在行上，行才会绘制白底黑字。
         list.isFocusable = false
         list.descendantFocusability = ViewGroup.FOCUS_AFTER_DESCENDANTS
@@ -219,20 +230,23 @@ internal class SourceSidebar private constructor(
     private inner class Adapter : RecyclerView.Adapter<Adapter.Holder>() {
 
         override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): Holder {
-            val view = layoutInflater.inflate(R.layout.adapter_source_sidebar_item, parent, false)
-            return Holder(view)
+            // 两份逆向数据对应两种行：单选（首页）= `adapter_site_simple` 只有一行文字，
+            // 多选（换源）= `adapter_search_site` 多一颗 20dp 勾选圈。
+            val layout = if (isMulti) {
+                R.layout.adapter_source_sidebar_item
+            } else {
+                R.layout.adapter_source_sidebar_item_simple
+            }
+            return Holder(layoutInflater.inflate(layout, parent, false))
         }
 
         override fun getItemCount(): Int = entries.size
 
         override fun onBindViewHolder(holder: Holder, position: Int) {
             holder.name.text = entries[position].label
-            // 单选模式隐藏勾选圈时必须保留占位（INVISIBLE 而不是 GONE），
-            // 否则文字区会因少了 24dp 圈列而变宽，两种模式的焦点块宽度不一致。
-            holder.check.visibility = if (isMulti) View.VISIBLE else View.INVISIBLE
-            // 逆向 ns2.onBindViewHolder：勾选态用 setSelected 打在行上，
-            // 圈（duplicateParentState）继承行的 state_selected，selector_check_circle 据此显示 √。
-            // ViewGroup.setSelected 会向下派发，行内的文字 / 圈一起拿到 state_selected。
+            // 逆向 ns2 / s82：勾选态用 setSelected 打在行上，
+            // 多选行的圈（duplicateParentState）继承行的 state_selected，selector_check_circle 据此显示 √；
+            // 单选行没有圈，setSelected 只落到文字选择器上，白胶囊 / 黑字仍由 focused 驱动。
             holder.row.isSelected = checked[position]
             holder.row.nextFocusUpId = if (isMulti && position == 0) R.id.all else View.NO_ID
             holder.row.setOnClickListener { onConfirm(holder.bindingAdapterPosition) }
@@ -247,7 +261,8 @@ internal class SourceSidebar private constructor(
             /** 逆向 `@id/item`：真正可聚焦、画白胶囊的那一行。 */
             val row: View = view.findViewById(R.id.item)
             val name: TextView = view.findViewById(R.id.text)
-            val check: ImageView = view.findViewById(R.id.check)
+            /** 只有多选行（`adapter_search_site`）才有这颗 20dp 勾选圈；单选行取到 null。 */
+            val check: ImageView? = view.findViewById(R.id.check)
         }
     }
 
@@ -256,6 +271,8 @@ internal class SourceSidebar private constructor(
         private const val SIDEBAR_DIM = 0.25f
         /** 窗口宽度 = 屏宽 ÷ 5（逆向 SearchSiteDialog `ss2.Z()`：`g2.d(App.l) / 5`）。 */
         private const val SIDEBAR_WIDTH_DIVISOR = 5
+        /** 单选模式列表顶部留白 = 逆向 `adapter_site_simple` 下划线的 `marginTop`。 */
+        private const val SINGLE_TOP_INSET_DP = 16f
         private const val FOCUS_RETRY_COUNT = 6
         private const val FOCUS_RETRY_DELAY_MS = 50L
 

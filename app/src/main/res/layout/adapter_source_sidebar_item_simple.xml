@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  接口源侧边栏「单选 / 首页」列表行。逐字照抄逆向 `adapter_site_simple.xml`
+  （`s82.onCreateViewHolder` 里 viewType == 0 的那一支，即不带勾选框的站点列表）。
+
+  与多选行 `adapter_source_sidebar_item.xml`（照抄 `adapter_search_site.xml`）的区别，
+  全部来自逆向数据本身，不是随手调的：
+
+  - 行高 40dp（多选 39dp），没有勾选圈，也没有左侧 14 / 右侧 12 的权重留白；
+  - 文字是 `0dp + weight=1 + match_parent`，横向铺满整行再用 gravity=center 居中，
+    所以文字中心 = 行中心 = 白胶囊中心，胶囊不会显得偏向一边；
+  - 字号 18sp（多选 14sp），因为这一支本来就只有一行字，靠字号撑起行高；
+  - 下划线左右各 24dp（多选 12dp），并且 `marginTop=16dp`：
+    行高 40 + 间距 16 + 线 1 = 57dp 的行节距，白胶囊之间因此有实打实的呼吸位；
+  - 根是纵向容器（行 + 下划线），可聚焦、画白胶囊的是里面的 `@id/item`，
+    文字靠 duplicateParentState 继承它的 focused / selected，
+    所以白胶囊 + 黑字永远同步，不会出现白底白字。
+-->
+<androidx.appcompat.widget.LinearLayoutCompat xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical">
+
+    <androidx.appcompat.widget.LinearLayoutCompat
+        android:id="@+id/item"
+        android:layout_width="match_parent"
+        android:layout_height="40dp"
+        android:background="@drawable/selector_site_item_background"
+        android:focusable="true"
+        android:focusableInTouchMode="true"
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
+
+        <com.google.android.material.textview.MaterialTextView
+            android:id="@+id/text"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:duplicateParentState="true"
+            android:ellipsize="marquee"
+            android:focusable="false"
+            android:gravity="center"
+            android:includeFontPadding="false"
+            android:singleLine="true"
+            android:textColor="@color/selector_site_item_text"
+            android:textSize="18sp" />
+    </androidx.appcompat.widget.LinearLayoutCompat>
+
+    <View
+        android:id="@+id/line"
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:layout_marginStart="24dp"
+        android:layout_marginTop="16dp"
+        android:layout_marginEnd="24dp"
+        android:background="@drawable/shape_line_tapered" />
+
+</androidx.appcompat.widget.LinearLayoutCompat>
