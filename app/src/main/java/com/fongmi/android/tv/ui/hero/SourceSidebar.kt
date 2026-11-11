@@ -36,7 +36,7 @@ internal enum class SourceSidebarMode {
  * 结构与尺寸照搬逆向原版 `dialog_site.xml` / `adapter_site.xml` / `s82.java`
  * （本工程落地文件：`dialog_source_sidebar.xml` = 需求中的 `activity_site_view.xml`，
  * `adapter_source_sidebar_item.xml` = 需求中的 `adapter_site_view.xml`，本类 = 需求中的 `s82.java`）：
- * 窗口宽 = 屏宽 0.4f、高随内容（WRAP_CONTENT），40dp 行高、20dp 勾选圈、顶部「全选 / 全不选」。
+ * 窗口宽 = 屏宽 ÷ 5（20%，逆向 SearchSiteDialog `ss2.Z()`）、高随内容（WRAP_CONTENT），40dp 行高、20dp 勾选圈、顶部「全选 / 全不选」。
  *
  * 视觉按逆向原版极简风固定：
  * - 行 focused → 纯白胶囊（`shape_site_item_focused_white`，inset 8dp/4dp + 20dp 圆角）+ 黑字；
@@ -125,7 +125,11 @@ internal class SourceSidebar private constructor(
     }
 
     /**
-     * 窗口尺寸严格照抄逆向原版：宽度 = 屏宽 0.4f，高度随内容（WRAP_CONTENT）。
+     * 窗口尺寸严格照抄逆向原版：宽度 = 屏宽 ÷ 5（20%），高度随内容（WRAP_CONTENT）。
+     *
+     * 【比例红线】图1 的侧边栏就是 `dialog_search_site` 的右侧页（SearchSiteDialog `ss2`），
+     * 宽度取 `ss2.Z()` = `g2.d(App.l) / 5`，即屏宽的 1/5；
+     * 不是 `kz2`（换源站源网格：1 列 0.4f / 3 列 0.8f）那套比例，抄错会整整宽一倍。
      *
      * 宽度必须在窗口层给：布局根节点是 match_parent，父宽由窗口决定，
      * 顶部两个 weight=1 的按钮才会严格等分；高度不给死值，源少时面板贴内容，
@@ -136,7 +140,7 @@ internal class SourceSidebar private constructor(
         val reserved = (SIDEBAR_RESERVED_HEIGHT_DP * metrics.density).toInt()
         list.setMaxHeight((metrics.heightPixels - reserved).coerceAtLeast(0))
         window?.setLayout(
-            (metrics.widthPixels * SIDEBAR_WIDTH_RATIO).toInt(),
+            metrics.widthPixels / SIDEBAR_WIDTH_DIVISOR,
             WindowManager.LayoutParams.WRAP_CONTENT,
         )
     }
@@ -244,8 +248,8 @@ internal class SourceSidebar private constructor(
     companion object {
 
         private const val SIDEBAR_DIM = 0.25f
-        /** 窗口宽度 = 屏宽 × 0.4（逆向原版公式）。 */
-        private const val SIDEBAR_WIDTH_RATIO = 0.4f
+        /** 窗口宽度 = 屏宽 ÷ 5（逆向 SearchSiteDialog `ss2.Z()`：`g2.d(App.l) / 5`）。 */
+        private const val SIDEBAR_WIDTH_DIVISOR = 5
         /** 列表高度上限要扣掉的纵向空间：顶部 40dp 按钮 + 面板上下内边距 + 余量。 */
         private const val SIDEBAR_RESERVED_HEIGHT_DP = 96f
         private const val FOCUS_RETRY_COUNT = 6
