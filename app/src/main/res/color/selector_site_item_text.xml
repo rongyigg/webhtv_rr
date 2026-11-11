@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  侧边栏行文字色：焦点态黑字（白胶囊上唯一可读的颜色），其余状态白字。
+  行布局的 TextView 设置 duplicateParentState=true，焦点态由行根节点下发。
+-->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <item
+        android:state_focused="true"
+        android:color="@color/black" />
+    <item android:color="@color/white" />
+</selector>

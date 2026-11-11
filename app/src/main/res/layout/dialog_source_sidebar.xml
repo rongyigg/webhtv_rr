@@ -1,94 +1,109 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  照搬 ref_docs/dialog_search_site.xml（原版 SearchSiteDialog 站点选择面板：全选 / 全不选 → 淡出分隔线 → 站点列表）。
-  与原版的差异仅三处，均因本工程资源缺失或宿主为独立 Dialog：
-  1. @drawable/selector_search_action_background（缺失）→ @drawable/selector_source_site_item_background
-     （同样是「焦点白色胶囊、其余透明」，见 ref_docs/selector_site_item_background.xml + shape_site_item_focused.xml）；
-  2. @string/search_select_all|none → 已存在的 source_sidebar_select_all|none（文案一致）；
-  3. 原版根布局没有背景（由 BaseSheetDialog 的 sheet 容器提供），独立 Dialog 需要自己给面板，
-     故用 ref 同源的 @drawable/shape_dialog_source；
-     根布局与「全选/全不选」由 match_parent/weight 改为 wrap_content，使面板宽度由内容决定
-     （原版为贴底整宽 sheet，不再是 Hero 的右侧栏形态）；
-  4. 原版两条 shape_line_tapered 分隔线（标题下 / 每行下）删除：它们是 match_parent 宽的 1dp View，
-     在 wrap_content 根布局里会把面板重新撑到整屏宽。
+  接口源侧边栏面板（需求中的 activity_site_view.xml；本工程实际文件名为 dialog_source_sidebar.xml）。
+
+  版式对照逆向原版 dialog_site.xml / kz2.java：
+  1. 根节点 = 0dp 直角的深色半透明面板（@drawable/shape_dialog_source），四角贴边，
+     不再有 12dp 圆角与窗口透明背景之间的漏底缝隙；
+  2. 顶部 action 区 = 「全选 / 全不选」两个等宽按钮，左右各留 40dp 空位，
+     使两个按钮严格左右对称；左侧空位就是预留给小房子 / 返回键的位置
+     （本侧边栏由系统返回键关闭，暂不新增图标，只保留占位）；
+  3. 按钮焦点背景沿用行选择器 selector_site_item_background（白色胶囊 + 黑字）。
+     需求提到的 selector_config_delete_background 在本工程不存在，该选择器提供同样的
+     「焦点白色胶囊、其余透明」效果，故用它替代，不另造红框；
+  4. 列表 = CustomRecyclerView，占满剩余高度，行布局见 adapter_source_sidebar_item.xml。
+
+  宽度固定 280dp：顶部两个 0dp + weight=1 的按钮需要确定的父宽度才能等分；
+  旧版 wrap_content + 内容撑宽会让两个按钮一大一小，无法做到对称。
 -->
 <androidx.appcompat.widget.LinearLayoutCompat xmlns:android="http://schemas.android.com/apk/res/android"
-    android:orientation="vertical"
-    android:paddingTop="4dp"
-    android:paddingBottom="16dp"
-    android:layout_width="wrap_content"
+    android:layout_width="280dp"
     android:layout_height="match_parent"
     android:background="@drawable/shape_dialog_source"
+    android:baselineAligned="false"
+    android:orientation="vertical"
     android:paddingStart="4dp"
-    android:paddingEnd="4dp">
+    android:paddingTop="8dp"
+    android:paddingEnd="4dp"
+    android:paddingBottom="16dp">
+
     <androidx.appcompat.widget.LinearLayoutCompat
         android:id="@+id/bulkBar"
-        android:orientation="horizontal"
-        android:layout_width="wrap_content"
-        android:layout_height="39dp">
+        android:layout_width="match_parent"
+        android:layout_height="40dp"
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
+
+        <!-- 预留小房子 / 返回键位置；左右各 40dp，保证中间两个按钮绝对对称。 -->
+        <Space
+            android:id="@+id/homeSlot"
+            android:layout_width="40dp"
+            android:layout_height="40dp" />
+
         <androidx.appcompat.widget.LinearLayoutCompat
-            android:gravity="center"
-            android:orientation="horizontal"
             android:id="@+id/all"
-            android:background="@drawable/selector_source_site_item_background"
+            android:layout_width="0dp"
+            android:layout_height="40dp"
+            android:layout_weight="1"
+            android:background="@drawable/selector_site_item_background"
+            android:clickable="true"
             android:focusable="true"
             android:focusableInTouchMode="true"
-            android:nextFocusUp="@+id/all"
-            android:layout_width="wrap_content"
-            android:layout_height="match_parent">
-            <androidx.appcompat.widget.AppCompatTextView
-                android:textSize="12sp"
-                android:textColor="@color/selector_source_site_item_text"
-                android:gravity="center"
-                android:duplicateParentState="true"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="@string/source_sidebar_select_all"
-                android:singleLine="true"
-                android:includeFontPadding="false"/>
-            <androidx.appcompat.widget.AppCompatImageView
-                android:id="@+id/all_check"
-                android:background="@drawable/selector_check_circle"
-                android:duplicateParentState="true"
-                android:layout_width="16dp"
-                android:layout_height="16dp"
-                android:layout_marginStart="6dp"/>
-        </androidx.appcompat.widget.LinearLayoutCompat>
-        <androidx.appcompat.widget.LinearLayoutCompat
             android:gravity="center"
-            android:orientation="horizontal"
+            android:nextFocusDown="@id/recycler"
+            android:nextFocusUp="@id/all"
+            android:orientation="horizontal">
+
+            <androidx.appcompat.widget.AppCompatTextView
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:duplicateParentState="true"
+                android:gravity="center"
+                android:includeFontPadding="false"
+                android:singleLine="true"
+                android:text="@string/source_sidebar_select_all"
+                android:textColor="@color/selector_site_item_text"
+                android:textSize="12sp" />
+        </androidx.appcompat.widget.LinearLayoutCompat>
+
+        <androidx.appcompat.widget.LinearLayoutCompat
             android:id="@+id/none"
-            android:background="@drawable/selector_source_site_item_background"
+            android:layout_width="0dp"
+            android:layout_height="40dp"
+            android:layout_weight="1"
+            android:background="@drawable/selector_site_item_background"
+            android:clickable="true"
             android:focusable="true"
             android:focusableInTouchMode="true"
-            android:nextFocusUp="@+id/none"
-            android:layout_width="wrap_content"
-            android:layout_height="match_parent">
+            android:gravity="center"
+            android:nextFocusDown="@id/recycler"
+            android:nextFocusUp="@id/none"
+            android:orientation="horizontal">
+
             <androidx.appcompat.widget.AppCompatTextView
-                android:textSize="12sp"
-                android:textColor="@color/selector_source_site_item_text"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:duplicateParentState="true"
                 android:gravity="center"
-                android:duplicateParentState="true"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="@string/source_sidebar_select_none"
+                android:includeFontPadding="false"
                 android:singleLine="true"
-                android:includeFontPadding="false"/>
-            <androidx.appcompat.widget.AppCompatImageView
-                android:id="@+id/none_check"
-                android:background="@drawable/selector_check_circle"
-                android:duplicateParentState="true"
-                android:layout_width="16dp"
-                android:layout_height="16dp"
-                android:layout_marginStart="6dp"/>
+                android:text="@string/source_sidebar_select_none"
+                android:textColor="@color/selector_site_item_text"
+                android:textSize="12sp" />
         </androidx.appcompat.widget.LinearLayoutCompat>
+
+        <Space
+            android:layout_width="40dp"
+            android:layout_height="40dp" />
     </androidx.appcompat.widget.LinearLayoutCompat>
+
     <com.fongmi.android.tv.ui.custom.CustomRecyclerView
         android:id="@+id/recycler"
-        android:clipChildren="false"
-        android:clipToPadding="false"
-        android:layout_width="wrap_content"
+        android:layout_width="match_parent"
         android:layout_height="0dp"
         android:layout_weight="1"
-        android:overScrollMode="never"/>
+        android:clipChildren="false"
+        android:clipToPadding="false"
+        android:overScrollMode="never" />
+
 </androidx.appcompat.widget.LinearLayoutCompat>

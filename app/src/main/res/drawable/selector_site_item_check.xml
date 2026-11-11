@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  侧边栏迷你勾选圈（对应需求中的 selector_site_item_check）。
+
+  MaterialCheckBox 的默认按钮是方框，这里用 android:button 换成圆形状态图：
+  - 常态未勾选 → 白色空心圆；
+  - 常态已勾选 → 白色实心圆 + 深色对勾；
+  - 行聚焦（白胶囊）→ 自动切黑色空心 / 黑色实心 + 白色对勾，避免白圈消失。
+
+  四态顺序与逆向原版一致：focused+checked > focused > checked > normal。
+-->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <item
+        android:state_focused="true"
+        android:state_checked="true"
+        android:drawable="@drawable/shape_site_item_check_on_focused" />
+    <item
+        android:state_focused="true"
+        android:drawable="@drawable/shape_site_item_check_off_focused" />
+    <item
+        android:state_checked="true"
+        android:drawable="@drawable/shape_site_item_check_on" />
+    <item android:drawable="@drawable/shape_site_item_check_off" />
+</selector>

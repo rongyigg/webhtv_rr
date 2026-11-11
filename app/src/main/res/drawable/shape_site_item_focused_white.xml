@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  侧边栏行焦点：90% 白胶囊（#E6FFFFFF）+ 4dp 小圆角。
+  inset 8dp/4dp 照抄逆向原版的行内留白，不改成大圆角、不用红框。
+-->
+<inset xmlns:android="http://schemas.android.com/apk/res/android"
+    android:insetLeft="8dp"
+    android:insetRight="8dp"
+    android:insetTop="4dp"
+    android:insetBottom="4dp">
+
+    <shape android:shape="rectangle">
+        <solid android:color="#E6FFFFFF" />
+        <corners android:radius="4dp" />
+    </shape>
+
+</inset>

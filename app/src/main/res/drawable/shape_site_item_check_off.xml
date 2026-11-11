@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 侧边栏勾选圈：未勾选 = 白色空心圆（1.5dp 细环，环内透明）。 -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="oval">
+    <solid android:color="@android:color/transparent" />
+    <stroke
+        android:width="1.5dp"
+        android:color="@color/white" />
+    <size
+        android:width="20dp"
+        android:height="20dp" />
+</shape>

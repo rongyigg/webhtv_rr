@@ -15,6 +15,7 @@ import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.fongmi.android.tv.R
 import com.fongmi.android.tv.bean.Site
+import com.google.android.material.checkbox.MaterialCheckBox
 
 /**
  * 侧边栏的两种使用场景。
@@ -31,16 +32,18 @@ internal enum class SourceSidebarMode {
 /**
  * 全局接口源侧边栏（View 体系，独立 Dialog 窗口）。
  *
- * 结构与尺寸照搬 `ref_docs/dialog_search_site.xml`（顶部「全选 / 全不选」）与
- * `ref_docs/adapter_site.xml`（40dp 行高、24dp 勾选圈）；
- * 文字按需求改为 **13sp（= 首页分类 Tab 的 HERO_LABEL_SP）并整行居中**，
- * 不再沿用原版 18sp 的左对齐 —— 侧边栏是窄条竖排，居中后长短源名不会参差不齐。
+ * 结构与尺寸照搬逆向原版 `dialog_site.xml` / `adapter_site.xml` / `s82.java`
+ * （本工程落地文件：`dialog_source_sidebar.xml` = 需求中的 `activity_site_view.xml`，
+ * `adapter_source_sidebar_item.xml` = 需求中的 `adapter_site_view.xml`，本类 = 需求中的 `s82.java`）：
+ * 40dp 行高、20dp 勾选圈、顶部「全选 / 全不选」。
  *
- * 颜色按需求固定：
- * - 行 focused → 白底（`shape_source_site_item_focused`，取自 ref_docs：inset 8dp/4dp + 28dp 圆角）+ 黑字；
- * - 行 normal → 透明底（`shape_source_chip_round_normal` 无 solid）+ 白字；
- * - 勾选圈 → `selector_check_circle` 四态：未勾选是 2dp 空圆环，已勾选是圆环 + √
- *   （照搬 `ref_docs/shape_check_circle_on*.xml`，**不再用红色实心圆**）；行底色为白时自动换深色环。
+ * 视觉按逆向原版极简风固定：
+ * - 行 focused → 90% 白胶囊（`shape_site_item_focused_white`，inset 8dp/4dp + 4dp 小圆角）+ 黑字；
+ * - 行 normal → 透明底 + 白字；
+ * - 行 selected → 透明底 + 1dp 半透明白细框（当前接口源 / 全选态，不再用红框）；
+ * - 勾选圈 → `selector_site_item_check` 四态：未勾选白色空心圆，已勾选白色实心圆 + 对勾；
+ *   行聚焦白胶囊上自动切黑色空心 / 黑色实心 + 白勾，避免白圈消失；
+ * - 行底 1dp `shape_line_tapered` 下划线，左右各 24dp。
  *
  * 行布局的 `@id/item` 就是根节点，因此 `ViewHolder.itemView` 与画背景的 View 是同一个，
  * `isSelected` / 焦点态一定作用在可见的背景上（旧版是「外层容器 + 内层 item」两层，状态打在外层，永远不显示）。
@@ -112,7 +115,7 @@ internal class SourceSidebar private constructor(
     private fun setupWindow() {
         window?.apply {
             setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
-            // 宽度交给布局内容决定（ref 的面板本身没有固定宽度），高度铺满右侧。
+            // 宽度由布局固定 280dp（顶部两个等宽按钮需要确定的父宽度才能严格对称），高度铺满右侧。
             setLayout(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT)
             setGravity(Gravity.END)
             addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
@@ -182,6 +185,7 @@ internal class SourceSidebar private constructor(
         onCheckedChanged(checked.copyOf())
     }
 
+    /** 全选 / 全不选：遍历所有条目统一改状态，再整表刷新。 */
     private fun setAll(value: Boolean) {
         for (index in checked.indices) checked[index] = value
         adapter.notifyDataSetChanged()
@@ -207,11 +211,13 @@ internal class SourceSidebar private constructor(
         override fun onBindViewHolder(holder: Holder, position: Int) {
             holder.name.text = entries[position].label
             // 单选模式隐藏勾选圈时必须保留占位（INVISIBLE 而不是 GONE），
-            // 否则行宽会因少了 24dp 圈 + 12dp 间距而塌缩，白底焦点块比多选模式短一截。
+            // 否则文字区会因少了 20dp 圈 + 8dp 间距而变宽，两种模式的焦点块宽度不一致。
             holder.check.visibility = if (isMulti) View.VISIBLE else View.INVISIBLE
-            holder.check.isSelected = checked[position]
-            // 单选：当前接口源保持选中；多选：选中态与勾选一致。
-            holder.itemView.isSelected = if (isMulti) checked[position] else position == currentIndex
+            holder.check.isChecked = checked[position]
+            // 禁用状态下 MaterialCheckBox 仍可能播放勾选动画；直接跳到终态，复用时不会闪一下。
+            holder.check.jumpDrawablesToCurrentState()
+            // 单选：当前接口源保持选中；多选：勾选状态只由右侧圆圈表达，不再给整行加白框。
+            holder.itemView.isSelected = !isMulti && position == currentIndex
             holder.itemView.nextFocusUpId = if (isMulti && position == 0) R.id.all else View.NO_ID
             holder.itemView.setOnClickListener { onConfirm(holder.bindingAdapterPosition) }
             // 左右键在列表内被消费，不会把焦点甩出侧边栏。
@@ -223,7 +229,7 @@ internal class SourceSidebar private constructor(
 
         inner class Holder(view: View) : RecyclerView.ViewHolder(view) {
             val name: TextView = view.findViewById(R.id.text)
-            val check: View = view.findViewById(R.id.check)
+            val check: MaterialCheckBox = view.findViewById(R.id.check)
         }
     }
 

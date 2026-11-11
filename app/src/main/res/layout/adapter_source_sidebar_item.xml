@@ -1,59 +1,81 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  接口源侧边栏列表行（单选 / 多选共用同一套行布局）。
+  接口源侧边栏列表行（需求中的 adapter_site_view.xml；本工程实际文件名为 adapter_source_sidebar_item.xml）。
 
-  尺寸取自 ref_docs/adapter_site.xml：40dp 行高、24dp 勾选圈；
-  文字按需求改为 **13sp（与首页分类 Tab 的 HERO_LABEL_SP 一致）并整行居中**，
-  不再沿用原版 18sp 的左对齐 —— 侧边栏是窄条竖排，居中后长短源名不会参差不齐。
+  结构严格按逆向原版 adapter_site.xml + s82.java：
+  - 根 FrameLayout 就是可聚焦的行本体，高 40dp，背景 selector_site_item_background；
+    单选 / 多选共用同一套行布局；
+  - 文字 width=0dp + weight=1 + gravity=center，横向占满文字区并居中；
+    焦点时 selector_site_item_text 把文字反转为黑色；
+  - 右侧 MaterialCheckBox 20×20dp（原版 24dp，按需求缩小），
+    enabled/focusable/clickable 全部 false，只作为状态显示；
+    android:button 指向 selector_site_item_check，画出白色空心圆 / 白色实心带勾，
+    行聚焦白胶囊上自动切黑色版本，避免白圈白底看不见；
+  - 行底 1dp View 使用原版 shape_line_tapered（左右透明、中间 10% 白），
+    左右各 24dp；焦点胶囊 inset 上下 4dp，下划线落在胶囊之外，不会被白底吞掉。
 
-  **根节点就是可聚焦的行本体**：原版是「外层容器 + 内层 @id/item」两层，
-  adapter 通过 itemView 设置 isSelected / 焦点，若背景和 focusable 在内层，
-  选中态就落不到画背景的 View 上，行永远没有高亮。合并成一层后状态必然生效。
-
-  为什么从 LinearLayout 改成 FrameLayout：
-  LinearLayout 里勾选圈会占掉真实宽度（24dp + 间距），居中的其实是「文字 + 圈」这个整体，
-  文字本身被挤偏左。改成 FrameLayout 后圈脱离文档流（右端对齐），
-  文字左右各留 28dp（= 圈宽 24 + 4 的对称留白）后仍在**整行正中**，
-  长源名也绝不会压到圈上。
-
-  颜色（按需求指定）：
-  - focused：白底 #FFFFFF + 黑字 #000000，圆角矩形（selector_source_site_item_background
-    → shape_source_site_item_focused，inset 8dp/4dp + 28dp 圆角，取自 ref_docs）
-  - normal：透明底 + 白字（shape_source_chip_round_normal 无 solid）
-  - 勾选圈用 selector_check_circle 四态：未勾选 = 空圆环，已勾选 = 圆环 + √（照搬 ref_docs，
-    不再用红色实心块）；SingleChoice 模式由代码置 INVISIBLE 留位。
+  为什么不用 LinearLayout 做根：文字需要 weight=1，而 1dp 下划线要压在行底，
+  FrameLayout 根 + 内部横向 LinearLayout 能同时满足「weight 居中」和「底部叠线」。
 -->
 <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     android:id="@+id/item"
-    android:background="@drawable/selector_source_site_item_background"
-    android:focusable="true"
-    android:focusableInTouchMode="true"
     android:layout_width="match_parent"
     android:layout_height="40dp"
-    android:paddingStart="8dp"
-    android:paddingEnd="8dp">
+    android:background="@drawable/selector_site_item_background"
+    android:clickable="true"
+    android:focusable="true"
+    android:focusableInTouchMode="true">
 
-    <com.google.android.material.textview.MaterialTextView
-        android:id="@+id/text"
-        android:textSize="13sp"
-        android:textColor="@color/selector_source_site_item_text"
-        android:ellipsize="marquee"
-        android:gravity="center"
-        android:focusable="false"
-        android:duplicateParentState="true"
-        android:layout_gravity="center"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_marginStart="28dp"
-        android:layout_marginEnd="28dp"
-        android:singleLine="true"
-        android:includeFontPadding="false" />
+    <androidx.appcompat.widget.LinearLayoutCompat
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingStart="8dp"
+        android:paddingEnd="8dp">
 
-    <androidx.appcompat.widget.AppCompatImageView
-        android:id="@+id/check"
-        android:duplicateParentState="true"
-        android:layout_gravity="end|center_vertical"
-        android:layout_width="24dp"
-        android:layout_height="24dp"
-        android:background="@drawable/selector_check_circle" />
+        <com.google.android.material.textview.MaterialTextView
+            android:id="@+id/text"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:duplicateParentState="true"
+            android:ellipsize="marquee"
+            android:focusable="false"
+            android:gravity="center"
+            android:includeFontPadding="false"
+            android:singleLine="true"
+            android:textColor="@color/selector_site_item_text"
+            android:textSize="13sp" />
+
+        <com.google.android.material.checkbox.MaterialCheckBox
+            android:id="@+id/check"
+            android:layout_width="20dp"
+            android:layout_height="20dp"
+            android:layout_marginStart="8dp"
+            android:background="@null"
+            android:button="@drawable/selector_site_item_check"
+            android:buttonTint="@null"
+            android:clickable="false"
+            android:duplicateParentState="true"
+            android:enabled="false"
+            android:focusable="false"
+            android:focusableInTouchMode="false"
+            android:gravity="center"
+            android:minHeight="0dp"
+            android:minWidth="0dp"
+            android:padding="0dp"
+            app:buttonTint="@null" />
+    </androidx.appcompat.widget.LinearLayoutCompat>
+
+    <View
+        android:id="@+id/line"
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:layout_gravity="bottom"
+        android:layout_marginStart="24dp"
+        android:layout_marginEnd="24dp"
+        android:background="@drawable/shape_line_tapered" />
+
 </FrameLayout>
