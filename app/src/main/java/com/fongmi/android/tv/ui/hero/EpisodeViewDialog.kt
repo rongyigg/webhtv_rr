@@ -26,7 +26,10 @@ import com.fongmi.android.tv.utils.Notify
  *
  * 版式（activity_episode_view.xml，逐行对照 Compose L2593-2798）：
  * 全屏遮罩 #8014171F → 面板宽 82% / 16dp 圆角 / 18dp 内边距 →
- * 「播放线路」32dp 线路栏 → 「选集」32dp 控制栏（列数 / 排序 / 分页）→ 固定 4 排网格。
+ * 「播放线路」28dp 线路栏 → 「选集」28dp 控制栏（列数 / 排序 / 分页）→ 固定 4 排网格。
+ *
+ * 卡片宽度不是平分面板：少列（2 列）时由 [applyGridSideInset] 把多余宽度折成左右等量
+ * padding，单卡被夹到 [GRID_MAX_CELL_WIDTH_DP]，两列整体居中，宽高比与播放页选集卡一致。
  *
  * 逻辑是 Compose 版的**逐行平移**，不是重写：
  *
@@ -195,10 +198,12 @@ internal class EpisodeViewDialog(
         episodeRecycler.adapter = episodeAdapter
         episodeRecycler.itemAnimator = null
         episodeRecycler.addItemDecoration(GridSpacingDecoration(dp(GRID_GAP_DP)))
-        // 边界切组统一在网格层拦截（= Compose `LazyVerticalGrid.onKeyEvent`）：
-        // 焦点在格子上时按键会冒泡到这里，格子自己一个键都不处理。
-        episodeRecycler.setOnKeyListener { _, keyCode, event ->
-            event.action == KeyEvent.ACTION_DOWN && handleGridKey(keyCode)
+        // 【卡片宽度上限】少列（2 列）时两列会平分整个 82% 面板，单卡宽到 370dp 左右，
+        // 黑色半透明底显得又宽又笨重。这里按播放页选集卡的宽高比给单卡一个宽度上限，
+        // 多出来的宽度折成 RecyclerView 左右**等量** padding → 两列变窄且整体居中。
+        // 面板宽度变化（换设备 / 分屏）时重新算一次。
+        episodeRecycler.addOnLayoutChangeListener { _, left, _, right, _, oldLeft, _, oldRight, _ ->
+            if (right - left != oldRight - oldLeft) applyGridSideInset()
         }
 
         columnsButton.setOnClickListener { toggleColumns() }
@@ -275,6 +280,8 @@ internal class EpisodeViewDialog(
         pageItems = ordered.drop(page * pageSize()).take(pageSize())
 
         (episodeRecycler.layoutManager as? GridLayoutManager)?.spanCount = columns()
+        // 列数变了 → 单卡宽度上限的算式也变了，必须重算左右内边距（宽度还没测量时内部会直接返回）。
+        applyGridSideInset()
         episodeAdapter.submit(pageItems, playingEpisode)
 
         val empty = pageItems.isEmpty()
@@ -396,6 +403,26 @@ internal class EpisodeViewDialog(
     // 网格
     // ------------------------------------------------------------------
 
+    /**
+     * 卡片宽度上限：把「面板比卡片总宽多出来的部分」均分成 RecyclerView 的左右内边距。
+     *
+     * 播放页选集卡是 6 列网格里的一格（约 145dp 宽 / 32dp 高，宽高比 ≈ 4.5:1）；
+     * 本弹窗卡片固定 38dp 高，按同一比例单卡上限取 [GRID_MAX_CELL_WIDTH_DP] = 176dp
+     * （176 / 38 ≈ 4.6:1），所以少列模式下卡片不会再把 82% 面板一分为二。
+     *
+     * 多列（8 列）时 `8 × 176dp + 间距` 远大于面板宽度，算出来是 0，多列布局**完全不变**；
+     * 只有少列（2 列）会被真正夹窄并居中。左右内边距相等 = 视觉中心仍与面板中线重合。
+     */
+    private fun applyGridSideInset() {
+        val width = episodeRecycler.width
+        if (width <= 0) return
+        // 一行卡片总宽 = 列数 × 单卡上限 + 一行分到的总间距（GridSpacingDecoration 每行合计正好 spacing）。
+        val content = columns() * dp(GRID_MAX_CELL_WIDTH_DP) + dp(GRID_GAP_DP)
+        val inset = ((width - content) / 2).coerceAtLeast(0)
+        if (episodeRecycler.paddingLeft == inset && episodeRecycler.paddingRight == inset) return
+        episodeRecycler.setPadding(inset, 0, inset, 0)
+    }
+
     /** 焦点落进网格：把下标收敛到当前组内，越界时夹到首尾。 */
     private fun focusCell(index: Int) {
         if (pageItems.isEmpty()) return
@@ -460,10 +487,13 @@ internal class EpisodeViewDialog(
      *
      * 翻页判定只看列：任意一行的**最左一列**按 ← = 上一组，**最右一列**按 → = 下一组，
      * 所以不必先把焦点挪到右下角才能翻页；上下键永远不翻页，末行 ↓ 只消费。
-     * 公式与 Compose `handleGridKey` 逐字一致，唯一差异是「当前格」取**真实焦点位置**
-     * （`findFocus()` + `getChildAdapterPosition`），不再只信可能过期的 [anchorCell]。
+     * 公式与 Compose `handleGridKey` 逐字一致，两处差异：
+     * 1. 「当前格」取**真实焦点位置**（`findFocus()` + `getChildAdapterPosition`），
+     *    不再只信可能过期的 [anchorCell]；
+     * 2. 长按连发（`repeatCount > 0`）只做组内移动、**不翻组**：翻组后焦点是异步落位的，
+     *    连发事件读到的还是旧焦点，一路按住会连翻好几组。
      */
-    private fun handleGridKey(keyCode: Int): Boolean {
+    private fun handleGridKey(keyCode: Int, firstPress: Boolean = true): Boolean {
         if (pageItems.isEmpty()) return false
         val lastIndex = pageItems.lastIndex
         // 以**真实焦点格**为准：anchorCell 只在落焦时写入，重建列表 / 焦点还在控制栏时会过期，
@@ -480,17 +510,23 @@ internal class EpisodeViewDialog(
         val columns = columns()
         val column = base % columns
         val row = base / columns
-        val lastRow = lastIndex / columns
         return when (keyCode) {
             KeyEvent.KEYCODE_DPAD_LEFT -> {
-                if (column == 0) pageBackward(row) else focusCell(base - 1)
+                if (column != 0) {
+                    focusCell(base - 1)
+                } else if (firstPress) {
+                    // 最左列：整组翻页（首组时 pageBackward 自己会空转，事件仍然消费掉）。
+                    pageBackward(row)
+                }
                 true
             }
 
             KeyEvent.KEYCODE_DPAD_RIGHT -> {
                 when {
-                    column == columns - 1 -> pageForward(row, fromLastRow = row == lastRow)
-                    base == lastIndex -> pageForward(row, fromLastRow = true)
+                    column == columns - 1 || base == lastIndex -> if (firstPress) {
+                        pageForward(row, fromLastRow = base == lastIndex)
+                    }
+
                     else -> focusCell(base + 1)
                 }
                 true
@@ -683,7 +719,32 @@ internal class EpisodeViewDialog(
         }
         val swallowing = event.action == KeyEvent.ACTION_DOWN || event.action == KeyEvent.ACTION_MULTIPLE
         if (blockUntilKeyUp && swallowing) return true
+        // 【网格边缘翻页的唯一拦截点】按键先到窗口（本方法），再由窗口派发给焦点格。
+        //
+        // 为什么不能挂在 `episodeRecycler.setOnKeyListener` 上：ViewGroup.dispatchKeyEvent
+        // 只在**自己持有焦点**时才走 super（才会调用自己的 OnKeyListener），否则直接
+        // `mFocused.dispatchKeyEvent(event)` 转发给持有焦点的子 View。网格的 RecyclerView
+        // 是 focusable=false、焦点永远在卡片上，所以挂在它身上的 OnKeyListener 一次都不会触发，
+        // 这就是之前「最左/最右按左右键不翻页」的根因。与播放页 `dispatchEpisodePanelEdgeKey`
+        // 的做法一致：在窗口层按「真实焦点格」判定列边界。
+        if (event.action == KeyEvent.ACTION_DOWN && isGridFocused() &&
+            handleGridKey(event.keyCode, firstPress = event.repeatCount == 0)
+        ) {
+            return true
+        }
         return super.dispatchKeyEvent(event)
+    }
+
+    /**
+     * 焦点是否落在网格卡片上。
+     *
+     * 只看卡片：RecyclerView 自己（focusable=false）和线路 / 控制 / 分页三行 chip 都不算，
+     * 否则会把 chip 行的方向键也吞进 [handleGridKey]。
+     */
+    private fun isGridFocused(): Boolean {
+        val focused = currentFocus ?: return false
+        if (focused === episodeRecycler) return true
+        return focused.parent === episodeRecycler
     }
 
     override fun show() {
@@ -816,6 +877,12 @@ internal class EpisodeViewDialog(
         private const val FLAG_GAP_DP = 12
         private const val CONTROL_GAP_DP = 8
         private const val GRID_GAP_DP = 8
+
+        /**
+         * 单张集数卡的宽度上限（dp）：176 / 38 ≈ 4.6:1，与播放页选集卡（145 / 32 ≈ 4.5:1）同比例。
+         * 只作用于少列模式；调大 = 卡片变宽，调小 = 卡片更窄，两列始终居中。
+         */
+        private const val GRID_MAX_CELL_WIDTH_DP = 176
 
         /** 焦点重试：Compose `FOCUS_RETRY_FRAMES = 10`，这里换成 10 次 × 16ms。 */
         private const val FOCUS_RETRY_COUNT = 10

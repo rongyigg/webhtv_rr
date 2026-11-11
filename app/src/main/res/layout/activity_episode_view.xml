@@ -177,7 +177,12 @@
                 android:layout_width="0dp"
                 android:layout_height="8dp" />
 
-            <!-- ============ 固定 4 排网格（176dp）+ 空态提示 ============ -->
+            <!--
+                ============ 固定 4 排网格（176dp）+ 空态提示 ============
+                左右内边距不写死：EpisodeViewDialog.applyGridSideInset() 在运行时按
+                「单卡最大宽度 176dp」把多余宽度折成左右等量 padding（少列 2 列时居中收窄，
+                多列 8 列时算出来是 0、完全不受影响）。
+            -->
             <FrameLayout
                 android:layout_width="match_parent"
                 android:layout_height="176dp">
