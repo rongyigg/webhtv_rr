@@ -322,10 +322,15 @@ class HeroSearchActivity : AppCompatActivity() {
     private fun setupInput() {
         input.filters = arrayOf(InputFilter.LengthFilter(SEARCH_KEYWORD_MAX_LENGTH))
         // 本页完全不用系统输入法：文字只由页面内的虚拟键盘写入。
-        // 三重保险：XML 里 showSoftInputOnFocus=false + 这里再关一次 + 窗口级常隐藏。
+        // 三重保险：这里关一次 + 聚焦时再关一次 + 窗口级常隐藏。
+        // 注意：`showSoftInputOnFocus` 只能在代码里设，XML 不写这个属性（aapt 会报找不到）。
         input.showSoftInputOnFocus = false
-        // 万一某些电视固件还是把 IME 弹起来，离开输入框时立刻收掉。
-        input.setOnFocusChangeListener { _, hasFocus -> if (!hasFocus) hideSystemInput() }
+        // 万一某些电视固件还是把 IME 弹起来，离开输入框时立刻收掉；
+        // 聚焦时也再关一次，防止固件在焦点变化时把该开关重置。
+        input.setOnFocusChangeListener { _, hasFocus ->
+            input.showSoftInputOnFocus = false
+            if (!hasFocus) hideSystemInput()
+        }
         input.setOnKeyListener { _, keyCode, event ->
             if (event.action != KeyEvent.ACTION_DOWN) return@setOnKeyListener false
             when (keyCode) {
