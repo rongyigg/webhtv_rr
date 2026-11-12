@@ -85,11 +85,12 @@ import kotlin.math.roundToInt
  *    │   │   ├─ 输入行 32dp：mic 36 + 12 + 输入框(weight 1) + 6 + 搜索键 32
  *    │   │   └─ 键盘 7×6 格，每格 34.57×35dp（键背景 inset 2.5dp → 可见键 30dp）
  *    │   └─ 右列（NestedScrollView）：历史（2 行）+ 热搜 / 建议（3 行）
- *    └─ resultSection(marginTop 12dp, GONE)
+ *    └─ resultSection(marginTop 4dp, GONE)
  *        ├─ 站点 Tab 行 38dp（26dp 胶囊 + 2dp + 10dp 与海报行的距离）
- *        └─ 海报区 215dp（120×180dp 海报 + 13sp 剧名，间距 16dp）
+ *        └─ 海报区 223dp（120×180dp 海报 + 13sp 剧名，间距 8dp + RecyclerView 顶部 8dp 留白）
  * ```
- * 上半区 540 - 24 - 12 - 38 - 215 = 251dp；左列 32 + 8 + 210 = 250dp，刚好塞满。
+ * 上半区 540 - 24 - 4 - 38 - 223 = 251dp；左列 32 + 8 + 210 = 250dp，刚好塞满。
+ * 海报区比卡片高 16dp，正好容纳聚焦放大 1.08 的上下各约 8dp 溢出，剧名不会被屏幕底边切掉。
  *
  * 业务与焦点契约（与上一版 Compose 页逐条一致）：
  * - 历史：`Setting.getKeyword()/putKeyword()`，去重 → 置顶 → 最多 9 条，改动立刻落盘；
@@ -920,7 +921,7 @@ class HeroSearchActivity : AppCompatActivity() {
             }
             return
         }
-        siteAdapter.submit(siteLabels(), selectedSite, resultsFocused)
+        siteAdapter.submit(siteRecycler, siteLabels(), selectedSite, resultsFocused)
     }
 
     private fun emptyHint(): String {

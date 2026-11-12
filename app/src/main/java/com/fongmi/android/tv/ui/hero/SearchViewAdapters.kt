@@ -256,25 +256,56 @@ internal class SearchSiteAdapter(
     private var selected = 0
     private var moduleFocused = false
 
-    fun submit(list: List<String>, selectedIndex: Int, focused: Boolean) {
-        val oldSelected = selected
+    fun submit(recycler: RecyclerView, list: List<String>, selectedIndex: Int, focused: Boolean) {
         val sameContent = labels == list
+        // 站点是随搜索结果一个个回来的：新列表通常就是旧列表后面接了几个站点。
+        val appended = !sameContent && labels.isNotEmpty() && list.size > labels.size &&
+            labels.indices.all { labels[it] == list[it] }
+        val oldSize = labels.size
         labels.clear()
         labels.addAll(list)
         selected = selectedIndex
         moduleFocused = focused
         when {
-            // 只有「当前站点」与「焦点是否在结果区」会改变三态背景，其余 Tab 不必重绘。
-            sameContent && oldSelected == selectedIndex -> {
-                if (selected in labels.indices) notifyItemChanged(selected)
+            // 内容没变，只有三态背景 / 选中缩放会变：原地刷已布局的 Tab，不动数据集。
+            //
+            // 这里**不能**用 notifyItemChanged：DefaultItemAnimator 的 change 动画会把正在聚焦的
+            // Tab 摘下来再插一个新的 ViewHolder，焦点被系统丢回层级里第一个可聚焦控件（搜索框）——
+            // 「搜索完先落到 Tab 第一位、紧接着又跳回输入框」就是它。
+            sameContent -> refreshVisible(recycler)
+            // 只往后追加：用 range 插入，已绑定的 Tab 一个都不摘，聚焦中的那个不受影响。
+            appended -> {
+                notifyItemRangeInserted(oldSize, list.size - oldSize)
+                refreshVisible(recycler)
             }
-
-            sameContent -> {
-                if (oldSelected in labels.indices) notifyItemChanged(oldSelected)
-                if (selected in labels.indices) notifyItemChanged(selected)
-            }
-
             else -> notifyDataSetChanged()
+        }
+    }
+
+    /** 把当前状态刷到已布局的 Tab 上：不通知数据集，RecyclerView 不会摘任何子 View。 */
+    private fun refreshVisible(recycler: RecyclerView) {
+        for (i in 0 until recycler.childCount) {
+            val text = recycler.getChildAt(i) as? TextView ?: continue
+            val position = recycler.getChildAdapterPosition(text)
+            if (position == RecyclerView.NO_POSITION) continue
+            bindState(text, position)
+        }
+    }
+
+    /** 单个 Tab 的状态：文案 / 三态选中 / 选中缩放。 */
+    private fun bindState(text: TextView, position: Int) {
+        text.text = labels[position]
+        text.isSelected = position == selected && moduleFocused
+        val target = if (position == selected) 1.08f else 1f
+        if (text.scaleX != target) {
+            text.animate()
+                .scaleX(target)
+                .scaleY(target)
+                .setDuration(140L)
+                .setInterpolator(DecelerateInterpolator())
+                .start()
+        } else {
+            text.animate().cancel()
         }
     }
 
@@ -290,19 +321,7 @@ internal class SearchSiteAdapter(
 
     override fun onBindViewHolder(holder: Holder, position: Int) {
         val text = holder.text
-        text.text = labels[position]
-        text.isSelected = position == selected && moduleFocused
-        val target = if (position == selected) 1.08f else 1f
-        if (text.scaleX != target) {
-            text.animate()
-                .scaleX(target)
-                .scaleY(target)
-                .setDuration(140L)
-                .setInterpolator(DecelerateInterpolator())
-                .start()
-        } else {
-            text.animate().cancel()
-        }
+        bindState(text, position)
         text.setOnFocusChangeListener { _, hasFocus -> if (hasFocus) onFocused(position) }
         text.setOnClickListener { onConfirm(holder.bindingAdapterPosition) }
         text.setOnKeyListener { _, keyCode, event ->
@@ -355,6 +374,15 @@ internal class SearchResultAdapter(
         // 内容没变就不重绘：`render()` 会被站点 Tab 的焦点回调频繁触发，
         // 每次都 notifyDataSetChanged 会把正在聚焦的卡重绑一遍，焦点就可能被挤到输入框。
         if (items == list) return
+        // 结果是随站点一个个回来的：新列表通常就是旧列表后面接了几条。
+        // 只追加时用 notifyItemRangeInserted —— 已绑定的卡不会被摘下重建，
+        // 聚焦中的那张卡就不会因为重绑而丢焦点（掉回搜索框）。
+        if (items.isNotEmpty() && list.size > items.size && items.indices.all { items[it] === list[it] }) {
+            val start = items.size
+            items.addAll(list.subList(start, list.size))
+            notifyItemRangeInserted(start, list.size - start)
+            return
+        }
         items.clear()
         items.addAll(list)
         notifyDataSetChanged()

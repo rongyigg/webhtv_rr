@@ -260,12 +260,12 @@
 
         </androidx.appcompat.widget.LinearLayoutCompat>
 
-        <!-- 下半区：站点 Tab + 海报行（12 + 38 + 215 = 265dp，正好是 540 - 24 - 251） -->
+        <!-- 下半区：站点 Tab + 海报行（4 + 38 + 223 = 265dp，正好是 540 - 24 - 251） -->
         <androidx.appcompat.widget.LinearLayoutCompat
             android:id="@+id/resultSection"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="12dp"
+            android:layout_marginTop="4dp"
             android:clipChildren="false"
             android:orientation="vertical"
             android:visibility="gone">
@@ -283,12 +283,13 @@
                 android:overScrollMode="never"
                 android:paddingBottom="2dp" />
 
-            <!-- 海报区：高度写死 215dp（原版 FrameLayout），卡片 120×180dp 海报 + 13sp 剧名。
-                 clipChildren=false：聚焦放大 1.08 的卡要能画出 215dp 容器（原版靠容器比卡高 8dp
-                 兜住放大，这里给 RecyclerView 加 8dp 顶部内边距做同样的留白）。 -->
+            <!-- 海报区：223dp。卡片约 207dp（180 海报 + 8 剧名间距 + 19 剧名），
+                 RecyclerView paddingTop 8dp 后占 8..215；聚焦放大 1.08 后是 -0.2..223.2 ——
+                 顶边正好落在容器顶（与 tab 行保持 10dp），底边正好落在容器底，剧名不会再被顶出屏幕。
+                 215dp 容器放不下：卡底 215 已经贴着屏幕底边，放大后剧名会被切掉一截。 -->
             <FrameLayout
                 android:layout_width="match_parent"
-                android:layout_height="215dp"
+                android:layout_height="223dp"
                 android:clipChildren="false"
                 android:clipToPadding="false"
                 android:descendantFocusability="afterDescendants">
@@ -302,7 +303,7 @@
                     android:overScrollMode="never"
                     android:paddingTop="8dp" />
 
-                <!-- 加载 / 空态提示：画在 215dp 容器内部，不改尺寸，也不参与焦点 -->
+                <!-- 加载 / 空态提示：画在 223dp 容器内部，不改尺寸，也不参与焦点 -->
                 <androidx.appcompat.widget.AppCompatTextView
                     android:id="@+id/posterEmpty"
                     android:layout_width="wrap_content"

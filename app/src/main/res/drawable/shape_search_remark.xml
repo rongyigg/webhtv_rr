@@ -2,9 +2,9 @@
 <!--
     搜索页结果卡「左下角集数标签」底板（原版 shape_vod_remark 的搜索页变体）。
 
-    标签贴在 8dp 圆角海报的左下角：左下角跟着海报裁成 8dp，右上角保留 4dp 小圆角，
-    左上 / 右下保持直角（与海报左边缘、下边缘齐平）。这样就不会再出现
-    「海报是圆的、标签左下角是直角」的缺口。
+    标签贴着海报的下边缘：底边两个角必须和海报的 8dp 圆角完全重合。
+    只要有一边留直角（之前右下角是 0），直角就会盖到海报的圆角轮廓之外，
+    看着就是「卡片右下角是直角、还溢出了红框」。右上角保留 4dp 小圆角，左上角直角（贴左边缘）。
 -->
 <shape xmlns:android="http://schemas.android.com/apk/res/android"
     android:shape="rectangle">
@@ -19,6 +19,7 @@
 
     <corners
         android:bottomLeftRadius="8dp"
+        android:bottomRightRadius="8dp"
         android:topRightRadius="4dp" />
 
 </shape>
