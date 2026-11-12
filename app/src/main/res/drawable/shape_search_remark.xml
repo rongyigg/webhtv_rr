@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    搜索页结果卡「左下角集数标签」底板（原版 shape_vod_remark 的搜索页变体）。
+
+    标签贴在 8dp 圆角海报的左下角：左下角跟着海报裁成 8dp，右上角保留 4dp 小圆角，
+    左上 / 右下保持直角（与海报左边缘、下边缘齐平）。这样就不会再出现
+    「海报是圆的、标签左下角是直角」的缺口。
+-->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+
+    <solid android:color="@color/bg_remark" />
+
+    <padding
+        android:bottom="4dp"
+        android:left="4dp"
+        android:right="4dp"
+        android:top="4dp" />
+
+    <corners
+        android:bottomLeftRadius="8dp"
+        android:topRightRadius="4dp" />
+
+</shape>

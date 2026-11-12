@@ -114,6 +114,7 @@
                         android:maxLines="1"
                         android:paddingStart="12dp"
                         android:paddingEnd="12dp"
+                        android:showSoftInputOnFocus="false"
                         android:singleLine="true"
                         android:textColor="@color/white"
                         android:textColorHint="@color/white"
@@ -283,12 +284,14 @@
                 android:overScrollMode="never"
                 android:paddingBottom="2dp" />
 
-            <!-- 海报区：高度写死 215dp（原版 FrameLayout），卡片 117×215dp -->
+            <!-- 海报区：高度写死 215dp（原版 FrameLayout），卡片 120×180dp 海报 + 13sp 剧名。
+                 clipChildren=false：聚焦放大 1.08 的卡要能画出 215dp 容器（原版靠容器比卡高 8dp
+                 兜住放大，这里给 RecyclerView 加 8dp 顶部内边距做同样的留白）。 -->
             <FrameLayout
                 android:layout_width="match_parent"
                 android:layout_height="215dp"
-                android:clipChildren="true"
-                android:clipToPadding="true"
+                android:clipChildren="false"
+                android:clipToPadding="false"
                 android:descendantFocusability="afterDescendants">
 
                 <androidx.recyclerview.widget.RecyclerView
@@ -297,7 +300,8 @@
                     android:layout_height="match_parent"
                     android:clipChildren="false"
                     android:clipToPadding="false"
-                    android:overScrollMode="never" />
+                    android:overScrollMode="never"
+                    android:paddingTop="8dp" />
 
                 <!-- 加载 / 空态提示：画在 215dp 容器内部，不改尺寸，也不参与焦点 -->
                 <androidx.appcompat.widget.AppCompatTextView

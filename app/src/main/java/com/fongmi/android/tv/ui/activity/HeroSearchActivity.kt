@@ -13,6 +13,7 @@ import android.view.KeyEvent
 import android.view.View
 import android.view.ViewGroup
 import android.view.ViewTreeObserver
+import android.view.WindowManager
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
 import android.widget.ImageView
@@ -185,6 +186,16 @@ class HeroSearchActivity : AppCompatActivity() {
     private var renderPending = false
     private var siteTabsPending = false
 
+    /**
+     * 焦点请求序号。
+     *
+     * 每次主动落焦点（[focusSite] / [focusPoster]）都 +1；所有延迟落焦点的回调
+     * （post / OnGlobalLayoutListener）都带上当时的序号，序号过期就放弃。
+     * 否则「用户已经用方向键走开了，上一帧排队的落焦点回调才执行」会把焦点抢回来，
+     * 表现就是焦点乱跳、甚至被顶回输入框。
+     */
+    private var focusToken = 0
+
     // ------------------------------------------------------------------
     // 生命周期
     // ------------------------------------------------------------------
@@ -200,6 +211,8 @@ class HeroSearchActivity : AppCompatActivity() {
         window.setBackgroundDrawable(ColorDrawable(AndroidColor.BLACK))
         WindowCompat.setDecorFitsSystemWindows(window, false)
         Util.hideSystemUI(this)
+        // 本页完全不用系统输入法：窗口级也声明「常隐藏」，进页面不会弹 IME。
+        window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_HIDDEN)
         setContentView(R.layout.activity_search_view)
         bindViews()
         setupLists()
@@ -215,6 +228,8 @@ class HeroSearchActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+        // 本页不用系统输入法：回到页面时确保没有残留的 IME 窗口。
+        hideSystemInput()
         // 从选集弹窗 / 播放页回来时，系统可能把焦点留空：补一次输入框焦点。
         if (window.decorView.findFocus() == null) input.post { focusInput() }
     }
@@ -306,10 +321,10 @@ class HeroSearchActivity : AppCompatActivity() {
 
     private fun setupInput() {
         input.filters = arrayOf(InputFilter.LengthFilter(SEARCH_KEYWORD_MAX_LENGTH))
-        // 聚焦不弹系统输入法：文字默认由页面内的虚拟键盘写入，
-        // 只有在输入框上按确定键（见 [showSystemInput]）才把系统输入法拉起来。
+        // 本页完全不用系统输入法：文字只由页面内的虚拟键盘写入。
+        // 三重保险：XML 里 showSoftInputOnFocus=false + 这里再关一次 + 窗口级常隐藏。
         input.showSoftInputOnFocus = false
-        // 离开输入框就收起系统输入法，避免它盖住下半区结果。
+        // 万一某些电视固件还是把 IME 弹起来，离开输入框时立刻收掉。
         input.setOnFocusChangeListener { _, hasFocus -> if (!hasFocus) hideSystemInput() }
         input.setOnKeyListener { _, keyCode, event ->
             if (event.action != KeyEvent.ACTION_DOWN) return@setOnKeyListener false
@@ -323,7 +338,7 @@ class HeroSearchActivity : AppCompatActivity() {
                 KeyEvent.KEYCODE_ENTER,
                 KeyEvent.KEYCODE_NUMPAD_ENTER,
                 -> {
-                    showSystemInput()
+                    confirmSearch()
                     true
                 }
 
@@ -496,29 +511,19 @@ class HeroSearchActivity : AppCompatActivity() {
     }
 
     private fun focusInput() {
+        ++focusToken
         input.showSoftInputOnFocus = false
         if (!input.requestFocus()) window.decorView.post { input.requestFocus() }
     }
 
-    /**
-     * 输入框上按确定键：这一次才拉起系统输入法。
-     *
-     * `showSoftInputOnFocus` 保持 false（聚焦输入框不会自动弹），
-     * 这里用 `showSoftInput` 显式请求，系统输入法仍可正常输入、回车仍走
-     * [EditorInfo.IME_ACTION_DONE] → [confirmSearch]。
-     */
-    private fun showSystemInput() {
-        val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager ?: return
-        input.requestFocus()
-        imm.showSoftInput(input, InputMethodManager.SHOW_IMPLICIT)
-    }
-
+    /** 兜底收掉系统输入法：本页不支持系统输入法，任何时候弹起来都要压回去。 */
     private fun hideSystemInput() {
         val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager ?: return
         imm.hideSoftInputFromWindow(input.windowToken, 0)
     }
 
     private fun focusKeyboard(index: Int) {
+        ++focusToken
         val target = index.coerceIn(0, SEARCH_KEYS.lastIndex)
         if (!keyAdapter.focusKey(keyboardRecycler, target)) {
             keyboardRecycler.post { keyAdapter.focusKey(keyboardRecycler, target) }
@@ -663,7 +668,7 @@ class HeroSearchActivity : AppCompatActivity() {
             input.setText(value)
             input.setSelection(value.length)
         }
-        // 用系统输入法敲完回车：先收键盘，再把焦点交给结果区。
+        // 本页不用系统输入法：搜索前再收一次，避免残留 IME 挡住结果区。
         hideSystemInput()
         recordHistory(value)
         performSearch(value, focusSite = true)
@@ -941,7 +946,8 @@ class HeroSearchActivity : AppCompatActivity() {
         selectedSite = target
         focusedSite = target
         render()
-        siteRecycler.post { focusTabWhenLaidOut(target) }
+        val token = ++focusToken
+        siteRecycler.post { focusTabWhenLaidOut(target, token) }
     }
 
     /**
@@ -950,14 +956,16 @@ class HeroSearchActivity : AppCompatActivity() {
      * 结果区刚从 GONE 变 VISIBLE 时 `findViewByPosition` 还是 null，单纯再 post 一次
      * 仍可能早于这一帧的布局（「搜索完焦点掉不回全部」就是这么来的）；
      * 这里用一次性的全局布局回调兜底，布局一完成立刻落焦点。
+     * [token] 过期（用户已经用方向键走开）就放弃，绝不把焦点抢回来。
      */
-    private fun focusTabWhenLaidOut(index: Int) {
+    private fun focusTabWhenLaidOut(index: Int, token: Int) {
+        if (token != focusToken) return
         if (siteAdapter.focusTab(siteRecycler, index)) return
         siteRecycler.viewTreeObserver.addOnGlobalLayoutListener(
             object : ViewTreeObserver.OnGlobalLayoutListener {
                 override fun onGlobalLayout() {
                     siteRecycler.viewTreeObserver.removeOnGlobalLayoutListener(this)
-                    siteAdapter.focusTab(siteRecycler, index)
+                    if (token == focusToken) siteAdapter.focusTab(siteRecycler, index)
                 }
             },
         )
@@ -1015,7 +1023,9 @@ class HeroSearchActivity : AppCompatActivity() {
     private fun focusRightFirstChip() {
         val recycler = if (history.isNotEmpty()) historyRecycler else wordRecycler
         val adapter = if (history.isNotEmpty()) historyAdapter else wordAdapter
+        val token = ++focusToken
         recycler.post {
+            if (token != focusToken) return@post
             val view = adapter.firstView(recycler) ?: return@post
             view.requestFocus()
         }
@@ -1031,10 +1041,18 @@ class HeroSearchActivity : AppCompatActivity() {
     private fun focusPoster(index: Int) {
         if (resultAdapter.itemCount == 0) return
         val target = index.coerceIn(0, resultAdapter.itemCount - 1)
+        val token = ++focusToken
+        if (resultAdapter.focusCard(posterRecycler, target)) return
+        // 目标卡还在屏幕外：滚动后最多再试两帧，序号过期（用户已经走开）就放弃。
+        retryFocusPoster(target, token, 2)
+    }
+
+    private fun retryFocusPoster(target: Int, token: Int, attempts: Int) {
+        if (attempts <= 0) return
         posterRecycler.post {
-            if (!resultAdapter.focusCard(posterRecycler, target)) {
-                posterRecycler.post { resultAdapter.focusCard(posterRecycler, target) }
-            }
+            if (token != focusToken) return@post
+            if (resultAdapter.focusCard(posterRecycler, target)) return@post
+            retryFocusPoster(target, token, attempts - 1)
         }
     }
 

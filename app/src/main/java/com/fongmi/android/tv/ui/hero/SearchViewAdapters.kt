@@ -76,6 +76,10 @@ internal const val SEARCH_FIRST_KEY_INDEX = 1
 internal const val SEARCH_HOUSE_KEY_INDEX = 5
 internal const val SEARCH_KEYWORD_MAX_LENGTH = 19
 
+/** 结果卡聚焦放大倍数与时长（原版 `mm3.f(recyclerView, 1.08f)` + 140ms）。 */
+private const val CARD_FOCUS_SCALE = 1.08f
+private const val CARD_FOCUS_MS = 140L
+
 /**
  * 虚拟键盘适配器。
  *
@@ -314,9 +318,11 @@ internal class SearchSiteAdapter(
     fun focusTab(recycler: RecyclerView, index: Int): Boolean {
         if (labels.isEmpty()) return false
         val target = index.coerceIn(0, labels.lastIndex)
+        val manager = recycler.layoutManager ?: return false
+        // 已经布局好的 Tab 直接落焦点，避免 scrollToPosition 引起的重排把焦点挤掉。
+        manager.findViewByPosition(target)?.let { return it.requestFocus() }
         recycler.scrollToPosition(target)
-        val view = recycler.layoutManager?.findViewByPosition(target) ?: return false
-        return view.requestFocus()
+        return false
     }
 
     internal class Holder(view: View) : RecyclerView.ViewHolder(view) {
@@ -334,6 +340,9 @@ internal class SearchSiteAdapter(
  * 字段映射：`vod.name` → 剧名；`vod.siteName` → 左上站点标签；`vod.remarks` → 左下集数标签；
  * `vod.pic` → 海报。图片走 Coil View 扩展（与首页 / 换源弹窗同一条链路），
  * `onViewRecycled` 里 `dispose()` 掉在途请求，避免快速滑动时旧图盖到新卡上。
+ *
+ * 焦点放大：原版 `mm3.f(recyclerView, 1.08f)` 给每张卡挂 `OnFocusChangeListener` + 子 View
+ * 挂载监听，聚焦放大到 1.08、失焦回到 1.0（140ms 减速插值）。这里同样处理。
  */
 internal class SearchResultAdapter(
     private val onOpen: (Vod) -> Unit,
@@ -343,6 +352,9 @@ internal class SearchResultAdapter(
     private val items = mutableListOf<Vod>()
 
     fun submit(list: List<Vod>) {
+        // 内容没变就不重绘：`render()` 会被站点 Tab 的焦点回调频繁触发，
+        // 每次都 notifyDataSetChanged 会把正在聚焦的卡重绑一遍，焦点就可能被挤到输入框。
+        if (items == list) return
         items.clear()
         items.addAll(list)
         notifyDataSetChanged()
@@ -364,20 +376,40 @@ internal class SearchResultAdapter(
         holder.remark.text = vod.remarks
         holder.remark.visibility = if (vod.remarks.isBlank()) View.GONE else View.VISIBLE
         bindImage(holder.image, vod.pic)
-        holder.itemView.setOnClickListener { onOpen(vod) }
-        holder.itemView.setOnKeyListener { _, keyCode, event ->
+        val card = holder.itemView
+        card.setOnClickListener { onOpen(vod) }
+        card.setOnKeyListener { _, keyCode, event ->
             if (event.action != KeyEvent.ACTION_DOWN) {
                 false
             } else {
                 onKey(holder.bindingAdapterPosition, keyCode)
             }
         }
+        // 原版 mm3.f：聚焦放大 1.08 / 失焦复原（140ms 减速插值）。
+        card.setOnFocusChangeListener { view, hasFocus ->
+            val scale = if (hasFocus) CARD_FOCUS_SCALE else 1f
+            view.animate()
+                .scaleX(scale)
+                .scaleY(scale)
+                .setDuration(CARD_FOCUS_MS)
+                .setInterpolator(DecelerateInterpolator())
+                .start()
+        }
+        // 复用的 view 可能还带着上一张卡的动画/缩放：绑定即校正到当前焦点态。
+        card.animate().cancel()
+        val scale = if (card.hasFocus()) CARD_FOCUS_SCALE else 1f
+        card.scaleX = scale
+        card.scaleY = scale
     }
 
     override fun onViewRecycled(holder: Holder) {
         holder.image.dispose()
         holder.image.tag = null
         holder.itemView.setOnKeyListener(null)
+        holder.itemView.setOnFocusChangeListener(null)
+        holder.itemView.animate().cancel()
+        holder.itemView.scaleX = 1f
+        holder.itemView.scaleY = 1f
     }
 
     private fun bindImage(image: ImageView, url: String) {
@@ -392,13 +424,17 @@ internal class SearchResultAdapter(
         }
     }
 
-    /** 把焦点送到第 [index] 张卡（越界自动收敛）。 */
+    /** 把焦点送到第 [index] 张卡（越界自动收敛）。返回 false 表示这一帧还没布局好，调用方下一帧重试。 */
     fun focusCard(recycler: RecyclerView, index: Int): Boolean {
         if (items.isEmpty()) return false
         val target = index.coerceIn(0, items.lastIndex)
+        val manager = recycler.layoutManager ?: return false
+        // 已经布局好的卡直接落焦点：不要再 scrollToPosition —— 那会触发一次滚动布局，
+        // 当前聚焦的卡可能被回收，焦点就掉到输入框上（「移动着突然跳到搜索框」）。
+        manager.findViewByPosition(target)?.let { return it.requestFocus() }
+        // 只有目标还在屏幕外才滚动，落焦点交给调用方在下一帧重试。
         recycler.scrollToPosition(target)
-        val view = recycler.layoutManager?.findViewByPosition(target) ?: return false
-        return view.requestFocus()
+        return false
     }
 
     internal class Holder(view: View) : RecyclerView.ViewHolder(view) {

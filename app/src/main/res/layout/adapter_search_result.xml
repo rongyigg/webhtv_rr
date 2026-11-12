@@ -6,9 +6,11 @@
       比可视宽度 912dp 多 24dp，第 7 张正好在屏幕右缘被裁 —— 与截图完全一致；
     - 剧名 13sp / `white_80` / 居中单行 / marginTop 8dp（同文件 L46-57）；
     - 焦点红框只包海报：`selector_vod` 挂在 `imageWrapper` 上，`duplicateParentState`
-      把根节点的 focused 状态透传下来；剧名在框外，所以不会再「框住卡片和字」，
-      框的上下四角也都是圆角（此前框住整卡、底边被屏幕裁掉才看着像下直角）；
-    - 海报圆角 6dp + `clipToOutline`（截图实测半径 ≈ 11px = 5.5dp），与框的 8dp 半径视觉贴合。
+      把根节点的 focused 状态透传下来；剧名在框外，所以不会再「框住卡片和字」；
+    - 海报圆角 8dp + `clipToOutline`，与焦点框 8dp 半径完全重合（原版 `Vod.Grid.Large` 也是 8dp），
+      红框严丝合缝贴住海报，不会再有「框圆卡方 / 卡角溢出框外」；
+    - 聚焦放大 1.08（原版 `mm3.f(recyclerView, 1.08f)`），由 `SearchResultAdapter` 挂在根节点上；
+    - 左下角集数标签用 `shape_search_remark`：左下角 8dp 跟着海报圆角走，不再露出直角。
 -->
 <androidx.appcompat.widget.LinearLayoutCompat xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="120dp"
@@ -55,7 +57,7 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_gravity="bottom|start"
-            android:background="@drawable/shape_vod_remark"
+            android:background="@drawable/shape_search_remark"
             android:ellipsize="end"
             android:singleLine="true"
             android:textColor="@color/white"
