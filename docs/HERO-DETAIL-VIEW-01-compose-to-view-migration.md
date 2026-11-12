@@ -580,3 +580,61 @@ HomeViewActivity.kt:2238/2239/2240 同形（adapter 里那一处）
 - 待真机验证：演员头像焦点态红圈完整包住头像、头像不再露到圈外；顶栏下划线在「搜索」下方 45..47dp、宽约 22dp；「设置」按 → 回到小房子、小房子按 ← 回到「设置」；分类 Tab 常态是胶囊、聚焦不再跳形；海报行静止 7 整卡 + 右侧 12dp 卡边，第 5 张起才滚动、居中时两侧各 3 整卡。
 - 回滚：`git checkout -- app/src/main/java/com/fongmi/android/tv/ui/activity/HomeViewActivity.kt app/src/main/res/drawable/shape_hero_detail_cast_border_focused.xml app/src/main/res/drawable/shape_hero_detail_cast_border_normal.xml`。
 
+### 10.14 长按 → 跳 Tab / 行尾翻页 / 小房子红圈 / 演员红圈配色（2026-11-12，未编译）
+
+用户报 4 个问题：① 首页卡片焦点向右**长按**会跳到 Tab 栏，极小几率崩溃但难复现；② 首页卡片到最右端（例如一页 20 张、后面还有）不会下探 / 翻页；③ 首页小房子未聚焦时有一圈红圈，要去掉；④ 详情页演员头像焦点红圈复用全局红框色，现在的纯红太刺眼。
+
+#### ① 长按 → 跳 Tab：整行左右键由 Activity 自己路由（原版 `l2(±1)` 语义）
+
+旧实现只拦「最后一列按 →」和「第 0 张按 ←」，中间列交给系统 `FocusFinder`。两个漏洞：
+
+1. `FocusFinder` 在最后一列找不到「同一光束」的候选时，会退化成**主轴搜索**，把焦点交给**上方**分类 Tab 行里最靠右那一项 —— 长按 → 一路按到行尾，最后一下就是这样跳到 Tab 栏的；
+2. 位置解析用 `findFocus()?.let { findContainingViewHolder(it)?.absoluteAdapterPosition } ?: focusedIndex`：holder 正好处在 `notifyItemChanged` / `notifyDataSetChanged` 之后的一帧时 `absoluteAdapterPosition` 是 `NO_POSITION(-1)`，`-1 != items.lastIndex` → **边界判断失效、事件漏给几何搜索**。这就是「极小几率」那一档。
+
+崩溃是同一个问题的下游：焦点落进 Tab 行 → `onTabFocused` 立刻 `tabAdapter.selectedIndex = index`（`notifyItemChanged`）+ `scrollTabToCenter`（`startSmoothScroll`）；这两步如果正撞上 Tab 行自己的 layout，就会抛 `IllegalStateException: Cannot call this method while RecyclerView is computing a layout or scrolling`。
+
+改法（`HomeViewActivity.kt`）：
+
+- 新增 `posterRowPosition()`：焦点在卡片子 View 上 → 向上找所属卡片；焦点是 RecyclerView 自己 → 退回 `focusedIndex`；`NO_POSITION` **原样返回 -1**，绝不伪装成「不是行尾」。
+- `dispatchKeyEvent` 把两段「只拦边界」的代码合并成一段：`posterFocused` 时 ←/→ **全部吃掉**，相邻卡片直接 `focusPoster(target)`（= 原版 `l2(±1)`），行首 / 行尾原地不动，位置未知也吃掉等下一帧。事件从此不会漏到 `FocusFinder`，几何跳转与下游崩溃一起消失。
+- `onTabFocused` 顶部加 `typeRecycler.isComputingLayout` 判断：布局中一律 `post { onTabFocused(index) }` 推迟一帧，`notifyItemChanged` / `startSmoothScroll` 不再可能撞进 layout。
+
+#### ② 行尾下探（翻页）：`PagingState` = 原版 `T0` / `R0` / `V0` / `U0`
+
+原版 `T1(Result)`（L927-983）与 `o2()`（L1742-1751）是一套完整分页：`T0` 当前 typeId、`R0` 每类已加载页、`V0` 还有下一页、`U0` 加载中；`V0 = page < pageCount || pageCount == 0`（L952），空页 / 整页重复条目则收口（L910 / L938-943）。
+
+本项目此前**完全没有分页**：`homeContent()` 或 `categoryContent(..., "1", ...)` 一次拉完就结束，所以行尾按 → 只会停住。
+
+新增（`HomeViewActivity.kt`）：
+
+```
+PagingState(typeId, siteKey, page, hasMore, loading, appending)   // 原版 T0 / - / R0 / V0 / U0 / -
+resetPaging(typeId, siteKey)      // 换源 / 切 Tab / 进出目录时整份重开
+applyFirstPageMeta(pageCount)     // hasMore = typeId != null && (1 < pageCount || pageCount == 0)
+requestNextPage()                 // o2()：categoryContent(key, typeId, page + 1, true, {})
+appendPage(list, site, pageCount) // T1 的追加分支：空页 / 全重复 → 收口；否则行尾追加
+```
+
+- 触发点两处：`onPosterFocused` 里焦点进到最后 `PAGE_PREFETCH_DISTANCE`（= 2）张时**预取**下一页；`dispatchKeyEvent` 行尾按 → 时兜底再要一次。两条都受 `hasMore` / `loading` 保护，不会重复请求。
+- 追加只走 `HeroPosterAdapter.append(next)` → `notifyItemRangeInserted`：已显示的卡片（含 1.1 倍放大的焦点卡）**不重新绑定**，焦点、缩放、Coil 已加载的图、Hero 区都不被打断（用 `submit` 的 `notifyDataSetChanged` 会让整排回池、焦点卡瞬间缩小并重载海报）。
+- 去重按 `posterKey`（= 原版按 `vod.getId()` 去重）：整页都重复说明源站没有新内容，直接收口，避免「一直按 → 一直追加同样的 20 张」。
+- 目录下探栈 `FolderDrillState` 多存一份 `paging`（原版 `u31.j` 存的就是页码）：出栈返回上一层后还能继续往下翻。快照时清掉 `loading / appending` —— 进目录会 `cancelResult()`，那一页永远不会回来。
+- **推荐 Tab 不分页**（`typeId = null`）：站点接口 `Spider.homeContent(boolean)` 没有页码参数，原版 `o2()` 第一条守卫也是 `T0 == null` 直接 return。可分页的是分类 Tab、目录下探，以及「首页只返回分类、自动加载第一个分类」那条路径（那里也补了 `resetPaging(first.typeId, ...)`）。
+
+#### ③ 小房子未聚焦红圈：`shape_home_logo_normal` 改成完全透明
+
+`selector_home_logo` 的默认档原来是 `shape_home_logo_normal` = 1dp `@color/red` 描边 + 透明填充，屏幕上就是一圈红圈。原版 `ref_docs/home_ui.png` 实测小房子周围是纯黑（x=52..100 / y=40..88 全 `#020201`），什么都不画。
+
+改法：`shape_home_logo_normal.xml` 去掉 `<stroke>`，只留 `solid=transparent`；`selector_home_logo.xml` 注释同步。该 drawable 只被 `selector_home_logo` 引用（换源弹窗用的是 `shape_home_logo_normal_white`），互不影响；焦点档 `shape_home_logo_focused`（红渐变实心圆）一行未改。
+
+#### ④ 演员焦点红圈配色：`hero_accent` → `osd_red_end`
+
+`shape_hero_detail_cast_border_focused.xml` 原来描边 `@color/hero_accent`（#FF0000 纯红），在 60dp 头像上又细又亮。改成全局「细线红」`@color/osd_red_end`（#FFE53935）—— `colors.xml` 里 `osd_red_end` 就是首页 Tab 选中态 / 换源弹窗 / 列表边框 / 选择卡片共用的那一支（`osd_focus` 也指向它），详情页这一圈不再出现第二种红。几何（2dp、不套 `<inset>`、放大后 64.8dp 与头像外沿重合）完全不动。
+
+#### 验证与回滚
+
+- 静态：四个 XML 用 Python `minidom` 解析通过（`shape_home_logo_normal` 已无 `stroke`；`shape_hero_detail_cast_border_focused` 的 stroke = `@color/osd_red_end`；两个 selector 各 2 个 item）；`HomeViewActivity.kt` 括号配平（294/294、955/955、15/15），`HeroPosterAdapter.kt`（20/20、72/72、5/5）；`git diff --check` 无空白错误。
+- 待真机验证：海报行任意位置长按 → / ← 都只在行内逐张移动，行尾停住且不再跳 Tab 栏、不再崩；分类 Tab / 目录下探滚到最后两张时自动追加下一页（焦点卡不缩小、Hero 不闪），行尾按 → 也能触发；推荐 Tab 行为与以前一致；小房子未聚焦时完全无边框、聚焦仍是红渐变圆；演员头像焦点圈与首页 Tab 选中态同色。
+- 回滚：`git checkout -- app/src/main/java/com/fongmi/android/tv/ui/activity/HomeViewActivity.kt app/src/main/java/com/fongmi/android/tv/ui/hero/HeroPosterAdapter.kt app/src/main/res/drawable/shape_home_logo_normal.xml app/src/main/res/drawable/selector_home_logo.xml app/src/main/res/drawable/shape_hero_detail_cast_border_focused.xml app/src/main/res/drawable/selector_hero_detail_cast_border.xml`。
+
+

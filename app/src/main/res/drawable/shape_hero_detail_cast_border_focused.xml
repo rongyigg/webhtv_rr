@@ -1,6 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-    头像焦点描边：2dp #FF0000，紧贴 60dp 头像框的外沿。
+    头像焦点描边：2dp 全局红框色（@color/osd_red_end = #E53935），紧贴 60dp 头像框的外沿。
+
+    【颜色 · 2026-11-12 用户反馈】原来用 @color/hero_accent（#FF0000 纯红），在 60dp 的头像上
+    又细又亮，肉眼非常刺眼。这里改成全局「细线红」@color/osd_red_end —— 首页 Tab 选中态、
+    换源弹窗、列表边框、选择卡片用的都是这一支（见 colors.xml 的 osd_red_end 注释），
+    详情页这一圈焦点框必须与它们同色，不再出现第二种红。
 
     **不要套 <inset>**：`GradientDrawable` 自己会把形状矩形按「半个描边宽」内缩，
     所以 60dp 的椭圆画 2dp 描边时，圆环正好落在 0..2dp（直径 56..60dp），外沿就是头像框边界。
@@ -14,6 +19,6 @@
     <solid android:color="@android:color/transparent" />
     <stroke
         android:width="2dp"
-        android:color="@color/hero_accent" />
+        android:color="@color/osd_red_end" />
 
 </shape>

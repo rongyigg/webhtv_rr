@@ -92,6 +92,20 @@ class HeroPosterAdapter(
 
     fun getItem(position: Int): HomePosterItem? = items.getOrNull(position)
 
+    /**
+     * 行尾追加下一页（首页「行尾下探」）。
+     *
+     * 只发 `notifyItemRangeInserted`：已显示的卡片（含正在 1.1 倍放大的焦点卡）不会被重新绑定，
+     * 焦点、缩放动画、Coil 已加载好的图全部原样保留 —— 这是它与 [submit] 的关键差别。
+     * 用 `notifyDataSetChanged` 追加会让整排 holder 回池，焦点卡瞬间缩小、海报重载，肉眼可见地闪一下。
+     */
+    fun append(next: List<HomePosterItem>) {
+        if (next.isEmpty()) return
+        val start = items.size
+        items = items + next
+        notifyItemRangeInserted(start, next.size)
+    }
+
     override fun getItemCount(): Int = items.size
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): ViewHolder {

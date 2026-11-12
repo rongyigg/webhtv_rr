@@ -226,6 +226,31 @@ class HomeViewActivity : AppCompatActivity() {
     private var focusedIndex: Int = 0
 
     /**
+     * 海报行的翻页状态（原版 `HomeActivityV2` 的 `T0` / `R0` / `V0` / `U0` 四件套）。
+     *
+     * [PagingState.typeId] = null 表示**这个列表没有页码**：首页「推荐」走 `homeContent()`，
+     * 而站点接口 `Spider.homeContent(boolean)` 根本没有页码参数，原版同样不给推荐流翻页
+     * （`o2()` 的第一条守卫就是 `T0 == null` 直接 return）。分类 Tab / 目录下探才有页码。
+     */
+    private data class PagingState(
+        /** 当前列表的 typeId（原版 `T0`）；null = 这个列表不分页。 */
+        val typeId: String? = null,
+        /** 当前列表所属接口源：换源后迟到的下一页结果必须丢弃。 */
+        val siteKey: String = "",
+        /** 已经显示的页码（原版 `R0` 的计数器）；1 = 只有首屏。 */
+        val page: Int = 1,
+        /** 后面还有没有页（原版 `V0`）。 */
+        val hasMore: Boolean = false,
+        /** 下一页请求在途（原版 `U0`）。 */
+        val loading: Boolean = false,
+        /** 在途的这次请求是「追加」而不是「首屏」：结果落地走 [appendPage]。 */
+        val appending: Boolean = false,
+    )
+
+    /** 当前海报行的翻页状态；每次换列表（换源 / 切 Tab / 进出目录）都要重开一份。 */
+    private var paging = PagingState()
+
+    /**
      * 原版 `HomeActivityV2.c1`：首页下探栈。
      *
      * 每进一层目录，先把**上一层整页状态**压进来（原版 `u31`：列表、选中位、Tab、焦点标记）；
@@ -248,6 +273,12 @@ class HomeViewActivity : AppCompatActivity() {
         val focusedIndex: Int,
         val tabIndex: Int,
         val lastFocusedTabIndex: Int,
+        /**
+         * 上一层的翻页状态（原版 `u31.j` 存的就是 `R0` 里的页码）。
+         *
+         * 出栈恢复它，返回上一层后还能继续往下翻，而不是退回「只有首屏、没有下一页」。
+         */
+        val paging: PagingState,
     )
 
     /** 当前接口源真实返回的分类（`Result.types`）：Tab 列表的唯一数据源。 */
@@ -752,11 +783,18 @@ class HomeViewActivity : AppCompatActivity() {
             val list = result.list.orEmpty()
             val types = result.types.orEmpty()
             list.forEach { it.setSite(site) }
+            // 【翻页追加】这次结果是「下一页」：只往行尾追加，绝不重走首页 / 目录的首屏逻辑
+            // （原版 `T1(Result)` 的 `z` 分支，L927-983：`B0` 只 `addAll`、不 `clear`，
+            //  Tab 栏 / 空态 / 自动分类一概不碰）。必须在「下探目录」判断之前分派。
+            if (paging.appending) {
+                appendPage(list, site, result.pageCount)
+                return@observe
+            }
             // 【下探中】这次结果属于当前目录：只替换海报行，绝不改 Tab 栏 / 首页状态，
             // 也绝不重新走首页的空态 / 自动分类逻辑（原版 `B2(List)`：只 `B0.clear/addAll`
             // + `D2(0,...)` 重画第 0 条）。
             if (folderStack.isNotEmpty()) {
-                renderFolder(list, site)
+                renderFolder(list, site, result.pageCount)
                 return@observe
             }
             updateTabs(site, types)
@@ -769,6 +807,9 @@ class HomeViewActivity : AppCompatActivity() {
                     if (categoryKey != autoCategoryKey) {
                         autoCategoryKey = categoryKey
                         loadedTabKey = tabKeyOf(1)
+                        // 这一页内容来自分类接口（不是 homeContent）：记住 typeId，
+                        // 行尾才能继续下探第 2、3… 页（原版 L888-892 同一处理）。
+                        resetPaging(first.typeId, site.key.orEmpty())
                         Log.d(TAG, "首页列表为空，自动加载第一个分类: ${first.typeName}(${first.typeId})")
                         siteViewModel.categoryContent(site.key, first.typeId, "1", true, hashMapOf())
                         return@observe
@@ -795,7 +836,7 @@ class HomeViewActivity : AppCompatActivity() {
                 handler.postDelayed(retry, EMPTY_RETRY_MS)
                 return@observe
             }
-            renderHome(list, site)
+            renderHome(list, site, result.pageCount)
         }
     }
 
@@ -852,6 +893,8 @@ class HomeViewActivity : AppCompatActivity() {
         // 推荐 Tab 的「已加载」标识跟着源走：换源后必须重新请求。
         loadedTabKey = HOME_TAB_PREFIX + loadedHomeSiteKey
         categoryTabActive = false
+        // 推荐流没有页码（`Spider.homeContent(boolean)` 没有 page 参数）：翻页状态整份重开。
+        resetPaging(typeId = null, siteKey = loadedHomeSiteKey)
         if (resetEmptyRetry) emptyRetryUsed = false
         Log.d(TAG, "请求 homeContent（$reason）: key=${site.key} name=${site.displayName}")
         if (site.key.isNullOrEmpty()) {
@@ -901,9 +944,11 @@ class HomeViewActivity : AppCompatActivity() {
      * 提交列表 → 渲染第一张卡 → `showContent()`。
      * 三步在同一个主线程 turn 里，所以 loading 与第一屏内容之间没有中间帧。
      */
-    private fun renderHome(list: List<Vod>, site: Site) {
+    private fun renderHome(list: List<Vod>, site: Site, pageCount: Int) {
         val next = buildPosterItems(list, site)
         items = next
+        // 整页落地：按 `Result.pageCount` 重算「后面还有没有页」（原版 L952 的 `V0`）。
+        applyFirstPageMeta(pageCount)
         // 换了一整页数据：上一页解析出来的横图地址全部作废（换源 / 换 Tab 后 key 可能撞上旧值）。
         syncBackdrops.clear()
         // 上一页的窗口预取同样作废：下标已经指向另一批条目，整批取消后由 [updateTmdbWindow] 重建。
@@ -1015,6 +1060,79 @@ class HomeViewActivity : AppCompatActivity() {
             }
             .toMap()
     }.getOrDefault(emptyMap())
+
+    // ==================================================================
+    // 翻页（行尾下探下一页）
+    // ==================================================================
+
+    /**
+     * 重开一份翻页状态：页码归 1、清掉「还有下一页」、作废在途的追加标记。
+     *
+     * 每次换列表（换源 / 切 Tab / 进出目录）都必须调用，否则上一份列表的页码会串到新列表上，
+     * 出现「第 3 页的内容接到另一个分类后面」。
+     */
+    private fun resetPaging(typeId: String?, siteKey: String) {
+        paging = PagingState(typeId = typeId, siteKey = siteKey)
+    }
+
+    /**
+     * 整页数据落地后按 `Result.pageCount` 决定「后面还有没有页」。
+     *
+     * 判据逐字照抄原版 L952：`V0 = page < pageCount || pageCount == 0`（此处 page = 1）。
+     * `pageCount == 0` = 源站没给总页数（大量 JS 源如此），此时按「还有」处理，
+     * 一直翻到真的取回一页空结果才收口（原版 L903-916）。
+     */
+    private fun applyFirstPageMeta(pageCount: Int) {
+        val hasMore = paging.typeId != null && (1 < pageCount || pageCount == 0)
+        paging = paging.copy(page = 1, hasMore = hasMore, loading = false, appending = false)
+    }
+
+    /**
+     * 行尾下探下一页（原版 `o2()`，L1742-1751）。
+     *
+     * 守卫顺序与原版逐条对应：没有页码（推荐流）→ 没有下一页 → 已经在加载 → 源已换。
+     * 请求走分类接口 `categoryContent(key, typeId, page + 1, true, extend)`（原版 `H.c(...)`）。
+     */
+    private fun requestNextPage() {
+        val typeId = paging.typeId ?: return
+        if (!paging.hasMore || paging.loading) return
+        // 用列表自己的源 key（目录卡片可能来自别的源），换源时 `resetPaging` 已经整份作废。
+        val siteKey = paging.siteKey
+        if (siteKey.isEmpty()) return
+        val next = paging.page + 1
+        paging = paging.copy(loading = true, appending = true)
+        Log.d(TAG, "海报行下探第 $next 页: site=$siteKey typeId=$typeId")
+        siteViewModel.categoryContent(siteKey, typeId, next.toString(), true, hashMapOf())
+    }
+
+    /**
+     * 下一页落地（原版 `T1(Result)` 的追加分支，L927-983）：**只**往行尾追加，绝不重画整排。
+     *
+     * 1. 空页 → 收口（原版 L910 `V0 = false`）；
+     * 2. 按 `posterKey` 去重（原版按 `vod.getId()` 去重，L928-937）：整页都是重复条目也收口；
+     * 3. `posterAdapter.append` 只发 `notifyItemRangeInserted`：已显示的卡片（含焦点卡）
+     *    不会被重新绑定，焦点、1.1 倍放大、Coil 已加载的图、Hero 区都不会被打断。
+     */
+    private fun appendPage(list: List<Vod>, site: Site, pageCount: Int) {
+        val page = paging.page + 1
+        paging = paging.copy(page = page, loading = false, appending = false)
+        if (list.isEmpty()) {
+            paging = paging.copy(hasMore = false)
+            Log.d(TAG, "第 $page 页为空，翻页收口（共 ${items.size} 条）")
+            return
+        }
+        val known = items.mapTo(HashSet()) { it.posterKey }
+        val fresh = buildPosterItems(list, site).filter { it.posterKey !in known }
+        paging = paging.copy(hasMore = page < pageCount || pageCount == 0)
+        if (fresh.isEmpty()) {
+            paging = paging.copy(hasMore = false)
+            Log.d(TAG, "第 $page 页全是重复条目，翻页收口（共 ${items.size} 条）")
+            return
+        }
+        items = items + fresh
+        posterAdapter.append(fresh)
+        Log.d(TAG, "第 $page 页追加 ${fresh.size} 条，共 ${items.size} 条，hasMore=${paging.hasMore}")
+    }
 
     // ==================================================================
     // Hero 渲染（D2 / E2）
@@ -1466,37 +1584,29 @@ class HomeViewActivity : AppCompatActivity() {
             key == KeyEvent.KEYCODE_DPAD_CENTER ||
             key == KeyEvent.KEYCODE_ENTER
 
-        // ── 海报行最左端按 ←：原地不动 ─────────────────────────────────────────
-        // 原版（Leanback 的横向列表）走到行首之后 ← 只会在行内「无处可去」，绝不会把焦点
-        // 交给上面的分类 Tab / 小房子。这里的 RecyclerView 没有行首边界，行首再按 ← 会被
-        // 默认的 `FocusFinder` 往上跳、落到顶栏 —— 必须在 Activity 层直接吃掉。
-        // 条件：← 键 + 焦点在海报行 + 当前就是第 0 张（原版 `HomeActivityV2` 的同一语义）。
-        // DOWN 与 UP 一起吞：只吞 DOWN 会让抬手事件漏给默认焦点搜索，形成「半截按键」。
-        if (key == KeyEvent.KEYCODE_DPAD_LEFT && posterFocused) {
-            // 下标以**真正持有焦点的那个 View** 为准：`findContainingViewHolder` 会向上找到
-            // 它所属的卡片（焦点通常落在卡片内部的子 View 上）。焦点落在 RecyclerView 自己
-            // 身上时退回 `focusedIndex`（它在 `applyHero()` 里与焦点同步更新）。
-            val position = recycler.findFocus()
-                ?.let { recycler.findContainingViewHolder(it)?.absoluteAdapterPosition }
-                ?: focusedIndex
-            // 只拦第 0 张：NO_POSITION(-1) / 其它下标一律放行，行内左右移动保持原样。
-            if (position == 0) {
-                return true
+        // ── 海报行 ← / →：整行自己路由，行首 / 行尾原地不动 ─────────────────────
+        // 原版（Leanback 横向列表）左右键只改「选中位」：`l2(±1)` 先做边界判断，越界直接
+        // return，焦点永远出不了这一行（`HomeActivityV2` L1210-1213 / L1721-1733）。
+        // RecyclerView 没有这条边界：走到最后一列再按 → 时，`FocusFinder` 在同一条「光束」里
+        // 找不到候选，会退化成「主轴搜索」，把焦点交给**上方**分类 Tab 行里最靠右的那一项 ——
+        // 这就是「长按 → 跳到 Tab 栏」的来源；焦点落进 Tab 行还会立刻刷新选中态
+        // （`notifyItemChanged` + 220ms 后整页重载），撞上 Tab 行自己的布局过程就是那个
+        // 「极小几率、难复现」的崩溃。所以这里不再「只拦边界、其余交给系统」，而是整行左右键
+        // 都由自己路由：相邻卡片 → 直接 `focusPoster`；行首 / 行尾 → 吃掉（行尾顺带下探下一页）；
+        // 位置未知（`NO_POSITION`，正好在 notify 之后的一帧）→ 也吃掉，绝不漏给几何搜索。
+        if ((key == KeyEvent.KEYCODE_DPAD_LEFT || key == KeyEvent.KEYCODE_DPAD_RIGHT) && posterFocused) {
+            val position = posterRowPosition()
+            if (position != RecyclerView.NO_POSITION) {
+                val target = if (key == KeyEvent.KEYCODE_DPAD_RIGHT) position + 1 else position - 1
+                if (target in items.indices) {
+                    // 只有真正的按下（含连发）才挪焦点；抬起事件一并吞掉，不留「半截按键」。
+                    if (event.action == KeyEvent.ACTION_DOWN) focusPoster(target)
+                } else if (key == KeyEvent.KEYCODE_DPAD_RIGHT && event.action == KeyEvent.ACTION_DOWN) {
+                    // 行尾：后面还有页就先下探下一页（原版 `V1()` / `o2()`），没有就原地不动。
+                    requestNextPage()
+                }
             }
-        }
-
-        // ── 海报行最右端按 →：原地不动 ─────────────────────────────────────────
-        // 原版 Leanback 的横向列表走到末列之后 → 会天然停住；RecyclerView 没有这个边界，
-        // 默认的 `FocusFinder` 会继续往右 / 往上找可聚焦控件（顶栏 Tab、小房子），
-        // 于是「最后一列按 →」会跳到文档里更靠右（或更靠上）的控件。必须在这里吃掉。
-        if (key == KeyEvent.KEYCODE_DPAD_RIGHT && posterFocused && items.isNotEmpty()) {
-            val position = recycler.findFocus()
-                ?.let { recycler.findContainingViewHolder(it)?.absoluteAdapterPosition }
-                ?: focusedIndex
-            // 只拦最后一列；中间列继续走默认的左右移动。
-            if (position == items.lastIndex) {
-                return true
-            }
+            return true
         }
 
         // ── ACTION_UP：真正的抬手，长按状态只在这里复位 ─────────────────────────
@@ -1789,6 +1899,9 @@ class HomeViewActivity : AppCompatActivity() {
         scrollPostersTo(position)
         // 焦点一变：立刻掐断上一条请求、发起这一条，并重铺 i-2 … i+2 的预取窗口。
         requestFocusedTmdbDetail()
+        // 【行尾预取】焦点进到最后 [PAGE_PREFETCH_DISTANCE] 张时就提前拉下一页：
+        // 用户一路按 → 到行尾时新卡片已经追加好，翻页是「无缝」的，不用停在行尾等网络。
+        if (position >= items.size - PAGE_PREFETCH_DISTANCE) requestNextPage()
     }
 
     /**
@@ -1855,6 +1968,9 @@ class HomeViewActivity : AppCompatActivity() {
                 focusedIndex = focusedIndex,
                 tabIndex = tabAdapter.selectedIndex,
                 lastFocusedTabIndex = lastFocusedTabIndex,
+                // 快照里清掉在途标记：进目录会 `cancelResult()`，那一页永远不会回来，
+                // 原样存下去会让返回后的行尾翻页被 `loading` 永久卡住。
+                paging = paging.copy(loading = false, appending = false),
             )
         )
         // 2.【原版 B0.clear()】整排立刻清空（Adapter 与 Activity 两份列表必须同步换掉）。
@@ -1872,6 +1988,8 @@ class HomeViewActivity : AppCompatActivity() {
         posterEmpty.visibility = View.GONE
         posterProgress.visibility = View.VISIBLE
         // 6.【原版 H.c(siteKey, vod.getId(), "1", new HashMap())】
+        //    这一层的翻页上下文 = 目录自己的 id：行尾还能继续下探第 2、3… 页。
+        resetPaging(vod.id, site.key.orEmpty())
         Log.d(TAG, "下探目录: site=${site.key} id=${vod.id} name=${vod.name}")
         siteViewModel.categoryContent(site.key, vod.id, "1", true, hashMapOf())
     }
@@ -1882,9 +2000,11 @@ class HomeViewActivity : AppCompatActivity() {
      * Tab 栏 / 首页的空态与自动分类逻辑一律不动 —— 目录结果绝不能冒充「推荐」首页数据，
      * 这正是「下探之后整页被同质化卡片污染」的根源。
      */
-    private fun renderFolder(list: List<Vod>, site: Site) {
+    private fun renderFolder(list: List<Vod>, site: Site, pageCount: Int) {
         val next = buildPosterItems(list, site)
         items = next
+        // 这一层目录的首屏落地：同样按 `Result.pageCount` 决定后面还有没有页。
+        applyFirstPageMeta(pageCount)
         // 换了一整页目录数据：上一页解析出来的横图 / 预取窗口全部作废。
         syncBackdrops.clear()
         tmdbWindowJobs.values.forEach { it.cancel() }
@@ -1919,6 +2039,8 @@ class HomeViewActivity : AppCompatActivity() {
         siteViewModel.cancelResult()
         val state = folderStack.removeLast()
         items = state.items
+        // 出栈恢复上一层的翻页状态（原版 `U1()` 连 `R0` 的页码一起还原）：返回后还能继续翻页。
+        paging = state.paging
         syncBackdrops.clear()
         tmdbWindowJobs.values.forEach { it.cancel() }
         tmdbWindowJobs.clear()
@@ -1955,11 +2077,30 @@ class HomeViewActivity : AppCompatActivity() {
         if (folderStack.isEmpty()) return false
         folderStack.clear()
         siteViewModel.cancelResult()
+        // 目录层作废：翻页状态一起清掉，随后的 refreshHome / selectTab 会按新列表重开。
+        resetPaging(typeId = null, siteKey = "")
         heroInfo.visibility = View.VISIBLE
         return true
     }
 
     private fun onTabFocused(index: Int) {
+        // 【崩溃防线】焦点变化回调可能发生在 Tab 行**自己的布局过程中**（长按 → 被几何搜索
+        // 抢到 Tab 栏，或 `focusTab()` 在 post 里抢焦点时撞上 layout）。此刻
+        // `notifyItemChanged` / `startSmoothScroll` 会抛
+        // `IllegalStateException: Cannot call this method while RecyclerView is computing
+        // a layout or scrolling` —— 这正是「极小几率、难复现」的那个崩溃。
+        // 布局中一律推迟到下一拍：选中态与请求都不会丢，只是晚一帧。
+        if (typeRecycler.isComputingLayout) {
+            typeRecycler.post {
+                // 推迟一帧后必须复核：这一拍焦点可能已经移走，绝不能把「刚才那一下」当成当前选中，
+                // 否则 220ms 后 `selectTab` 会去加载一个用户早已离开的分类。
+                val focused = typeRecycler.findFocus()
+                val position = focused
+                    ?.let { typeRecycler.findContainingViewHolder(it)?.absoluteAdapterPosition }
+                if (position == index) onTabFocused(index)
+            }
+            return
+        }
         // 记住停留位置：海报行 ↑ / 小房子 ↓ 都要回到这一个是第几个 Tab。
         lastFocusedTabIndex = index
         // 【居中】焦点一动就先把选中的 Tab 平滑滚到屏幕正中（与海报行同一套几何），
@@ -2000,6 +2141,8 @@ class HomeViewActivity : AppCompatActivity() {
         if (index <= 0) {
             categoryTabActive = false
             if (key == loadedTabKey && items.isNotEmpty()) return
+            // 推荐流没有页码：翻页状态整份重开（`refreshHome` 里也会做一次，这里先清干净）。
+            resetPaging(typeId = null, siteKey = site.key.orEmpty())
             refreshHome("推荐 Tab")
             return
         }
@@ -2008,6 +2151,8 @@ class HomeViewActivity : AppCompatActivity() {
         if (key == loadedTabKey && items.isNotEmpty()) return
         loadedTabKey = key
         categoryTabActive = true
+        // 换分类 = 换一份可分页的列表：页码归 1，typeId 换成这个分类。
+        resetPaging(type.typeId, site.key.orEmpty())
         Log.d(TAG, "切换分类: ${type.typeName}(${type.typeId})")
         siteViewModel.categoryContent(site.key, type.typeId, "1", true, hashMapOf())
     }
@@ -2032,6 +2177,22 @@ class HomeViewActivity : AppCompatActivity() {
         val smoothScroller = CenterSmoothScroller(this)
         smoothScroller.targetPosition = index
         (recycler.layoutManager as LinearLayoutManager).startSmoothScroll(smoothScroller)
+    }
+
+    /**
+     * 海报行里「真正持有焦点的那个下标」。
+     *
+     * - 焦点在卡片内部子 View 上 → `findContainingViewHolder` 向上找到它所属的卡片；
+     * - 焦点就是 RecyclerView 自己（下探目录时 `recycler.requestFocus()`）→ 退回 [focusedIndex]
+     *   （它在 `applyHero()` 里与焦点同步更新）；
+     * - holder 正好处在 notify / 布局过程中 → `absoluteAdapterPosition` 是 `NO_POSITION`，
+     *   此时**不能**当成「不是行尾」放行（放行 = 几何搜索把焦点交给 Tab 栏），原样返回 -1，
+     *   由调用方吃掉这次按键，等下一帧位置稳定再正常移动。
+     */
+    private fun posterRowPosition(): Int {
+        val focus = recycler.findFocus() ?: return focusedIndex
+        val holder = recycler.findContainingViewHolder(focus) ?: return focusedIndex
+        return holder.absoluteAdapterPosition
     }
 
     /** 把焦点交给第 [index] 张卡；目标还没布局出来就先瞬移定位，再在下一拍补抢。 */
@@ -2122,6 +2283,14 @@ class HomeViewActivity : AppCompatActivity() {
 
         /** 分类 Tab 间距：同文件 L786 `K.setHorizontalSpacing(g2.b(12))`。 */
         private const val TAB_GAP_DP = 12
+
+        /**
+         * 行尾预取距离：焦点进到最后 2 张时就提前请求下一页（原版靠滚动监听触发）。
+         *
+         * 与 TMDB 详情的 `i-2 … i+2` 滑动窗口同一思路：等真的按到行尾再请求，用户会先看到
+         * 一次「卡住」；预取把这个等待藏进用户滑到最后两张的过程中。
+         */
+        private const val PAGE_PREFETCH_DISTANCE = 2
 
         /**
          * 顶栏文字间距：同文件 L780 `J.setHorizontalSpacing(g2.b(16))`。

@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 头像描边：常态 1dp 半透明白，焦点 2dp 纯红。 -->
+<!-- 头像描边：常态 1dp 半透明白，焦点 2dp 全局红框色（@color/osd_red_end，与首页 Tab / 换源弹窗同色）。 -->
 <selector xmlns:android="http://schemas.android.com/apk/res/android">
 
     <item

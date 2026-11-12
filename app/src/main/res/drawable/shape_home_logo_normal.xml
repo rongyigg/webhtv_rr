@@ -1,21 +1,21 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  首页 homeBtn「未聚焦」底：细红边框 + 透明填充。
+  首页 homeBtn「未聚焦」底：完全透明，不画任何边框。
+
+  【用户反馈 · 2026-11-12】未聚焦时小房子外面有一圈红圈，要求去掉。
+  旧版这里是 1dp @color/red 描边 + 透明填充，屏幕上就是一个红圈；原版
+  ref_docs/home_ui.png 实测小房子周围什么都没有（x=52..100 / y=40..88 全是 #020201
+  的纯黑底），所以常态档必须完全透明：solid 透明、无 stroke。
 
   为什么另建一个 shape 而不是复用 `shape_home_logo_normal_white`：
   后者是 `selector_home_logo_source`（换源弹窗 dialog_source.xml 里的小房子，底是浅灰面板）
-  的常态态，填充 @color/white_10；首页顶栏是纯黑底，原版截图 ref_docs/home_ui.png 里
-  小房子周围没有可见的圆底（x=52..100 / y=40..88 实测 #020201，不是 #1A1A1A），
-  所以首页这一档按需求画细红边框、不铺填充。
+  的常态档，填充 @color/white_10；首页顶栏是纯黑底，铺那层白 10% 会显出一块灰圆底。
+  两处底色不同，所以各自一份，互不影响。
 
-  颜色只用真值：@color/red = #E50914，来源 ref_docs/shape_red_bar.xml 与
-  ref_docs/shape_tmdb_badge.xml 的 `<solid android:color="#e50914"/>`，不写自编色值。
-  1dp 描边即「细」；圆取 oval，与 ref_docs/shape_home_logo_normal_white.xml 同形。
+  焦点档仍是 `shape_home_logo_focused`（红渐变实心胶囊，与首页分类 Tab 同源）。
+  圆取 oval，与 ref_docs/shape_home_logo_normal_white.xml 同形，保证两档切换时外轮廓不变。
 -->
 <shape xmlns:android="http://schemas.android.com/apk/res/android"
     android:shape="oval">
     <solid android:color="@android:color/transparent" />
-    <stroke
-        android:width="1dp"
-        android:color="@color/red" />
 </shape>
