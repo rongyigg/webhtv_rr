@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    按钮焦点态：横向渐变 #E50914 → #FF7A85 + 4dp 圆角。
+    色值与 HeroFocusBrush（home_tab_focus_start → home_tab_focus_end）同源。
+-->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+
+    <gradient
+        android:angle="0"
+        android:endColor="@color/home_tab_focus_end"
+        android:startColor="@color/home_tab_focus_start"
+        android:type="linear" />
+
+    <corners android:radius="4dp" />
+
+</shape>

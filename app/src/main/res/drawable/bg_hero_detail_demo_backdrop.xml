@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    静态骨架用背景大图占位：深青蓝斜向渐变，不联网。
+    真实页面由 Coil 加载 TMDB backdrop，这里只用来观察两层遮罩的明暗过渡。
+-->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+
+    <gradient
+        android:angle="315"
+        android:centerColor="#FF203A43"
+        android:endColor="#FF0F2027"
+        android:startColor="#FF2C5364"
+        android:type="linear" />
+
+</shape>

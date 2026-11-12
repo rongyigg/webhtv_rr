@@ -1,0 +1,92 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Hero 详情页（纯 View）静态骨架专用样式。
+
+    只服务 activity_hero_detail_view.xml，尺寸全部照抄 HeroDetailActivity.kt：
+    - 按钮：36dp 高 / 13sp 加粗 / 左右 16dp / 图标文字间距 4dp / 4dp 圆角
+    - 演员项：76dp 宽 / 头像 60dp / 名字 12sp / 项间距 12dp
+
+    真实数据、焦点流转、点击事件都不在这里，后续 Plan A 接逻辑时直接复用这些样式。
+-->
+<resources>
+
+    <!-- 显式基类，避免带点号的样式名去猜不存在的父样式。 -->
+    <style name="Widget.HeroDetail" parent="@android:style/Widget" />
+
+    <!-- 按钮组单颗按钮：播放 / 换源 / 收藏共用。 -->
+    <style name="Widget.HeroDetail.ActionButton">
+        <item name="android:layout_width">wrap_content</item>
+        <item name="android:layout_height">36dp</item>
+        <item name="android:gravity">center_vertical</item>
+        <item name="android:paddingStart">16dp</item>
+        <item name="android:paddingEnd">16dp</item>
+        <item name="android:background">@drawable/selector_hero_detail_action</item>
+        <item name="android:drawablePadding">4dp</item>
+        <item name="android:textColor">@color/white</item>
+        <item name="android:textSize">13sp</item>
+        <item name="android:textStyle">bold</item>
+        <item name="android:singleLine">true</item>
+        <item name="android:includeFontPadding">false</item>
+        <item name="android:focusable">true</item>
+        <item name="android:focusableInTouchMode">true</item>
+        <item name="android:clickable">true</item>
+    </style>
+
+    <!-- 演员项：固定 76dp 宽，头像和名字纵向居中。 -->
+    <style name="Widget.HeroDetail.CastItem">
+        <item name="android:layout_width">76dp</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:orientation">vertical</item>
+        <item name="android:gravity">center_horizontal</item>
+        <item name="android:focusable">true</item>
+        <item name="android:focusableInTouchMode">true</item>
+        <item name="android:clickable">true</item>
+        <item name="android:descendantFocusability">blocksDescendants</item>
+        <item name="android:clipChildren">false</item>
+        <item name="android:clipToPadding">false</item>
+    </style>
+
+    <!--
+        头像外框：60dp 圆形。
+        背景只负责提供圆形 outline（clipToOutline 用），描边放在 foreground，
+        这样 1dp/2dp 的圆环画在图片之上，和 Compose 的 border 顺序一致。
+    -->
+    <style name="Widget.HeroDetail.CastAvatarFrame">
+        <item name="android:layout_width">60dp</item>
+        <item name="android:layout_height">60dp</item>
+        <item name="android:background">@drawable/shape_hero_detail_cast_avatar</item>
+        <item name="android:foreground">@drawable/selector_hero_detail_cast_border</item>
+        <item name="android:clipToOutline">true</item>
+        <item name="android:duplicateParentState">true</item>
+        <item name="android:stateListAnimator">@animator/hero_cast_focus_scale</item>
+    </style>
+
+    <!-- 头像图：真实页面由 Coil 填，静态骨架用本地渐变占位。 -->
+    <style name="Widget.HeroDetail.CastAvatar">
+        <item name="android:layout_width">match_parent</item>
+        <item name="android:layout_height">match_parent</item>
+        <item name="android:scaleType">centerCrop</item>
+        <item name="android:src">@drawable/bg_hero_detail_demo_avatar</item>
+        <item name="android:contentDescription">@null</item>
+    </style>
+
+    <!-- 演员名：12sp 单行省略，焦点态纯白、常态 80% 白。 -->
+    <style name="Widget.HeroDetail.CastName">
+        <item name="android:layout_width">match_parent</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:layout_marginTop">6dp</item>
+        <item name="android:gravity">center</item>
+        <item name="android:singleLine">true</item>
+        <item name="android:ellipsize">end</item>
+        <item name="android:duplicateParentState">true</item>
+        <item name="android:textColor">@color/selector_hero_detail_cast_name</item>
+        <item name="android:textSize">12sp</item>
+    </style>
+
+    <!-- 演员项之间的 12dp 间距（对应 Compose Arrangement.spacedBy）。 -->
+    <style name="Widget.HeroDetail.CastGap">
+        <item name="android:layout_width">12dp</item>
+        <item name="android:layout_height">1dp</item>
+    </style>
+
+</resources>

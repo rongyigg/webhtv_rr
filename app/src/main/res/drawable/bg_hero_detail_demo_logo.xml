@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    静态骨架用 Logo 占位：720×96dp 的宽幅白色块。
+    真实页面由 Coil 加载 TMDB 艺术字；这里只用来核对 96dp 行高和 720dp 最大宽度。
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="720dp"
+    android:height="96dp"
+    android:viewportWidth="720"
+    android:viewportHeight="96">
+
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M24,24h480v48h-480z" />
+
+</vector>

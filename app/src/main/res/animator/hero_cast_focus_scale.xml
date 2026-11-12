@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    演员头像焦点放大：1.0 → 1.08，160ms，照抄 Compose animateFloatAsState 的焦点反馈。
+    只作用在 60dp 头像框上，名字不缩放；scale 由 duplicateParentState 继承演员项的焦点态。
+-->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <item android:state_focused="true">
+        <set>
+            <objectAnimator
+                android:duration="160"
+                android:propertyName="scaleX"
+                android:valueTo="1.08"
+                android:valueType="floatType" />
+            <objectAnimator
+                android:duration="160"
+                android:propertyName="scaleY"
+                android:valueTo="1.08"
+                android:valueType="floatType" />
+        </set>
+    </item>
+
+    <item>
+        <set>
+            <objectAnimator
+                android:duration="160"
+                android:propertyName="scaleX"
+                android:valueTo="1"
+                android:valueType="floatType" />
+            <objectAnimator
+                android:duration="160"
+                android:propertyName="scaleY"
+                android:valueTo="1"
+                android:valueType="floatType" />
+        </set>
+    </item>
+
+</selector>

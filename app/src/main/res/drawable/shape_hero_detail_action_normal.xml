@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 按钮常态：white_10（#1AFFFFFF）+ 4dp 圆角，照抄 shape_detail_item_normal 的色值。 -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+
+    <solid android:color="@color/white_10" />
+
+    <corners android:radius="4dp" />
+
+</shape>

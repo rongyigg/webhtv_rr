@@ -105,6 +105,16 @@
             android:screenOrientation="sensorLandscape"
             android:theme="@style/Theme.App" />
 
+        <!-- 阶段 A 第一步临时预览壳：只 setContentView 静态布局，不接数据。
+             排版确认后删除本节点与 HeroDetailViewPreviewActivity.kt。 -->
+        <activity
+            android:name=".ui.activity.HeroDetailViewPreviewActivity"
+            android:configChanges="screenSize|smallestScreenSize|screenLayout|orientation"
+            android:exported="true"
+            android:label="Hero Detail Layout Preview"
+            android:screenOrientation="sensorLandscape"
+            android:theme="@style/Theme.App" />
+
         <!-- HeroUI 历史页（100% 纯 View；数据层 = Room 历史表，卡片复用 HeroPosterCard）。 -->
         <activity
             android:name=".ui.activity.HistoryViewActivity"

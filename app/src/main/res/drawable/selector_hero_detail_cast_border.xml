@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 头像描边：常态 1dp 半透明白，焦点 2dp 纯红。 -->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <item
+        android:drawable="@drawable/shape_hero_detail_cast_border_focused"
+        android:state_focused="true" />
+
+    <item android:drawable="@drawable/shape_hero_detail_cast_border_normal" />
+
+</selector>

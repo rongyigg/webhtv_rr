@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 演员名颜色：焦点纯白，常态 80% 白（#CCFFFFFF）。 -->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <item
+        android:color="@color/white"
+        android:state_focused="true" />
+
+    <item android:color="@color/white_80" />
+
+</selector>

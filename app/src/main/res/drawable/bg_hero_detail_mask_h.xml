@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    横向遮罩：0% 处 85% 黑 → 35% 处全透明 → 100% 全透明。
+    与 HeroDetailActivity.kt 的 HeroDetailMaskHorizontal 同色标。
+
+    用 vector 而不是 <shape>：shape 的 3 色渐变中心固定在 50%，
+    无法把第二个色标精确放在 35%。minSdk 24，vector 渐变可直接用。
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="100dp"
+    android:height="100dp"
+    android:viewportWidth="100"
+    android:viewportHeight="100">
+
+    <path android:pathData="M0,0h100v100h-100z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:endX="100"
+                android:endY="0"
+                android:startX="0"
+                android:startY="0"
+                android:type="linear">
+                <item
+                    android:color="#D9000000"
+                    android:offset="0" />
+                <item
+                    android:color="#00000000"
+                    android:offset="0.35" />
+                <item
+                    android:color="#00000000"
+                    android:offset="1" />
+            </gradient>
+        </aapt:attr>
+    </path>
+
+</vector>

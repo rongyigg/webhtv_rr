@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 按钮组背景：常态 white_10，焦点态红渐变。 -->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <item
+        android:drawable="@drawable/shape_hero_detail_action_focused"
+        android:state_focused="true" />
+
+    <item android:drawable="@drawable/shape_hero_detail_action_normal" />
+
+</selector>

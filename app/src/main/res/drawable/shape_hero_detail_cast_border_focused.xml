@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    头像焦点描边：2dp #FF0000。
+    inset 1dp 让 2dp 描边完整落在 60dp 圆内，和 Compose 的 2dp border 同视觉厚度。
+-->
+<inset xmlns:android="http://schemas.android.com/apk/res/android"
+    android:inset="1dp">
+
+    <shape android:shape="oval">
+        <solid android:color="@android:color/transparent" />
+        <stroke
+            android:width="2dp"
+            android:color="@color/hero_accent" />
+    </shape>
+
+</inset>
