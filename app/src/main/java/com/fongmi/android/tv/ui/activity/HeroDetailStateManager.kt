@@ -564,7 +564,7 @@ internal class HeroDetailStateManager(
                     ?: return@withContext null
                 // 3) 详情与演员必须来自同一份 JSON（append_to_response 已在服务端拼好，且带 7 天磁盘缓存）。
                 val detail = service.detail(item, config)
-                // 艺术字：**无语言过滤**的 `/images` 优先（原版 `dc3.k`），详情里那份只作兜底。
+                // 艺术字：详情优先、**无语言过滤**的 `/images` 兜底（原版 `gd3.C`）。
                 val logo = loadTmdbLogo(service, item, detail, config)
                 TmdbDetailState.Ready(item, detail, service.cast(detail, config), manual != null, logo)
             } catch (e: CancellationException) {

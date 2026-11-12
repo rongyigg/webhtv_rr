@@ -170,11 +170,10 @@ public class TmdbService {
      * <p>原版 {@code TmdbApi.k(id, media)} 就是这条请求：`/{movie|tv}/{id}/images` 只带 api_key，
      * 然后 {@code TmdbApi.r(json)} 先挑 `iso_639_1` 以 `zh` 开头的、没有就取第一张。
      *
-     * <p>为什么不能直接用详情里的 {@code images}：详情固定带
-     * {@code include_image_language=<语言>,null}，它会把原语种（`hu` / `it` / `ja` …）的艺术字
-     * 整批过滤掉 —— 外文片因此一张 logo 都拿不到（首页只剩纯文字剧名）；中文片则只能命中
-     * {@code iso_639_1 = null} 的替代版 logo（同一部剧往往还有一张更大的 `zh` 主 logo，
-     * 于是「有艺术字，但比原版小一圈」）。Logo 一律从这条无过滤清单里选。
+     * <p>它只作 Logo 的**兜底**（原版 {@code gd3.C()}：详情里没有 logo 才发这条）。不能只靠详情：
+     * 详情的 {@code append_to_response=images} 只回当前语言那一档，原语种（`hu` / `it` / `ja` …）的
+     * 艺术字整批缺席 —— 实测 movie/13912、14811 详情 0 张、这条 5~6 张，外文片因此只剩纯文字剧名；
+     * 连去掉 {@code include_image_language} 也一样（同一批数据实测无变化），必须走这条全量清单。
      *
      * <p>结果按 {@link #DETAIL_CACHE_TTL} 落盘：艺术字几乎不变，重复进首页不再发请求。
      */

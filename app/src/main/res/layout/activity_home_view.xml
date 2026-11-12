@@ -122,12 +122,16 @@
                     android:textStyle="bold"
                     android:visibility="invisible" />
 
-                <!-- L84-91 heroLogoImg：片名 logo 图，最高 72dp、最大宽 720dp -->
+                <!-- L84-91 heroLogoImg：片名 logo 图，**按图片自身像素**渲染（wrap_content + adjustViewBounds）
+                     原版 `zu1.C()` 拼的是 w500，847x359 的 logo 落下来就是 500x212px；固定 72dp(=144px)
+                     会把它按高度压掉一圈（实测 338x142px，正是「艺术字比原版小」的全部原因）。
+                     上限 120dp / 720dp 只兜「接近方形」的 logo，正常横版 logo 不会被缩。 -->
                 <ImageView
                     android:id="@+id/heroLogoImg"
                     android:layout_width="wrap_content"
-                    android:layout_height="72dp"
+                    android:layout_height="wrap_content"
                     android:adjustViewBounds="true"
+                    android:maxHeight="120dp"
                     android:maxWidth="720dp"
                     android:scaleType="fitStart"
                     android:visibility="gone" />

@@ -1242,7 +1242,7 @@ internal sealed class TmdbDetailState {
         /**
          * 艺术字 Logo 的完整地址；null = 这部剧没有 logo（回落文字标题）。
          *
-         * 由 [loadTmdbLogo] 在 IO 线程算好带进来（**不带语言过滤**的 `/images` 优先），
+         * 由 [loadTmdbLogo] 在 IO 线程算好带进来（**详情优先、`/images` 兜底**），
          * 不在 [mergeTmdb] 里现取：那是组合期 / 主线程，绝不能发网络请求。
          */
         val logo: String? = null,
@@ -1389,8 +1389,8 @@ internal fun HeroDetail.mergeTmdb(
         hasTmdbBackdrop = tmdbBackdrop.isNotBlank() || hasWideBackdrop,
         // 一旦拿到横图（首页 / TMDB）就长期为 true：源站详情永远不能用竖图把背景盖回去。
         hasWideBackdrop = hasWideBackdrop || tmdbBackdrop.isNotBlank(),
-        // 艺术字 Logo：由 [loadTmdbLogo] 在 IO 线程取好（无语言过滤的 `/images` 优先，
-        // 详情里那份只作兜底），这里只做「有就换、没有就保持原值（回落 32sp 文字）」。
+        // 艺术字 Logo：由 [loadTmdbLogo] 在 IO 线程取好（详情优先、无语言过滤的 `/images` 兜底），
+        // 这里只做「有就换、没有就保持原值（回落 32sp 文字）」。
         logoUrl = logo ?: logoUrl,
         cast = persons.mapIndexed { index, person ->
             HeroCast(
@@ -1433,13 +1433,16 @@ private fun tmdbImagePath(url: String): String {
 }
 
 /**
- * 从 TMDB 详情 JSON 的 `images.logos` 里取艺术字 Logo（透明 PNG）。
+ * 从 TMDB 的图片 JSON 里取艺术字 Logo（透明 PNG），两种结构都吃：
+ *
+ * - 详情：`{ …, "images": { "logos": [ … ] } }`；
+ * - `/{movie|tv}/{id}/images`：`{ "id": …, "logos": [ … ] }`（**根级**，没有 `images` 包一层）。
  *
  * 优先级与原版 `TmdbApi.r(json)` 完全一致：
  * 1. `iso_639_1` 以 `zh` 开头的中文 Logo（zh-CN / zh-TW / zh-HK …）；
  * 2. 没有中文就退到第一张有 `file_path` 的（通常是英文 / 原语种）。
  *
- * **不抛异常**：`images` / `logos` 缺失、类型不对、值为 JSON null、`file_path` 为空、
+ * **不抛异常**：`logos` 缺失、类型不对、值为 JSON null、`file_path` 为空、
  * `imageBase` 为空时一律返回 null，调用方 `?: logoUrl` 继续走文字标题回落。
  * 返回值是拼好 `imageBase` 的**完整绝对地址**，可直接交给 Coil。
  *
@@ -1449,8 +1452,10 @@ private fun tmdbImagePath(url: String): String {
 internal fun extractTmdbLogo(detail: JsonObject?, imageBase: String): String? {
     if (detail == null || imageBase.isBlank()) return null
     // `as?` 一次性挡住「键不存在」「值是 JSON null」「值不是对象 / 数组」三种情况，不会抛异常。
-    val images = detail.get("images") as? JsonObject ?: return null
-    val logos = images.get("logos") as? JsonArray ?: return null
+    // 先按详情结构取 `images.logos`，取不到再按 `/images` 的根级 `logos` —— 只认一种就会漏掉另一半。
+    val logos = (detail.get("images") as? JsonObject)?.get("logos") as? JsonArray
+        ?: detail.get("logos") as? JsonArray
+        ?: return null
 
     /** 取字符串字段：非 primitive（含 JSON null）或异常时返回空串。 */
     fun text(obj: JsonObject, key: String): String {
@@ -1478,19 +1483,22 @@ internal fun extractTmdbLogo(detail: JsonObject?, imageBase: String): String? {
 /**
  * 艺术字 Logo 的唯一取图入口（首页 / 详情页共用）。
  *
- * 先问**不带语言过滤**的 `/images`（原版 `TmdbApi.k(id, media)` + `r(json)` 的同一条链路），
- * 再退回详情 JSON 里那份。为什么必须这样：
- * - 详情固定带 `include_image_language=<语言>,null`，原语种（`hu` / `it` / `ja` …）的艺术字
- *   会被整批过滤掉 —— 外文片因此一张 logo 都没有（SÁTÁNTANGÓ / La figlia di Ryan 就是这样，
- *   原版出艺术字、我们只剩纯文字）；
- * - 中文片命中的是 `iso_639_1 = null` 的替代版 logo，而同一部剧往往还有一张 `zh` 主 logo，
- *   于是「图在，但比原版小一圈」。
+ * 顺序**与原版 `gd3.C()` → `TmdbApi.k(id, media)` 完全一致：详情优先、`/images` 兜底**。
+ * 1. 详情 JSON 里就有 logo（`images.logos`）→ 直接用，**不再发第二条请求**。
+ *    中文片走的就是这一支：详情只回一张 `zh` 主 logo，和原版截图里那张完全一致；
+ * 2. 详情没有 logo（外文片的常态：`append_to_response=images` 只回当前语言那一档，
+ *    `hu` / `it` / `ja` … 的原语种艺术字整批缺席）→ 再问一次**不带语言过滤**的
+ *    `/images`（原版 `TmdbApi.k` 那条），从全量清单里按 `r()` 的规则挑。
+ *
+ * 实测（2026-11，`api.tmdb.org/3`）：tv/297253 详情 1 张 / `/images` 3 张；
+ * movie/13912、14811 详情 **0 张** / `/images` 5~6 张 —— 少了兜底这一步，外文片永远只剩纯文字。
  *
  * `/images` 失败（网络 / 鉴权 / 结构异常）一律当作「没有」，继续用详情里那份：
  * 艺术字是装饰，绝不因为它把整页拖崩。协程取消照常抛出。
  */
 internal fun loadTmdbLogo(service: TmdbService, item: TmdbItem, detail: JsonObject?, config: TmdbConfig): String? {
     val imageBase = tmdbLogoBase(config.getImageBase())
+    extractTmdbLogo(detail, imageBase)?.let { return it }
     val images = try {
         service.images(item, config)
     } catch (e: CancellationException) {
@@ -1498,7 +1506,7 @@ internal fun loadTmdbLogo(service: TmdbService, item: TmdbItem, detail: JsonObje
     } catch (e: Exception) {
         null
     }
-    return extractTmdbLogo(images, imageBase) ?: extractTmdbLogo(detail, imageBase)
+    return extractTmdbLogo(images, imageBase)
 }
 
 /**

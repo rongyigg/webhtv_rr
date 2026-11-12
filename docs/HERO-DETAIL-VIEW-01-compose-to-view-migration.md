@@ -683,6 +683,8 @@ appendPage(list, site, pageCount) // T1 的追加分支：空页 / 全重复 →
 
 ### 10.16 TMDB 艺术字语言过滤 / 图床档位 / 预取重构（2026-11-12，未编译）
 
+> ⚠️ **本节结论已被 [10.17](#1017-tmdb-艺术字第二轮纠错尺寸--外文-logo--预取2026-11-12未编译) 推翻**：根因不是 `include_image_language`，改法也不是「`/images` 优先」。保留原文只为记录当时的判断过程。
+
 用户报 3 件事：① 我们的艺术字比原版小一圈（图 1 vs 图 2）；② 原版能给外文片（不只是英文）出原语种艺术字（图 3 / 图 4），我们只有纯文字剧名（图 5 / 图 6）；③ 原版的 TMDB 预取很流畅，我们发涩。
 
 #### ①② 根因：详情接口固定带 `include_image_language`
@@ -718,5 +720,69 @@ appendPage(list, site, pageCount) // T1 的追加分支：空页 / 全重复 →
 - 静态：4 个文件括号配平（`TmdbService.java` / `HeroDetailActivity.kt` / `HeroDetailStateManager.kt` / `HomeViewActivity.kt`），`tmdbWindowJobs` 已无残留，`PREFETCH_PARALLEL` / `prefetchTmdbMatch` / `loadTmdbLogo` / `imagesCacheKey` 均已就位，`git diff --check` 无空白错误。
 - 待真机验证：中文片艺术字与图 1 大小一致（`zh` 主 logo，w500）；外文片（SÁTÁNTANGÓ / La figlia di Ryan 这类）出原语种艺术字，不再只剩文字；快速左右移动焦点时首屏元数据不排队、Hero 不空转，进详情页艺术字同样生效。
 - 回滚：`git checkout -- app/src/main/java/com/fongmi/android/tv/service/TmdbService.java app/src/main/java/com/fongmi/android/tv/ui/activity/HeroDetailActivity.kt app/src/main/java/com/fongmi/android/tv/ui/activity/HeroDetailStateManager.kt app/src/main/java/com/fongmi/android/tv/ui/activity/HomeViewActivity.kt`。
+
+### 10.17 TMDB 艺术字第二轮纠错（尺寸 / 外文 Logo / 预取）（2026-11-12，未编译）
+
+10.16 提交后用户实测「所有问题依旧」。这一轮先用**真实接口数据 + 截图像素测量**把三个问题各自钉死，再改。
+
+#### ① 上一轮为什么一点效果都没有
+
+`/images` 端点（`/{movie|tv}/{id}/images`）的返回是 `{ "id": …, "logos": [ … ] }` —— `logos` 在**根级**，没有 `images` 这一层。而 `extractTmdbLogo()` 只认详情结构 `detail["images"]["logos"]`，于是：
+
+- `extractTmdbLogo(images, …)` 对 `/images` 的返回**永远返回 null**；
+- `loadTmdbLogo()` 的 `?:` 于是每次都落到详情那一份 —— 与改动前**逐字节等价**；
+- 顺带多发了**一条完全无用的 `/images` 请求**（每条一次），把预取也拖慢了。
+
+结论：上一轮只有「图床提到 w500」这一半生效，但它被 72dp 的高度钳位吃掉了（见 ③），所以观感零变化。
+
+#### ① 接口实测（2026-11-12，`api.tmdb.org/3`，key 走原版默认值）
+
+| 条目 | 详情 `append_to_response=images` | `/images`（无过滤） |
+| --- | --- | --- |
+| tv/297253 伟大的长征 | 1 张：`zh` 847x359 | 3 张：`nl` 846x359、`zh` 1938x377、`zh` 847x359 |
+| movie/13912 SÁTÁNTANGÓ | **0 张** | 5 张（`en`/`it`，含 `it` 740x271） |
+| movie/14811 La figlia di Ryan | **0 张** | 6 张（`pt`/`en`/`it`） |
+
+补充实测：详情**去掉** `include_image_language` 后结果**一模一样**（同一批 id 都是 1 / 0 / 0 张）。所以「详情固定带语言过滤」不是外文片拿不到 logo 的原因 —— `append_to_response=images` 本身就只回当前语言那一档。**`/images` 是外文片唯一的来源，不是可选项。**
+
+#### ① 改法：详情优先、`/images` 兜底（与原版 `gd3.C()` 完全一致）
+
+原版链路（`ref_docs/dc3.java` L215-292、L351-378、L548-570；`ref_docs/gd3.java` `C()`）是：
+
+1. `dc3.g(id, media)` 拉详情（带 `append_to_response=images`，**不带** `include_image_language`）→ `r(images)` 先 `zh` 前缀、否则第一张有 `file_path` 的；
+2. **详情里没有 logo 才**走 `gd3.C()` → `j11` → `dc3.k(id, media)` 请求 `/images` → 再 `r()`。
+
+我们的 `loadTmdbLogo()` 改成同样的顺序：
+
+- `extractTmdbLogo()` 两种结构都吃：先 `detail["images"]["logos"]`，取不到再认根级 `detail["logos"]`（`?:` 链，不抛异常）；
+- `loadTmdbLogo()` 先 `extractTmdbLogo(detail)` 命中就直接返回（中文片一条 `/images` 都不发），未命中才请求 `/images`；
+- `TmdbService.images()` 的 KDoc 同步改成「兜底来源」，并记下「去掉 `include_image_language` 结果不变」这条实测。
+
+#### ② 尺寸：不是选错图，是布局把高度钳死了
+
+`heroLogoImg` 原来固定 `layout_height="72dp"`（本机 density 320 → 144px），`adjustViewBounds` 只能按这个高度反推宽度：
+
+- 我们的截图实测：logo 金色像素包围盒 `338x142px` = 144px 高、847:359 反推 340px 宽 —— 与 72dp 完全吻合；
+- 原版截图实测（同一张 847x359 立体金）：`510x238px`，且左边缘同为 x≈49px（24dp 外边距 = 48px）→ **两台设备 density 相同**，不是设备差异；
+- w500 的 847x359 落下来是 `500x212px`（实测 `logo_geom`：内容 100% 填满、无透明边）→ 原版就是**按图片自身像素尺寸**渲染，我们的 72dp 把它压掉了约 1/3。
+
+改法（`activity_home_view.xml`）：`layout_height` 72dp → **`wrap_content`**，新增 `maxHeight="120dp"`（240px）只兜「接近方形」的 logo（如 497x455 → 262x240），正常横版 logo 不受影响；`maxWidth="720dp"`、`adjustViewBounds`、`fitStart` 保持不变。
+
+配套（`HomeViewActivity.bindLogo`）：Coil 请求显式 `size(Size.ORIGINAL)`。`heroLogoImg` 现在是 wrap_content，尺寸由 drawable 决定，若让 Coil 按「当前 view 尺寸」解码，从大 logo 换到小 logo 再换回来时会被上一次的尺寸卡住（越换越小）；w500 的 logo 只有几十 KB，原尺寸解码没有代价。
+
+#### ③ 预取：窗口改回「整条详情」，近优先 + 整批可弃
+
+10.16 把窗口降级成「只做匹配」后仍然发涩：焦点落到邻卡时详情 / 图片还要现发，艺术字和横图必然晚一拍。原版之所以顺，是因为窗口内邻居的**详情已经在内存里**（`gd3.q(name)` / `gd3.r(name)` 同步取）。
+
+- `updateTmdbWindow()`：邻居目标按 `|i - center|` 排序（先 i±1 再 i±2），整批共用 `tmdbWindowJob`，焦点一动整批 `cancel()`；
+- 单条预取改成 `prefetchTmdbDetail()` = 直接复用 `fetchTmdbDetailForPosition()`（搜索 → 详情 → 演员 / 译文 → 艺术字 → 横图预下），整链 try/catch，取消照抛；
+- 并发仍 `PREFETCH_PARALLEL = 2`（原版 `o93.b` 是 4 线程），中心那张始终由 `tmdbRequestJob` 单独负责，预取不许把它挤慢；
+- 预取结果走同一个落地口 `onTmdbDetailReady()`：非焦点条目只写缓存、不重绘，提前拉邻居**不会**让画面闪出别人的艺术字。
+
+#### 验证与回滚
+
+- 静态：`HeroDetailActivity.kt` / `HomeViewActivity.kt` / `HeroDetailStateManager.kt` / `TmdbService.java` 括号配平，`extractTmdbLogo` 同时出现 `images` 与根级 `logos` 两条路径，`loadTmdbLogo` 为「先详情后 `/images`」，`activity_home_view.xml` 的 `heroLogoImg` 已是 `wrap_content + maxHeight 120dp`，`git diff --check` 无空白错误。
+- 待真机验证：① 伟大的长征这类中文片艺术字尺寸接近原版（约 500x212px，而不是 338x142px）；② SÁTÁNTANGÓ / La figlia di Ryan 这类外文片出原语种艺术字；③ 左右移动焦点时 Hero 不空转、不闪回文字标题，进详情页艺术字同样生效。
+- 回滚：`git checkout -- app/src/main/java/com/fongmi/android/tv/ui/activity/HeroDetailActivity.kt app/src/main/java/com/fongmi/android/tv/ui/activity/HomeViewActivity.kt app/src/main/java/com/fongmi/android/tv/ui/activity/HeroDetailStateManager.kt app/src/main/java/com/fongmi/android/tv/service/TmdbService.java app/src/main/res/layout/activity_home_view.xml`。
 
 

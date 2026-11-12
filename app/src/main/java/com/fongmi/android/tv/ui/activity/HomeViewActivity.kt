@@ -38,6 +38,7 @@ import coil3.request.ImageRequest
 import coil3.request.crossfade
 import coil3.request.error
 import coil3.request.placeholder
+import coil3.size.Size
 import com.fongmi.android.tv.App
 import com.fongmi.android.tv.BuildConfig
 import com.fongmi.android.tv.R
@@ -85,6 +86,7 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.Locale
+import kotlin.math.abs
 import kotlin.math.roundToInt
 
 /**
@@ -1225,6 +1227,10 @@ class HomeViewActivity : AppCompatActivity() {
         }
         heroLogoImg.load(url) {
             crossfade(LOGO_CROSSFADE_MS)
+            // 【必须显式 ORIGINAL】`heroLogoImg` 是 wrap_content，尺寸由 drawable 自己决定：
+            // 不写死的话 Coil 会按「当前 view 尺寸」解码，换到第二张 logo 时就被上一张的尺寸卡住
+            // （小 logo → 大 logo 会越换越小）。w500 的 logo 文件只有几十 KB，原尺寸解码没有代价。
+            size(Size.ORIGINAL)
             listener(logoListener)
         }
     }
@@ -1405,66 +1411,49 @@ class HomeViewActivity : AppCompatActivity() {
     }
 
     /**
-     * 原版滑动窗口 `i-2 … i+2` 的预取：**只做匹配**，不做详情（对齐原版 `gd3.h` 的单条轻链路）。
+     * 原版滑动窗口 `i-2 … i+2` 的预取：**整条详情链路**（对齐原版 `gd3.g(list)` → `gd3.h(vod)`）。
      *
-     * 与旧实现的三处关键差异，也是「原版预取更顺」的根因：
-     * 1. 旧实现给窗口内每张卡各起一条 [fetchTmdbDetailForPosition]（搜索 + 详情 + 演员 + 译文 +
-     *    艺术字，3~4 个请求），4 张并发 → 十几条请求同时在跑，焦点那一条反而排在后面；
-     *    这里只发最便宜的「匹配」（1 个搜索请求）+ 横图预下，详情留给焦点那一条。
-     * 2. 旧实现按 `Map<Int, Job>` 逐个淘汰，焦点快速移动时上一批还在跑；
-     *    这里整批一个 [tmdbWindowJob]，焦点一动就整批作废（原版 `v.getAndSet(Runnable)`）。
-     * 3. 并发 2（[PREFETCH_PARALLEL]）：比原版 `o93.b` 的 4 线程更保守，留出连接与带宽余量
-     *    给焦点那一条，预取永远不许把焦点请求挤慢。
+     * 上一轮只预取「匹配」，实测仍然不够顺：焦点落到邻卡时还得现发详情 / 图片两条请求，
+     * 艺术字和横图都要晚一拍才换上去（原版之所以顺，是因为窗口内的邻居**详情已经在内存里**，
+     * `gd3.q(name)` / `gd3.r(name)` 同步就能取到）。所以这里改回整链预取，只保留三处关键约束：
+     * 1. **中心优先**：中心那张由 [tmdbRequestJob] 单独负责，这里永远不跟它抢；
+     * 2. **近优先**：邻居按 `|i - center|` 排序，先 i±1 再 i±2，用户按一下方向键就命中的是最先跑的；
+     * 3. **整批可弃**：整批共用 [tmdbWindowJob]，焦点一动立刻整批取消（原版 `v.getAndSet(Runnable)`），
+     *    并发 2（[PREFETCH_PARALLEL]）比原版 `o93.b` 的 4 线程保守，始终给中心那条留带宽。
      *
-     * 中心位置由 [tmdbRequestJob] 负责，这里跳过，避免同一条并发两次。
+     * 预取结果走 [fetchTmdbDetailForPosition] 的同一个落地口：非焦点条目只写缓存、不重绘，
+     * 所以提前拉邻居**绝不会**让画面闪一下别人的艺术字。
      */
     private fun updateTmdbWindow(centerIndex: Int) {
-        // 先掐断上一批：焦点已经动了，旧窗口的匹配结果对当前画面没有价值。
+        // 先掐断上一批：焦点已经动了，旧窗口的结果对当前画面没有价值。
         tmdbWindowJob?.cancel()
         tmdbWindowJob = null
         val start = (centerIndex - 2).coerceAtLeast(0)
         val end = (centerIndex + 2).coerceAtMost(items.size - 1)
-        val targets = (start..end).filter { it != centerIndex && !hasTmdbCache(it) }
+        val targets = (start..end)
+            .filter { it != centerIndex && !hasTmdbCache(it) }
+            .sortedBy { abs(it - centerIndex) }
         if (targets.isEmpty()) return
         tmdbWindowJob = lifecycleScope.launch(Dispatchers.IO) {
-            // 分批串行 + 批内并发：任何时刻最多 [PREFETCH_PARALLEL] 条搜索在跑。
+            // 分批串行 + 批内并发：任何时刻最多 [PREFETCH_PARALLEL] 条详情在跑。
             for (chunk in targets.chunked(PREFETCH_PARALLEL)) {
                 coroutineScope {
-                    chunk.forEach { position -> launch { prefetchTmdbMatch(position) } }
+                    chunk.forEach { position -> launch { prefetchTmdbDetail(position) } }
                 }
             }
         }
     }
 
     /**
-     * 单条「匹配」预取（**只在 IO 线程调用**）：只发 1 个搜索请求，不拉详情。
+     * 单条邻居预取（**只在 IO 线程调用**）：就是焦点那条链路本身，只是落地口不重绘。
      *
-     * 目的只有一个：焦点真落到这张卡时，[fetchTmdbDetailForPosition] 直接命中
-     * `TmdbMatchCache`，跳过在线搜索，只剩详情 / 演员那几个请求 —— 首屏元数据来得更快。
-     * 顺带把横图静默下进 Coil 缓存（搜索结果的 `backdropUrl` 就是最终横图，只是档位低一档，
-     * 按 [TMDB_BACKDROP_WIDTH] 提档后再预下，焦点移过去直接命中）。
-     *
-     * 缓存已命中（手动 / 自动）直接 return：条目已经有了，再搜一遍纯属浪费。
-     * 预取失败一律吞掉：它只是锦上添花，绝不能影响焦点那一条，更不能把页面变成错误态。
-     * （`lifecycleScope` 的 `launch` 里抛出的未捕获异常会直接崩进程，所以整条链路包一层。）
+     * 失败一律吞掉：预取只是锦上添花，绝不能影响焦点那一条，更不能把页面变成错误态
+     * （`lifecycleScope` 的 `launch` 里抛出的未捕获异常会直接崩进程，所以整条链路包一层）。
+     * 协程取消照常抛出，让 [updateTmdbWindow] 的整批取消真正生效。
      */
-    private suspend fun prefetchTmdbMatch(position: Int) {
+    private suspend fun prefetchTmdbDetail(position: Int) {
         try {
-            val item = items.getOrNull(position) ?: return
-            val config = TmdbConfig.effectiveCurrent()
-            if (!config.isReady() || item.vod.name.orEmpty().isBlank()) return
-            if (!TmdbSitePolicy.isEnabled(config, item.site.key, item.vod.id)) return
-            val siteKey = item.site.key
-            val vod = item.vod
-            val cache = Setting.getTmdbMatchCache()
-            // 手动 / 自动缓存命中：与 [loadTmdbDetail] 的读取顺序一致，直接不搜。
-            if (cache.findManual(siteKey, vod.id, vod.name) != null) return
-            if (cache.find(siteKey, vod.id, vod.name) != null) return
-            val matched = TmdbMatcher(TmdbService(), config).searchAndMatch(vod.name, vod) ?: return
-            // 落盘：下次冷启动 / 焦点真落到这张卡时直接命中，不必再搜。
-            persistAutoTmdbMatch(siteKey, vod, matched)
-            val backdrop = matched.backdropUrl.orEmpty()
-            if (backdrop.isNotBlank()) prefetchBackdropImage(upgradeTmdbImage(backdrop, TMDB_BACKDROP_WIDTH))
+            fetchTmdbDetailForPosition(position)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -1509,9 +1498,8 @@ class HomeViewActivity : AppCompatActivity() {
                 cast = service.cast(detail, config),
                 overview = service.translatedOverview(detail, config).orEmpty(),
                 // 与详情页共用同一套提取规则，避免两处逻辑漂移。
-                // 【艺术字】无语言过滤的 `/images` 优先（原版 `dc3.k`）：详情里的 `images` 带
-                // `include_image_language`，外文片一张 logo 都没有，中文片只能拿到 `null` 语种的
-                // 替代版（比 `zh` 主 logo 小一圈）。
+                // 【艺术字】详情优先、`/images` 兜底（原版 `gd3.C`）：详情的 `images` 只回当前语言
+                // 那一档，外文片（`hu` / `it` …）一张 logo 都没有，必须再走一次无语言过滤的 `/images`。
                 logoUrl = loadTmdbLogo(service, matched, detail, config),
                 // 【只提横图】没有 `backdropUrl` 时留空，首页继续走竖图分支（E2 的 if-else）。
                 highResBackdrop = if (matched.backdropUrl.isNullOrBlank()) {
@@ -2364,10 +2352,10 @@ class HomeViewActivity : AppCompatActivity() {
         private const val TMDB_BACKDROP_WIDTH = "w1920"
 
         /**
-         * 滑动窗口预取的并发上限（只用于「匹配」这一步）。
+         * 滑动窗口预取的并发上限（整条详情链路：搜索 + 详情 + 艺术字 + 横图）。
          *
          * 原版是 `o93.b` 固定 4 线程；这里取 2 更保守：焦点那一条永远优先拿到连接，
-         * 预取只是让焦点落下去时少一次搜索，绝不允许把焦点请求挤慢。
+         * 预取只是让焦点落下去时邻居的详情已经在内存里，绝不允许把焦点请求挤慢。
          */
         private const val PREFETCH_PARALLEL = 2
 
