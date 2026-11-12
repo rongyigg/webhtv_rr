@@ -7,87 +7,30 @@ import android.graphics.Color as AndroidColor
 import android.graphics.drawable.ColorDrawable
 import android.os.Bundle
 import android.util.Log
-import androidx.activity.ComponentActivity
-import androidx.activity.compose.setContent
-import androidx.compose.animation.Crossfade
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.tween
-import androidx.compose.foundation.Image
-import androidx.compose.foundation.background
-import androidx.compose.foundation.basicMarquee
-import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.interaction.collectIsFocusedAsState
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.shape.CircleShape
+import android.view.KeyEvent
+import android.view.View
+import android.view.ViewGroup
+import android.widget.ImageView
+import android.widget.TextView
+import androidx.appcompat.app.AppCompatActivity
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
-import androidx.compose.material3.darkColorScheme
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberUpdatedState
-import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.scale
 import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.Shadow
-import androidx.compose.ui.input.key.Key
-import androidx.compose.ui.input.key.KeyEventType
-import androidx.compose.ui.input.key.key
-import androidx.compose.ui.input.key.onPreviewKeyEvent
-import androidx.compose.ui.input.key.type
-import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.res.painterResource
-import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
+import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.Observer
 import androidx.lifecycle.ViewModelProvider
-import coil3.compose.AsyncImage
-import coil3.compose.SubcomposeAsyncImage
-import com.google.gson.JsonArray
-import com.google.gson.JsonObject
+import androidx.lifecycle.lifecycleScope
+import androidx.recyclerview.widget.LinearLayoutManager
+import androidx.recyclerview.widget.RecyclerView
+import coil3.load
+import coil3.request.crossfade
 import com.fongmi.android.tv.R
 import com.fongmi.android.tv.api.SiteApi
 import com.fongmi.android.tv.api.config.VodConfig
@@ -102,98 +45,119 @@ import com.fongmi.android.tv.bean.Vod
 import com.fongmi.android.tv.model.SiteViewModel
 import com.fongmi.android.tv.service.TmdbService
 import com.fongmi.android.tv.setting.Setting
-import com.fongmi.android.tv.setting.TmdbSitePolicy
-import com.fongmi.android.tv.ui.helper.TmdbMatcher
 import com.fongmi.android.tv.ui.helper.TmdbRatingFormatter
 import com.fongmi.android.tv.ui.hero.ChangeSourceDialog
 import com.fongmi.android.tv.ui.hero.EpisodeViewDialog
-import com.fongmi.android.tv.ui.hero.HeroAccentColor
-import com.fongmi.android.tv.ui.hero.HeroDialogShell
-import com.fongmi.android.tv.ui.hero.HeroFocusBrush
+import com.fongmi.android.tv.ui.hero.HeroDetailCastAdapter
+import com.fongmi.android.tv.ui.hero.HeroHorizontalGapDecoration
 import com.fongmi.android.tv.ui.hero.HeroImageLoader
-import com.fongmi.android.tv.ui.hero.HeroSectionTitle
-import com.fongmi.android.tv.ui.hero.HeroTmdbData
 import com.fongmi.android.tv.ui.hero.HeroTmdbPrefetchCache
 import com.fongmi.android.tv.ui.hero.SourceSelectionStore
 import com.fongmi.android.tv.ui.hero.heroTmdbKey
 import com.fongmi.android.tv.ui.hero.openHeroDetailOrFolder
-import com.fongmi.android.tv.ui.hero.rememberHeroImageModel
 import com.fongmi.android.tv.ui.hero.upgradeTmdbImage
 import com.fongmi.android.tv.utils.Notify
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.withContext
+import com.google.gson.JsonArray
+import com.google.gson.JsonObject
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
+import kotlin.math.roundToInt
 
 /**
- * HeroUI（Compose）详情页。
+ * Hero 详情页（100% 纯 View）。
  *
- * 数据链路：
- * - 进页先看传入 [Vod] 是否自带 `flags`（WebHome 内联源 / 聚合结果）：有就直接渲染，跳过网络请求；
- * - 没有才用 `extra_vod_id` 调 `SiteViewModel.detailContent(siteKey, vodId, refresh = true)`
- *   （首次进页就绕过旧缓存），观察 `SiteViewModel.result` 拿真实 [Vod]：
- *   简介 / 年份 / 地区 / 分类 / 导演 / 主演全部用真实字段，
- *   `Vod.flags[].episodes` 是 [EpisodeViewDialog] 与起播的唯一数据源；
- * - 特殊 ID 完全照抄原版 `VideoActivity.checkId()`：`push://` 换成 [SiteApi.PUSH] + 去前缀的 id；
- *   **只有**空 ID 和 `msearch:` 直接显示空态（原版 `setEmpty(false)`）；
- *   其余 id（含 `atvp_detail:` 这类插件内部 id）一律正常发详情请求，和原版一致，绝不自行拦截。
- * - 起播只调用原版公开入口 [VideoActivity.startDirect]（不碰 PlayerManager / PlaybackActivity，
- *   也不自己拼 Intent）；线路 / 集名 / 集地址直接来自真实 [Flag] / [Episode]。
+ * 数据与副作用全部在 [HeroDetailStateManager]：result 通道分流、跨源兜底、folder 下探、
+ * TMDB 元数据、收藏读写、弹窗状态都由它持有；本文件只负责
+ * 「把状态渲染到 `activity_hero_detail_view.xml`」与「把遥控器事件接回状态机」。
  *
- * 主页面（从下往上）：
- * 1. [HeroDetailBackdrop]：全屏背景大图。
- * 2. [HeroDetailMaskHorizontal]：左侧 0.85 黑 → 35% 处完全透明（`bg_hero_mask_h`，与首页同参数）。
- * 3. [HeroDetailMaskVertical]：上 55% 全透明，底部渐到 0.9 黑（`bg_hero_mask_v`，与首页同参数）。
- * 4. 右上角浮动小海报 150dp × 210dp、marginTop 72dp、marginEnd 80dp、内边距 4dp。
- * 5. 左下内容区（整体贴底、paddingBottom 32dp）：剧名/Logo → 元数据 → 简介 → 按钮组 → **演职员行**。
- *    线路与选集已整体移出主页面，收进纯 View 弹窗 [EpisodeViewDialog]。
- *
- * 尺寸/字号/边距逐条对照 `ref_docs/activity_detail.xml`（下文简称 XML，行号即该文件行号），
- * 本次需求（Logo 位、简介 4 行、按钮顺序、演职员可聚焦）与 XML 冲突处以需求为准：
- * - 内容容器：左右 padding 24dp、paddingBottom 32dp、整体贴底。
- * - 剧名：有 Logo → 高 72dp / 最宽 720dp / 等比靠左（XML `heroLogoImg` L82-89）；
- *   无 Logo → 32sp 粗体 / 高 36dp / 贴底 / `basicMarquee()` 跑马灯防溢出 / 阴影 #cc000000 2,2,12（L69-81）。
- * - 元数据：14sp / #ccffffff / 固定高 20dp / marginTop 2dp / 阴影 #aa000000 1.5,1.5,8（L90-102）。
- * - 简介：12sp / #bbffffff / 最宽 440dp / 最多 4 行 / 行距 +3dp（XML 原为半宽 2 行，按需求放宽）。
- * - 按钮组：播放 / 换源 / 收藏，高 36dp、13sp 粗体、左右 padding 16dp、图标文字间距 4dp、按钮间距 12dp（L125-189）。
- * - 演职员：`LazyRow`，60dp 圆形头像 + 12sp 单行名字；焦点态红圈 + 1.08 倍放大。
+ * 视觉规格与 Compose 版逐项一致：
+ * - 背景 / 海报 / Logo / 演职员头像走 Coil，参数与首页 `rememberHeroImageModel` 同源；
+ * - 剧名 / 元数据 / 简介 / 导演主演 = [HeroDetail] 合并结果；
+ * - 按钮组 36dp、13sp 加粗、4dp 圆角，焦点态用 selector（红渐变色块）；
+ * - 演职员行 RecyclerView 横向，头像 60dp、焦点 2dp 红圈 + 1.08 放大。
  *
  * 焦点契约：
- * - 默认落在「播放」；←/→ 在按钮间移动。
- * - 「播放」按 ↓ → 演职员行（落在上次停留的演员）；演员行 ↑ → 回到「播放」；行内 ←/→ 横移，↓ 消费。
- * - 点「播放」→ [EpisodeViewDialog]（纯 View Dialog）：按 `lastWatchedEpisodeIndex` 强制吸附历史集（-1 落第 1 集），
- *   并把该集所在分组自动切好。
- * - 点某位演员 → [HeroActorDialog]（立即弹出、数据异步加载）；关闭后焦点**回到被点的那位演员**。
- * - 纯展示文本（剧名/元数据/简介）没有任何 `focusable` / `clickable` 修饰符。
+ * - 默认落在「播放」；←/→ 在按钮间移动；
+ * - 「播放」按 ↓ → 演职员行（落在上次停留的演员）；演员行 ↑ → 回到「播放」；
+ *   行内 ←/→ 横移，↓ 消费；首/末项端点消费；
+ * - 点「播放」→ [EpisodeViewDialog]（纯 View Dialog）：选中集数直接起播；
+ * - 点演员 → 命中 TMDB 人物时进 `TmdbPersonActivity`；旧 adb 假数据入口只保留回焦；
+ * - 纯展示文本（剧名/元数据/简介）没有任何 focusable / clickable。
  */
-class HeroDetailActivity : ComponentActivity() {
+class HeroDetailActivity : AppCompatActivity() {
 
-    /**
-     * 详情页后台预搜索（`SiteViewModel.search` 通道，与详情用的 `result` 通道互不干扰）。
-     *
-     * 进页就把「换源」要用的全局搜索跑起来：
-     * 1. 换源按钮上直接显示第一个搜到的源名（[preSearchSite]）；
-     * 2. 点开换源弹窗时把 [preSearchResults] 直接塞进去，跳过弹窗内的首轮检索；
-     * 3. 本页详情拿不到剧集时，「播放」可以用 [preSearchVod] 兜底（拉它的详情再弹选集）。
-     *
-     * 用 Compose `mutableStateOf` 而不是普通字段：按钮文案要跟着结果到达自动重组。
-     */
-    private val preSearchVod = mutableStateOf<Vod?>(null)
-    private val preSearchSite = mutableStateOf<Site?>(null)
-    private val preSearchResults = mutableStateOf<List<Vod>>(emptyList())
+    // ------------------------------------------------------------------
+    // 数据
+    // ------------------------------------------------------------------
 
-    /**
-     * 收藏态刷新脉冲：详情页是纯 Compose 页面，`onResume` 没有现成的重组信号。
-     *
-     * `onResume` 自增一次，Compose 侧用 `LaunchedEffect(keepRefreshTick)` 重查 Keep 表：
-     * 用户去收藏页删掉这条收藏再返回，按钮必须立刻变回「收藏」，而不是停留在「已收藏」。
-     */
-    private val keepRefreshTick = mutableIntStateOf(0)
+    /** Activity 作用域的检索 ViewModel：进页预搜索 / 换源弹窗共用，`onDestroy` 里摘观察者并停搜索。 */
+    private val siteViewModel: SiteViewModel by lazy {
+        ViewModelProvider(this)[SiteViewModel::class.java]
+    }
 
-    /** `search` 通道的观察者：一个源回一条结果，第一条就是按钮上要显示的源。 */
-    private val preSearchObserver = Observer<Result?> { result -> onPreSearchResult(result) }
+    private lateinit var state: HeroDetailStateManager
 
-    /** Activity 作用域的检索 ViewModel：预搜索 / 换源弹窗共用，`onDestroy` 里摘观察者并停搜索。 */
-    private var siteViewModel: SiteViewModel? = null
+    /** Intent 首帧数据：详情 / TMDB 都在这份 base 上重新合并（绝不叠加）。 */
+    private lateinit var initialDetail: HeroDetail
+
+    private var vodId = ""
+    private var siteKey = ""
+    private var siteName = ""
+
+    /** 传入 Vod 自带线路时非空：跳过详情请求，直接把这份线路交给选集弹窗。 */
+    private var inlineVod: Vod? = null
+
+    /** 后台预搜索：第一条结果决定「换源」按钮文案，也是「播放」兜底目标。 */
+    private var preSearchVod: Vod? = null
+    private var preSearchSite: Site? = null
+    private var preSearchResults: List<Vod> = emptyList()
+
+    private val preSearchObserver = Observer<Result?> { onPreSearchResult(it) }
+    private val detailObserver = Observer<Result?> { result ->
+        state.onDetailResult(result, preSearchVod, preSearchSite)
+        render()
+    }
+
+    // ---- 弹窗 / 协程 ----
+    private var episodeDialog: EpisodeViewDialog? = null
+    private var sourceDialog: ChangeSourceDialog? = null
+    private var tmdbJob: Job? = null
+    private var tmdbKey: String? = null
+    private var fallbackJob: Job? = null
+
+    // ---- 渲染记忆（避免同一张图重复 load / 同一份列表重复 notify） ----
+    private var focusedCast = 0
+    private var castIds: List<String> = emptyList()
+    private var renderedBackdrop: String? = null
+    private var renderedPoster: String? = null
+    private var renderedLogo: String? = null
+
+    // ------------------------------------------------------------------
+    // 视图
+    // ------------------------------------------------------------------
+
+    private lateinit var backdrop: ImageView
+    private lateinit var posterCard: View
+    private lateinit var poster: ImageView
+    private lateinit var titleTextSlot: View
+    private lateinit var titleText: TextView
+    private lateinit var titleLogoSlot: View
+    private lateinit var titleLogo: ImageView
+    private lateinit var meta: TextView
+    private lateinit var synopsis: TextView
+    private lateinit var credit: TextView
+    private lateinit var loadingRow: View
+    private lateinit var stateText: TextView
+    private lateinit var actionPlay: TextView
+    private lateinit var actionChangeSource: TextView
+    private lateinit var actionKeep: TextView
+    private lateinit var castSection: View
+    private lateinit var castList: RecyclerView
+    private lateinit var castAdapter: HeroDetailCastAdapter
+
+    // ------------------------------------------------------------------
+    // 生命周期
+    // ------------------------------------------------------------------
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -204,47 +168,55 @@ class HeroDetailActivity : ComponentActivity() {
             systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
         }
         HeroImageLoader.install()
+        setContentView(R.layout.activity_hero_detail_view)
+        bindViews()
+        setupCastList()
+        setupActions()
+
         // 真实详情主键：首页海报卡 / 换源弹窗已经把它塞进 Intent；旧入口（只有剧名）为空。
         val rawVodId = intent.getStringExtra(EXTRA_VOD_ID).orEmpty()
-        // 原版 `VideoActivity.checkId()`：
-        // `push://xxx` 是嗅探 / 推送专用地址，原版会把它换成 PUSH 站点 + 去掉前缀的 id，
-        // 再走普通详情请求；这里照抄，绝不自己另造规则。
+        // 原版 `VideoActivity.checkId()`：`push://` 是嗅探 / 推送专用地址，换成 PUSH 站点再走详情。
         val pushId = rawVodId.takeIf { it.startsWith(PUSH_PREFIX) }?.substring(PUSH_PREFIX.length)
-        val vodId = pushId ?: rawVodId
+        vodId = pushId ?: rawVodId
         // 换源弹窗要「排除当前源」：优先用这条数据自己的源，没有（旧入口）才回落到首页源。
-        val siteKey = if (pushId != null) {
+        siteKey = if (pushId != null) {
             SiteApi.PUSH
         } else {
             intent.getStringExtra(EXTRA_SITE_KEY).orEmpty().ifBlank {
                 VodConfig.get().getHome().key
             }
         }
-        val siteName = intent.getStringExtra(EXTRA_SITE_NAME).orEmpty()
+        siteName = intent.getStringExtra(EXTRA_SITE_NAME).orEmpty()
         // 真实数据入口：首页海报卡 / 换源弹窗会把整条 Vod + Site 的关键字段塞进 Intent。
-        // 只有剧名的旧入口（adb 直接拉起）继续整页回落 DEMO_DETAIL。
-        // `siteKey` / `vodId` 必须先算好：首帧横图要拿它们在本地 TMDB 缓存里做同步查找。
-        val detail = readDetail(siteKey, vodId)
+        initialDetail = readDetail(siteKey, vodId)
         // 传下来的整条 Vod：如果它自己已经带 flags（WebHome 内联源 / 聚合结果），就不用再请求。
         val passedVod = readVod()
         val inlinePlayable = passedVod != null && passedVod.hydrateInlineEpisodes()
-        // 【致命日志】传进来的 Vod 形状：搜索 / 首页通常是轻量结果（flagsSize=0），必须走详情请求；
-        // 只有 flagsSize>0 才轮到「要不要跳过请求」。siteKey / vodId 也一起打，便于核对站点是否查错。
+        inlineVod = if (inlinePlayable) passedVod else null
+
+        state = HeroDetailStateManager(
+            activity = this,
+            siteViewModel = siteViewModel,
+            vodId = vodId,
+            siteKey = siteKey,
+            siteName = siteName,
+            inlineVod = inlineVod,
+        )
+
+        // 【致命日志】传进来的 Vod 形状：搜索 / 首页通常是轻量结果（flagsSize=0），必须走详情请求。
         Log.e(
             TAG_DETAIL,
             "收到的 Vod: id=${passedVod?.id}, site=$siteKey, flagsSize=${passedVod?.flags?.size ?: 0}, " +
                 "playableLines=${passedVod?.flags?.count { !it.episodes.isNullOrEmpty() } ?: 0}, " +
                 "playUrlLen=${passedVod?.playUrl?.length ?: 0}, vodId=$vodId, inlinePlayable=$inlinePlayable, " +
-                // 卡片自带的 Site 是否比配置里的更完整：若这里 api/jar 也空，
-                // 说明这条数据来自「片单/导航」类 spider 临时造的站点，配置里根本没有它。
                 "vodSiteKey=${passedVod?.site?.key}, vodSiteApi=${passedVod?.site?.api}, " +
                 "vodSiteJar=${passedVod?.site?.jar}, vodSiteExtLen=${passedVod?.site?.ext?.length ?: 0}",
         )
-        // 换源弹窗需要 Activity 作用域的 SiteViewModel（构造函数里就建了两个单线程 executor，
-        // 绝不能按弹窗 new）。详情页自己持有一份，和首页互不影响。
-        val siteViewModel = ViewModelProvider(this)[SiteViewModel::class.java]
-        this.siteViewModel = siteViewModel
-        // 【真实详情】进页就请求：结果写 `SiteViewModel.result`，由 Compose 侧的观察者接收。
-        // 详情接口返回的 `Vod.flags[].episodes` 是选集弹窗与起播的唯一数据源。
+
+        // 观察者只创建一次：详情 / 播放兜底 / folder 下探三路共用 `result` 通道。
+        siteViewModel.result.observeForever(detailObserver)
+
+        // 【真实详情】进页就请求：结果写 `SiteViewModel.result`，由上面的观察者接收。
         when {
             // 1. 已经自带线路：直接渲染，绝不发请求（内联源本来就没有可查的详情接口）。
             inlinePlayable -> Log.d(
@@ -263,9 +235,6 @@ class HeroDetailActivity : ComponentActivity() {
 
             // 3. 正常详情：首次进页就带 refresh=true，绕过可能已经坏掉的旧缓存。
             else -> {
-                // 排查「详情拿不到线路」的第一手证据：key 能不能真的查到站点配置、ext 有没有丢。
-                // `SiteApi.detailContent` 内部会按 key 重新查 Site；查不到时拿到的是空 Site，
-                // 表现为 api/ext 全空、请求必然失败（csp_xxx 这类依赖 ext 的源尤其明显）。
                 val site = VodConfig.get().getSite(siteKey)
                 Log.d(
                     TAG_DETAIL,
@@ -273,8 +242,6 @@ class HeroDetailActivity : ComponentActivity() {
                         "lookupKey=${site.key} name=${site.displayName} type=${site.type} " +
                         "api=${site.api} extLen=${site.ext.length} jar=${site.jar} id=$vodId",
                 )
-                // 这条是「spider 退化成 SpiderNull」的最强信号：key 在配置里查不到 → api 为空 →
-                // `BaseLoader.getSpider()` 直接返回 SpiderNull → 详情返回空串 → id 空 / 线路 0。
                 if (site.isEmpty) {
                     Log.e(
                         TAG_DETAIL,
@@ -284,66 +251,567 @@ class HeroDetailActivity : ComponentActivity() {
                 siteViewModel.detailContent(siteKey, vodId, true)
             }
         }
-        // 【后台预搜索】换源按钮要显示「第一个搜到的源」，所以进页就并发搜一轮。
-        // 走 `search` 通道（详情走 `result`），互不干扰。
-        //
-        // 1. 源集合 = 换源弹窗的候选源（排除当前源）：按钮上显示的必须是「点开换源真的能换过去的源」；
-        // 2. quick=false：`quick=true` 会跳过 `quickSearch=0` 的源（大部分源都是这种），
-        //    表现为一个结果都搜不到 → 换源按钮永远显示不出源名。
-        val searchKeyword = detail.title
-        if (rawVodId.isNotBlank() && searchKeyword.isNotBlank()) {
-            val candidates = ChangeSourceDialog.candidates(siteKey)
-            val searchable = candidates.ifEmpty {
-                VodConfig.get().getSites().filter { it.isSearchable }
+
+        // 【后台预搜索】换源按钮要显示「第一个搜到的源」，所以进页就并发搜一轮（`search` 通道）。
+        startPreSearch(initialDetail.title, rawVodId)
+
+        render()
+        // 默认焦点落在「播放」：等首帧布局完成再请求，否则 requestFocus 会失败。
+        actionPlay.post { if (!isFinishing && !isDestroyed) actionPlay.requestFocus() }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // 让按钮按数据库真实状态刷新：收藏页 / 其它入口改过数据库，回到本页必须跟着变。
+        state.updateKeepButtonState()
+        renderKeep()
+    }
+
+    override fun onDestroy() {
+        siteViewModel.search.removeObserver(preSearchObserver)
+        siteViewModel.result.removeObserver(detailObserver)
+        // 离开详情页就停掉在途的预搜索，别让后台线程继续跑。
+        siteViewModel.stopSearch()
+        tmdbJob?.cancel()
+        fallbackJob?.cancel()
+        episodeDialog?.dismiss()
+        episodeDialog = null
+        sourceDialog?.dismiss()
+        sourceDialog = null
+        super.onDestroy()
+    }
+
+    // ------------------------------------------------------------------
+    // 视图绑定 / 事件
+    // ------------------------------------------------------------------
+
+    private fun bindViews() {
+        backdrop = findViewById(R.id.backdrop)
+        posterCard = findViewById(R.id.posterCard)
+        poster = findViewById(R.id.poster)
+        titleTextSlot = findViewById(R.id.titleTextSlot)
+        titleText = findViewById(R.id.titleText)
+        titleLogoSlot = findViewById(R.id.titleLogoSlot)
+        titleLogo = findViewById(R.id.titleLogo)
+        meta = findViewById(R.id.meta)
+        synopsis = findViewById(R.id.synopsis)
+        credit = findViewById(R.id.credit)
+        loadingRow = findViewById(R.id.loadingRow)
+        stateText = findViewById(R.id.stateText)
+        actionPlay = findViewById(R.id.actionPlay)
+        actionChangeSource = findViewById(R.id.actionChangeSource)
+        actionKeep = findViewById(R.id.actionKeep)
+        castSection = findViewById(R.id.castSection)
+        castList = findViewById(R.id.castList)
+    }
+
+    private fun setupCastList() {
+        castAdapter = HeroDetailCastAdapter(
+            onFocused = { index -> focusedCast = index },
+            onClick = { index -> onCastClicked(index) },
+            onMoveUp = { actionPlay.requestFocus() },
+        )
+        castList.apply {
+            layoutManager = LinearLayoutManager(this@HeroDetailActivity, RecyclerView.HORIZONTAL, false)
+            adapter = castAdapter
+            itemAnimator = null
+            // 高度是 wrap_content（跟着演员项走），绝不能 hasFixedSize：否则 0 → N 项时不会重新测量。
+            overScrollMode = View.OVER_SCROLL_NEVER
+            clipToPadding = false
+            clipChildren = false
+            isFocusable = false
+            descendantFocusability = ViewGroup.FOCUS_AFTER_DESCENDANTS
+            addItemDecoration(HeroHorizontalGapDecoration(dp(12)))
+        }
+    }
+
+    private fun setupActions() {
+        // 图标尺寸与 Compose 版一致：播放 24dp，换源 / 收藏 20dp。
+        setActionIcon(actionPlay, R.drawable.ic_widget_play, 24)
+        setActionIcon(actionChangeSource, R.drawable.ic_detail_change, 20)
+        setActionIcon(actionKeep, R.drawable.ic_detail_keep_off, 20)
+        listOf(actionPlay, actionChangeSource, actionKeep).forEach { button ->
+            button.setOnKeyListener { _, keyCode, event ->
+                if (event.action != KeyEvent.ACTION_DOWN) {
+                    false
+                } else {
+                    when (keyCode) {
+                        // ↓ 进入最底部的演职员行，落在上次停留的演员；没有演员时不消费，交给系统搜索。
+                        KeyEvent.KEYCODE_DPAD_DOWN -> {
+                            if (castAdapter.itemCount == 0) {
+                                false
+                            } else {
+                                focusCast(focusedCast)
+                                true
+                            }
+                        }
+
+                        // ↑ 已到内容区顶部、直接消费。
+                        KeyEvent.KEYCODE_DPAD_UP -> true
+                        else -> false
+                    }
+                }
             }
-            // 侧边栏勾选持久化：没勾的源连请求都不发（与换源弹窗的全局检索保持一致）。
-            val checked = SourceSelectionStore.checkedSites(this, searchable)
-            Log.e(
-                TAG_DETAIL,
-                "进页后台预搜索: keyword=[$searchKeyword], 源=${searchable.size}, " +
-                    "勾选=${checked.size}, 候选源=${candidates.size}, quick=false",
+        }
+        actionPlay.setOnClickListener { onPlayClicked() }
+        actionChangeSource.setOnClickListener { onChangeSourceClicked() }
+        actionKeep.setOnClickListener {
+            state.toggleKeep(this, state.detailResult?.vod, currentPage())
+            renderKeep()
+        }
+    }
+
+    private fun setActionIcon(button: TextView, iconRes: Int, sizeDp: Int) {
+        val drawable = ContextCompat.getDrawable(this, iconRes) ?: return
+        val size = dp(sizeDp)
+        drawable.setBounds(0, 0, size, size)
+        button.setCompoundDrawables(drawable, null, null, null)
+    }
+
+    // ------------------------------------------------------------------
+    // 渲染
+    // ------------------------------------------------------------------
+
+    /** 当前可渲染页面：Intent 首帧 → 详情接口 → TMDB（每次基于新 base 重算，评分不叠加）。 */
+    private fun currentPage(): HeroDetail =
+        state.buildPage(initialDetail, state.detailResult?.vod, state.tmdbState)
+
+    private fun render() {
+        val vod = state.detailResult?.vod
+        val page = currentPage()
+        bindTitle(page)
+        meta.text = page.meta
+        synopsis.text = page.synopsis
+        val creditLine = page.creditLine()
+        credit.text = creditLine
+        credit.visibility = if (creditLine.isBlank()) View.GONE else View.VISIBLE
+        bindImages(page)
+        bindDetailState(vod)
+        actionChangeSource.text = changeSourceLabel()
+        renderKeep()
+        bindCast(page)
+        syncDialogs()
+        syncFallbackTimeout()
+        maybeLoadTmdb(vod)
+    }
+
+    /**
+     * 剧名区：有 TMDB 艺术字走 96dp Logo，没有则 32sp 文字跑马灯。
+     *
+     * Logo 加载期间继续显示文字（Compose 版 SubcomposeAsyncImage 的 loading / error 槽），
+     * 图片到达才隐藏文字，避免「先空一行、再出图」。
+     */
+    private fun bindTitle(page: HeroDetail) {
+        titleText.text = page.title
+        // 跑马灯需要 selected 状态才会滚动。
+        titleText.isSelected = true
+        val logo = page.logoUrl.orEmpty()
+        if (logo.isBlank()) {
+            renderedLogo = null
+            titleLogoSlot.visibility = View.GONE
+            titleTextSlot.visibility = View.VISIBLE
+            return
+        }
+        titleLogoSlot.visibility = View.VISIBLE
+        if (logo == renderedLogo) return
+        renderedLogo = logo
+        titleLogo.load(logo) {
+            crossfade(300)
+            listener(
+                onSuccess = { _, _ -> titleTextSlot.visibility = View.GONE },
+                onError = { _, _ -> titleTextSlot.visibility = View.VISIBLE },
             )
-            if (checked.isEmpty()) {
-                Log.e(TAG_DETAIL, "预搜索跳过: 侧边栏没有勾选任何源")
+        }
+    }
+
+    /** 背景只认横图；右上角小海报在「有 TMDB 背景大图」时整块隐藏。 */
+    private fun bindImages(page: HeroDetail) {
+        if (page.backdropUrl != renderedBackdrop) {
+            renderedBackdrop = page.backdropUrl
+            if (page.backdropUrl.isBlank()) {
+                backdrop.setImageDrawable(null)
             } else {
-                siteViewModel.search.observeForever(preSearchObserver)
-                siteViewModel.searchContent(checked, searchKeyword, false)
+                backdrop.load(page.backdropUrl) { crossfade(800) }
             }
         }
-        setContent {
-            MaterialTheme(colorScheme = darkColorScheme()) {
-                HeroDetailScreen(
-                    activity = this@HeroDetailActivity,
-                    detail = detail,
-                    vodId = vodId,
-                    siteKey = siteKey,
-                    siteName = siteName,
-                    siteViewModel = siteViewModel,
-                    inlineVod = if (inlinePlayable) passedVod else null,
-                    firstSearchVod = preSearchVod.value,
-                    firstSearchSite = preSearchSite.value,
-                    preSearchResults = preSearchResults.value,
-                    keepRefreshTick = keepRefreshTick.intValue,
+        val showPoster = !page.hasTmdbBackdrop
+        posterCard.visibility = if (showPoster) View.VISIBLE else View.GONE
+        if (showPoster && page.posterUrl != renderedPoster) {
+            renderedPoster = page.posterUrl
+            if (page.posterUrl.isBlank()) {
+                poster.setImageDrawable(null)
+            } else {
+                poster.load(page.posterUrl) { crossfade(300) }
+            }
+        }
+    }
+
+    /** 加载中 / 请求失败 / 确实没有剧集 / 需要特殊解析：四种状态分开显示。 */
+    private fun bindDetailState(vod: Vod?) {
+        val detailState = detailState(vod)
+        val loading = detailState == DetailState.Loading || state.playLoading
+        loadingRow.visibility = if (loading) View.VISIBLE else View.GONE
+        when {
+            loading -> stateText.visibility = View.GONE
+            detailState == DetailState.Error -> {
+                val error = state.detailResult?.msg.orEmpty()
+                // 与 Compose 版 DETAIL_ERROR_COLOR 同值：失败提示用淡红，和普通空态区分开。
+                stateText.setTextColor(0xFFFF8A80.toInt())
+                stateText.text = if (error.isBlank()) {
+                    "详情加载失败，按「播放」重试"
+                } else {
+                    "详情加载失败：$error（按「播放」重试）"
+                }
+                stateText.visibility = View.VISIBLE
+            }
+
+            detailState == DetailState.Empty -> {
+                // 与 Compose 版 DETAIL_META_COLOR 同值：空态是说明文字，不用告警色。
+                stateText.setTextColor(0xCCFFFFFF.toInt())
+                stateText.text = state.emptyHint
+                stateText.visibility = View.VISIBLE
+            }
+
+            else -> stateText.visibility = View.GONE
+        }
+    }
+
+    private fun bindCast(page: HeroDetail) {
+        val cast = page.cast
+        castSection.visibility = if (cast.isEmpty()) View.GONE else View.VISIBLE
+        val ids = cast.map { it.id }
+        if (ids != castIds) {
+            castIds = ids
+            castAdapter.submit(cast)
+        }
+        if (focusedCast > cast.lastIndex) focusedCast = 0
+        // TMDB 演员列表整体替换占位数据后，旧的演员下标可能越界。
+        state.clampActorDialogIndex(cast.size)
+    }
+
+    private fun renderKeep() {
+        val checked = state.keepCheckedState.value
+        actionKeep.text = if (checked) "已收藏" else "收藏"
+        setActionIcon(
+            actionKeep,
+            if (checked) R.drawable.ic_detail_keep_on else R.drawable.ic_detail_keep_off,
+            20,
+        )
+    }
+
+    private fun changeSourceLabel(): String {
+        val name = preSearchSite?.displayName.orEmpty()
+        return if (name.isBlank()) "换源" else "换源 ($name)"
+    }
+
+    /** 与 Compose 版完全一致的四种状态判定：`flags` 优先，绝不把失败说成「没有剧集」。 */
+    private fun detailState(vod: Vod?): DetailState {
+        val flags = vod?.flags.orEmpty()
+        val result = state.detailResult
+        return when {
+            flags.isNotEmpty() -> DetailState.Ready
+            vodId.isBlank() -> DetailState.Empty
+            state.special -> DetailState.Empty
+            result == null -> DetailState.Loading
+            result.list.isEmpty() -> DetailState.Error
+            else -> DetailState.Empty
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // 弹窗 / 兜底 / TMDB
+    // ------------------------------------------------------------------
+
+    private fun syncDialogs() {
+        if (state.showPlayDialog && state.playFlags.isNotEmpty()) {
+            if (episodeDialog != null) return
+            // 跨源兜底成功提示：等选集弹窗真正拿到真实剧集后再提示。
+            state.onPlayDialogShown()
+            val episodeVod = state.playVod
+            // 起播的源：本页详情 → 本页源；跨源兜底 → 预搜索命中的那个源。
+            val episodeSiteKey = state.playSiteKey
+            // 起播 id：优先用详情回包里的 id；回包没带时只有本页自己的源才能回落到页面主键。
+            val episodeVodId = episodeVod?.id.orEmpty().ifBlank {
+                if (episodeSiteKey == siteKey) vodId else ""
+            }
+            episodeDialog = EpisodeViewDialog(
+                context = this,
+                flags = state.playFlags,
+                lastWatchedEpisodeIndex = -1,
+                onEpisodeSelected = { flag, episode ->
+                    state.showPlayDialog = false
+                    startEpisode(this, episodeSiteKey, episodeVod, episodeVodId, flag, episode)
+                },
+                onDismiss = {
+                    state.showPlayDialog = false
+                    episodeDialog = null
+                    restoreFocus()
+                },
+            ).also { it.show() }
+            return
+        }
+        if (episodeDialog != null && !state.showPlayDialog) {
+            episodeDialog?.dismiss()
+            episodeDialog = null
+        }
+    }
+
+    /** 预搜索完全没结果时最多等 10 秒，给一次明确反馈（对应 Compose 的 `LaunchedEffect`）。 */
+    private fun syncFallbackTimeout() {
+        if (state.pendingPlayFallback) {
+            if (fallbackJob != null) return
+            fallbackJob = lifecycleScope.launch {
+                state.onFallbackTimeout()
+                fallbackJob = null
+                render()
+            }
+        } else {
+            fallbackJob?.cancel()
+            fallbackJob = null
+        }
+    }
+
+    /**
+     * TMDB 元数据：`vodId / siteKey / name / year` 变化才重新加载（对应 Compose 的 LaunchedEffect key）。
+     * `loadTmdb` 内部已有 Ready / Loading 守卫，重复调用安全。
+     */
+    private fun maybeLoadTmdb(vod: Vod?) {
+        val key = "$vodId|$siteKey|${vod?.name.orEmpty()}|${vod?.year.orEmpty()}"
+        if (key == tmdbKey) return
+        tmdbKey = key
+        tmdbJob?.cancel()
+        tmdbJob = lifecycleScope.launch {
+            state.loadTmdb(vod)
+            render()
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // 点击
+    // ------------------------------------------------------------------
+
+    private fun onPlayClicked() {
+        // 【唯一数据源】选集弹窗只认 `flags`；只有存在真实 http/m3u8 地址才算当前源可播。
+        val flags = state.detailResult?.vod?.flags.orEmpty()
+        val fallbackVod = preSearchVod
+        val fallbackSite = preSearchSite
+        val currentPlayable = flags.any { it.hasRealVideoUrl() }
+        when {
+            state.playLoading -> Notify.show("正在加载剧集，请稍候")
+
+            // 1) 当前源有真实视频链接：直接弹自己的选集。
+            currentPlayable -> {
+                state.autoSwitchNotice = false
+                state.playFlags = flags
+                state.playVod = state.detailResult?.vod
+                state.playSiteKey = siteKey
+                state.showPlayDialog = true
+                render()
+            }
+
+            // 2) 详情还在加载：等回包后按同一套「真实链接」规则再判断。
+            detailState(state.detailResult?.vod) == DetailState.Loading -> {
+                state.pendingPlayOpen = true
+                state.playLoading = true
+                Notify.show("正在加载剧集，请稍候")
+                render()
+            }
+
+            // 3) 当前源不可播（动作项 / 伪集数 / 空地址）：改拉预搜索第一个结果。
+            fallbackVod != null && fallbackSite != null && fallbackVod.id.isNotBlank() -> {
+                Log.e(
+                    TAG_DETAIL,
+                    "当前源无真实视频链接，自动切换: site=${fallbackSite.key} " +
+                        "id=${fallbackVod.id} 集数=${flags.sumOf { it.episodes.orEmpty().size }} " +
+                        "真实链接线路=${flags.count { it.hasRealVideoUrl() }}",
                 )
+                state.autoSwitchNotice = true
+                Notify.show("当前源不可播，正在切换可用源…")
+                state.requestPlayTarget(fallbackVod, fallbackSite)
+                render()
+            }
+
+            // 4) 预搜索还没回来：显示 Loading 等待，结果一到自动继续。
+            else -> {
+                state.pendingPlayFallback = true
+                state.playLoading = true
+                Log.e(TAG_DETAIL, "当前源无真实视频链接，等待预搜索结果…")
+                Notify.show("正在寻找可用源，请稍候")
+                render()
             }
         }
+    }
+
+    private fun onChangeSourceClicked() {
+        val page = currentPage()
+        // 候选源规则与首页完全一致：isSearchable + isChangeable + 非隐藏 + 未被屏蔽 + 非当前源。
+        var candidates = ChangeSourceDialog.candidates(siteKey)
+        if (candidates.isEmpty()) {
+            // 【兜底】真实数据下候选源可能因为「当前源不可换 / 全被屏蔽」而空：退回全部可搜索源。
+            candidates = VodConfig.get().getSites().filter { it.isSearchable }
+        }
+        if (candidates.isEmpty() || page.title.isBlank()) {
+            Notify.show(getString(R.string.play_change_empty))
+            return
+        }
+        state.pendingActionFocus = DETAIL_ACTION_CHANGE_SOURCE
+        state.showSourceDialog = true
+        // 打开换源弹窗 = 放弃这次「播放」等待：清掉在途的播放状态，
+        // 否则弹窗里的详情回包会被本页误当成「选集数据」直接弹选集。
+        state.playLoading = false
+        state.pendingPlayOpen = false
+        state.pendingPlayId = null
+        state.pendingPlaySite = null
+        state.pendingPlayVod = null
+        state.pendingPlayDrill = 0
+        state.pendingPlayCategory = null
+        try {
+            sourceDialog = ChangeSourceDialog.show(
+                context = this,
+                sites = candidates,
+                keyword = page.title,
+                quick = false,
+                // 进页预搜索的结果直接铺开：弹窗首帧就有卡片，不再等一轮网络。
+                initialResults = preSearchResults,
+                onSourceSelected = { vod, site ->
+                    Notify.show(
+                        getString(
+                            R.string.source_sidebar_switched,
+                            "${site.displayName} · ${vod.name}",
+                        ),
+                    )
+                    // 换源结果和首页点卡片完全一致：folder 条目走分类页，其余进详情页。
+                    openHeroDetailOrFolder(this, vod, site)
+                },
+                onClosed = {
+                    state.showSourceDialog = false
+                    state.playLoading = false
+                    sourceDialog = null
+                    // 弹窗打开期间 result 通道归弹窗，本页的在途详情回包会被丢弃；
+                    // 关窗后按自己的主键重拉一次：既恢复页面，也作废弹窗可能还在途的请求。
+                    if (state.ownsResultChannel) {
+                        Log.e(TAG_DETAIL, "换源弹窗关闭，重拉详情: site=$siteKey id=$vodId")
+                        siteViewModel.detailContent(siteKey, vodId, false)
+                    } else {
+                        inlineVod?.let { state.detailResult = Result.vod(it) }
+                    }
+                    render()
+                    restoreFocus()
+                },
+            )
+        } catch (e: Throwable) {
+            Log.e("ChangeSource", "弹窗呼出崩溃", e)
+            state.showSourceDialog = false
+            sourceDialog = null
+            Notify.show("换源弹窗打开失败: ${e.message}")
+        }
+    }
+
+    private fun onCastClicked(index: Int) {
+        val person = currentPage().tmdbPersons.getOrNull(index)
+        if (person != null) {
+            // 命中 TMDB → 进 View 版人物页（首帧用 extras，随后按 personId 全量刷新）。
+            TmdbPersonActivity.start(this, person, siteKey, Setting.getDetailOpenMode())
+        } else {
+            // 旧 adb 假数据入口：演员占位弹窗尚未迁移到 View，只保留「回到被点头像」的焦点语义。
+            state.pendingCastFocus = index
+            restoreFocus()
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // 焦点
+    // ------------------------------------------------------------------
+
+    /**
+     * 三个弹窗都关闭后才抢焦点：
+     * - 刚关掉演员弹窗 → 回到被点的那位演员；
+     * - 刚关掉换源弹窗 → 回到「换源」按钮；
+     * - 否则（首次进入 / 关闭播放弹窗）→ 回到「播放」。
+     *
+     * 用 `postOnAnimation` 逐帧重试，替代 Compose 版的 `withFrameNanos`：弹窗刚关的那一帧
+     * RecyclerView 项可能还没恢复可聚焦。
+     */
+    private fun restoreFocus() {
+        if (state.showPlayDialog || state.showSourceDialog || state.actorDialogIndex != null) return
+        val castTarget = state.pendingCastFocus
+        state.pendingCastFocus = -1
+        if (castTarget >= 0) {
+            requestCastFocus(castTarget, 5)
+            return
+        }
+        val actionTarget = state.pendingActionFocus
+        state.pendingActionFocus = -1
+        if (actionTarget >= 0) {
+            requestActionFocus(actionTarget, 5)
+            return
+        }
+        requestActionFocus(DETAIL_ACTION_PLAY, 3)
+    }
+
+    private fun focusCast(index: Int) = requestCastFocus(index, 1)
+
+    private fun requestCastFocus(index: Int, retries: Int) {
+        if (castAdapter.itemCount == 0) return
+        val target = index.coerceIn(0, castAdapter.itemCount - 1)
+        val manager = castList.layoutManager as? LinearLayoutManager
+        val child = manager?.findViewByPosition(target)
+        if (child != null && child.requestFocus()) return
+        castList.scrollToPosition(target)
+        if (retries <= 0) return
+        castList.postOnAnimation { requestCastFocus(target, retries - 1) }
+    }
+
+    private fun requestActionFocus(index: Int, retries: Int) {
+        val target = when (index) {
+            DETAIL_ACTION_CHANGE_SOURCE -> actionChangeSource
+            DETAIL_ACTION_KEEP -> actionKeep
+            else -> actionPlay
+        }
+        if (target.requestFocus()) return
+        if (retries <= 0) return
+        target.postOnAnimation { requestActionFocus(index, retries - 1) }
+    }
+
+    // ------------------------------------------------------------------
+    // 预搜索
+    // ------------------------------------------------------------------
+
+    private fun startPreSearch(keyword: String, rawVodId: String) {
+        if (rawVodId.isBlank() || keyword.isBlank()) return
+        // 1. 源集合 = 换源弹窗的候选源（排除当前源）：按钮上显示的必须是「点开换源真的能换过去的源」；
+        // 2. quick=false：`quick=true` 会跳过 `quickSearch=0` 的源（大部分源都是这种）。
+        val candidates = ChangeSourceDialog.candidates(siteKey)
+        val searchable = candidates.ifEmpty {
+            VodConfig.get().getSites().filter { it.isSearchable }
+        }
+        // 侧边栏勾选持久化：没勾的源连请求都不发（与换源弹窗的全局检索保持一致）。
+        val checked = SourceSelectionStore.checkedSites(this, searchable)
+        Log.e(
+            TAG_DETAIL,
+            "进页后台预搜索: keyword=[$keyword], 源=${searchable.size}, " +
+                "勾选=${checked.size}, 候选源=${candidates.size}, quick=false",
+        )
+        if (checked.isEmpty()) {
+            Log.e(TAG_DETAIL, "预搜索跳过: 侧边栏没有勾选任何源")
+            return
+        }
+        siteViewModel.search.observeForever(preSearchObserver)
+        siteViewModel.searchContent(checked, keyword, false)
     }
 
     /**
      * 预搜索结果：一个源回一条，**第一条结果就决定按钮上显示的源名**。
      *
      * 同一条剧可能在多个源都命中：按「源 key + 剧 id」去重，弹窗里不会出现重复卡。
-     * 结果里每条 [Vod] 都已由 `SiteApi.searchContent` 盖过 `setSite(site)`。
      */
     private fun onPreSearchResult(result: Result?) {
         if (result == null) return
         val items = result.list
         // 第一条**有效**结果：有 id 且不是动作伪条目（`vod_tag=action` / 动作 JSON 卡）。
-        // 它既决定「换源」按钮上显示的源名，也是点「播放」时要优先拉取的目标。
         val firstValid = items.firstOrNull { it.id.isNotBlank() && !it.isActionItem() }
         val site = firstValid?.site ?: items.firstOrNull()?.site
         if (site == null) {
-            // 空结果是「这个源没搜到」，属于正常；有结果却没有 site 才是异常（无法归因到源）。
             if (items.isNotEmpty()) {
                 Log.w(TAG_DETAIL, "预搜索结果无法归因到源: listSize=${items.size}, 已丢弃")
             }
@@ -353,28 +821,23 @@ class HeroDetailActivity : ComponentActivity() {
             TAG_DETAIL,
             "预搜索结果: site=${site.key}(${site.displayName}) listSize=${items.size}",
         )
-        preSearchResults.value = (preSearchResults.value + items)
+        preSearchResults = (preSearchResults + items)
             .distinctBy { vod -> "${vod.siteKey}:${vod.id}" }
-        if (preSearchVod.value == null && firstValid != null) {
-            preSearchVod.value = firstValid
-            preSearchSite.value = site
+        if (preSearchVod == null && firstValid != null) {
+            preSearchVod = firstValid
+            preSearchSite = site
+        }
+        actionChangeSource.text = changeSourceLabel()
+        // 预搜索是异步的：当前源不可播、结果还没到时先登记等待，结果一到自动继续下探 / 拉详情。
+        if (state.pendingPlayFallback) {
+            state.onPreSearchReady(preSearchVod, preSearchSite)
+            render()
         }
     }
 
-    override fun onResume() {
-        super.onResume()
-        // 让 Compose 侧重读一次 Keep：收藏页 / 其它入口改过数据库，回到本页按钮要跟着变。
-        keepRefreshTick.intValue++
-    }
-
-    override fun onDestroy() {
-        siteViewModel?.let { viewModel ->
-            viewModel.search.removeObserver(preSearchObserver)
-            // 离开详情页就停掉在途的预搜索，别让后台线程继续跑。
-            viewModel.stopSearch()
-        }
-        super.onDestroy()
-    }
+    // ------------------------------------------------------------------
+    // Intent → 首帧数据
+    // ------------------------------------------------------------------
 
     /**
      * Intent → 首帧页面数据。
@@ -383,27 +846,19 @@ class HeroDetailActivity : ComponentActivity() {
      * 剧名、海报、元数据、简介先按 Intent 直出，详情接口回来后再由
      * [mergeDetail] 用真实 [Vod] 整体覆盖（含年份 / 地区 / 分类 / 简介 / 导演 / 主演）。
      *
-     * 演职员：真实条目**不再**沿用 [DEMO_DETAIL] 的假演员（TMDB 到达前整行隐藏，
-     * 命中后由 TMDB 真演员整体替换）；只有旧 adb 入口（既没有海报、也没有 `extra_vod_id`）
-     * 才保留假数据用于离线验证。
-     * 线路与选集则完全来自 `SiteViewModel.detailContent` 返回的 `Vod.flags`，不再有假数据。
+     * 演职员：真实条目**不再**沿用 [DEMO_DETAIL] 的假演员（TMDB 到达前整行隐藏）；
+     * 只有旧 adb 入口（既没有海报、也没有 `extra_vod_id`）才保留假数据用于离线验证。
      */
     private fun readDetail(siteKey: String, vodId: String): HeroDetail {
         val title = intent.getStringExtra(EXTRA_TITLE).orEmpty().ifBlank { return DEMO_DETAIL }
         val pic = intent.getStringExtra(EXTRA_PIC).orEmpty()
         // 旧 adb 入口 = 「只有剧名」：既没有海报，也没有详情主键（`extra_vod_id`）。
-        // 真实历史记录经常没有 `vod_pic`，但有 `vod_id`（详情页靠它拉真实线路 / 选集），
-        // 不能因为没海报就整页掉回 [DEMO_DETAIL] 的假数据。
         val demo = pic.isBlank() && intent.getStringExtra(EXTRA_VOD_ID).isNullOrBlank()
-        // 首页已经预取到 TMDB w1920 横图时，把它作为**首帧背景**直出：
-        // 详情接口只给竖版 `vod.pic`，等它回来再换背景会让首帧从横图硬切成竖图。
+        // 首页已经预取到 TMDB w1920 横图时，把它作为**首帧背景**直出。
         val extraBackdrop = intent.getStringExtra(EXTRA_BACKDROP).orEmpty()
         // 只有「确实和竖图不同」才算横图：同值时仍按源站图处理，行为与改动前完全一致。
         val wideExtra = extraBackdrop.isNotBlank() && extraBackdrop != pic
-        // 【首帧防闪·核心】历史页 / 换源弹窗入口**不带** `extra_backdrop`。改动前这里会退回
-        // `pic`（源站竖图）铺满全屏，用户看到的就是「先进来一张被拉伸的竖图，再被 TMDB 横图换掉」。
-        // 现在同步读一次本地缓存（进程内预取 → 磁盘匹配缓存）拿真横图；拿不到就留空，
-        // 由底层纯黑 Box 兜底 —— 竖图只允许待在右上角小海报里，绝不进全屏背景。
+        // 历史页 / 换源弹窗入口**不带** `extra_backdrop`：同步读一次本地缓存拿真横图；拿不到就留空。
         val cachedBackdrop = if (wideExtra) extraBackdrop else syncWideBackdrop(siteKey, vodId, title)
         // 非空且确实不是那张竖图才算数（匹配缓存里偶尔会把竖图写进 backdrop 字段）。
         val firstBackdrop = cachedBackdrop.takeIf { it.isNotBlank() && it != pic }
@@ -429,20 +884,13 @@ class HeroDetailActivity : ComponentActivity() {
             posterUrl = pic,
             // 首帧背景：只认真横图。没有就空串（底层黑底），**绝不**再用竖图 `pic` 铺满。
             backdropUrl = firstBackdrop.orEmpty(),
-            // 首帧直接出艺术字：有 Logo 时 `HeroDetailTitle` 走 72dp Logo，否则回落 32sp 文字。
             logoUrl = extraLogo.takeIf { it.isNotBlank() },
-            // 【关键·不闪小图】首帧就已经是横图时直接判定「有背景大图」：
-            // 否则右上角小海报会先渲染出来、等 TMDB Ready 才消失，正好点进详情时闪一下。
-            // 注意判 `wideBackdrop` 而不是 `extraBackdrop != null`：`start()` 永远会 put 这个 extra，
-            // 空串时它非 null 但不是横图，用 null 判断会把「没有横图」也误判成大图。
-            // 现在 `wideBackdrop` 还包含「本地 TMDB 缓存命中」这一路，判它才是真正的「首帧有没有横图」。
+            // 首帧就已经是横图时直接判定「有背景大图」：否则右上角小海报会先渲染出来再消失。
             hasTmdbBackdrop = wideBackdrop,
-            // 横图标记：`mergeDetail` 不再碰背景，`mergeTmdb` 据此保留更高清的档位、不闪小海报。
             hasWideBackdrop = wideBackdrop,
             // 首帧简介已经是 TMDB 译文时，`mergeDetail` 不要再用源站 `vod.content` 盖掉它。
             hasTmdbOverview = extraOverview.isNotBlank(),
-            // 真实条目清空假演员：TMDB 未配置 / 未命中时演员行为空（UI 整行隐藏），
-            // 不会出现「真数据 + 10 位假演员」混排；旧 adb 入口（demo）保留假演员。
+            // 真实条目清空假演员：TMDB 未配置 / 未命中时演员行为空（UI 整行隐藏）。
             cast = if (demo) DEMO_DETAIL.cast else emptyList(),
         )
     }
@@ -463,21 +911,20 @@ class HeroDetailActivity : ComponentActivity() {
         val cached = prefetched.ifBlank {
             runCatching {
                 val cache = Setting.getTmdbMatchCache()
-                // 手动匹配优先：与下面 LaunchedEffect 里的读取顺序完全一致。
-                (cache.findManual(siteKey, vodId, title) ?: cache.find(siteKey, vodId, title))?.backdropUrl.orEmpty()
+                // 手动匹配优先：与 `loadTmdb` 里的读取顺序完全一致。
+                (cache.findManual(siteKey, vodId, title) ?: cache.find(siteKey, vodId, title))
+                    ?.backdropUrl.orEmpty()
             }.getOrDefault("")
         }
         // 提档到 w1920：与首页 `highResBackdrop` 逐字一致，直接命中首页预热好的磁盘缓存。
         return upgradeTmdbImage(cached, TMDB_BACKDROP_WIDTH)
     }
 
-    /**
-     * Intent 里的整条 [Vod]（Parcelable，`flags` / `episodes` 都在里面）。
-     *
-     * 旧入口（只有剧名）、进程重建后 Extra 丢失、或第三方调用方没带 Vod 时返回 null。
-     */
+    /** Intent 里的整条 [Vod]（Parcelable，`flags` / `episodes` 都在里面）。 */
     @Suppress("DEPRECATION")
     private fun readVod(): Vod? = intent.getParcelableExtra(EXTRA_VOD)
+
+    private fun dp(value: Int): Int = (value * resources.displayMetrics.density).roundToInt()
 
     companion object {
 
@@ -501,12 +948,7 @@ class HeroDetailActivity : ComponentActivity() {
          * 也不会再用竖图覆盖它 —— 否则点进详情会先看到横图、再硬切成竖图。
          */
         private const val EXTRA_BACKDROP = "extra_backdrop"
-        /**
-         * 首页预取到的 TMDB 艺术字 Logo（透明 PNG）。
-         *
-         * 首页信息区已经显示它了，点进来时若再等 `readDetail → TMDB 请求 → mergeTmdb`，
-         * 会有几百毫秒的「文字标题 → Logo」切换；随 Intent 带过来就能首帧直接出艺术字。
-         */
+        /** 首页预取到的 TMDB 艺术字 Logo（透明 PNG）：首帧直接出艺术字，不等第二轮网络。 */
         private const val EXTRA_LOGO = "extra_logo"
         /** 首页预取到的 TMDB 简介：首帧直接显示，不让简介先空着 / 先显示源站短简介。 */
         private const val EXTRA_OVERVIEW = "extra_overview"
@@ -516,16 +958,11 @@ class HeroDetailActivity : ComponentActivity() {
          *
          * [Vod] 本身是 Parcelable（`flags` / `episodes` 都随 Parcel 传递），所以整条一起带过去：
          * 详情页先看它有没有自带可播线路（WebHome 内联源 / 聚合结果），有就直接渲染、不发详情请求。
-         * 标量字段仍然逐个塞进 Intent，供首帧直出和旧入口使用；[Site] 只带 key + 名称
-         * （详情页只需要它做「排除当前源」和元数据展示，不需要完整站点配置）。
-         *
-         * `extra_vod_id` 是详情接口的主键：没有内联线路时用它调 `SiteViewModel.detailContent`，
-         * 拿回真实的 `flags / episodes`；线路与选集不再有假数据。
+         * 标量字段仍然逐个塞进 Intent，供首帧直出和旧入口使用；[Site] 只带 key + 名称。
          *
          * [backdropUrl]：首页卡片当前显示的横版背景（TMDB 命中时是 w1920）。
          * 空串 = 没有横图，详情页照旧用 `vod.pic` 裁 16:9。
-         * [logoUrl] / [overview]：首页已经预取到的 TMDB 艺术字与简介，空串 = 没有，仍走原来的
-         * 「先显示源站内容、TMDB 到达后再替换」链路。
+         * [logoUrl] / [overview]：首页已经预取到的 TMDB 艺术字与简介，空串 = 没有。
          */
         fun start(
             context: Context,
@@ -558,11 +995,6 @@ class HeroDetailActivity : ComponentActivity() {
 
         /**
          * 历史记录入口：`ref_docs/HistoryFragment.java` L338-344 `h0()` 的等价实现。
-         *
-         * ```java
-         * DetailActivity.q2(L(), history.getSiteKey(), history.getVodId(), history.getVodName(),
-         *                   history.getVodPic(), history.getVodRemarks(), "");
-         * ```
          *
          * 只接收原版 `q2` 的**七个标量**。本工程没有 `DetailActivity`，所以在这里把标量还原成
          * 详情页真正需要的 [Vod] + [Site]，再交给上面的统一入口：
@@ -699,1166 +1131,6 @@ internal fun Vod.isActionItem(): Boolean =
  */
 internal fun Vod.isFolderTarget(): Boolean =
     isFolder || id.startsWith(ATVP_FOLDER_PREFIX, ignoreCase = true)
-
-/**
- * 传入的 [Vod] 是否已经自带可播放线路；顺手把「只有 urls、还没拆成 episodes」的线路补好。
- *
- * `Flag.setEpisodes("")` 会造出一条空地址剧集，所以只在 `urls` 非空时才补，
- * 绝不能直接对整个 Vod 调 `setFlags()`。
- */
-private fun Vod.hydrateInlineEpisodes(): Boolean {
-    val flagCount = flags.size
-    flags.forEach { flag ->
-        if (flag.episodes.isNullOrEmpty() && flag.urls.isNotBlank()) {
-            // `Flag.setEpisodes()` 内部直接操作 `getEpisodes()`，若该字段为 null 会 NPE；
-            // 这里兜住异常并打日志，绝不让详情页因为一条坏线路崩溃。
-            runCatching { flag.setEpisodes(flag.urls) }
-                .onSuccess {
-                    Log.e(
-                        TAG_DETAIL,
-                        "hydrate: flag=${flag.flag} urlsLen=${flag.urls.length} -> " +
-                            "episodes=${flag.episodes.orEmpty().size}",
-                    )
-                }
-                .onFailure {
-                    Log.e(TAG_DETAIL, "hydrate 失败: flag=${flag.flag} urlsLen=${flag.urls.length}", it)
-                }
-        }
-    }
-    val playable = flags.count { !it.episodes.isNullOrEmpty() }
-    Log.e(
-        TAG_DETAIL,
-        "hydrateInlineEpisodes: flags=$flagCount playableLines=$playable, " +
-            "playUrlLen=${playUrl.length}（playableLines=0 时详情页会走网络请求）",
-    )
-    return playable > 0
-}
-
-@Composable
-private fun HeroDetailScreen(
-    activity: Activity,
-    detail: HeroDetail,
-    vodId: String,
-    siteKey: String,
-    siteName: String,
-    siteViewModel: SiteViewModel,
-    /** 传入 Vod 自带的线路（非空表示已跳过网络请求，直接渲染）。 */
-    inlineVod: Vod?,
-    /** 后台预搜索的第一条结果：换源按钮上显示它的源名，「播放」兜底时用它拉详情。 */
-    firstSearchVod: Vod?,
-    /** 后台预搜索第一条结果所属的源。 */
-    firstSearchSite: Site?,
-    /** 后台预搜索的全部结果：点「换源」直接塞进弹窗，跳过弹窗首轮检索。 */
-    preSearchResults: List<Vod>,
-    /** 收藏态刷新脉冲：Activity `onResume` 自增，Compose 侧据此重查 Keep 表。 */
-    keepRefreshTick: Int,
-) {
-    val context = LocalContext.current
-    // ------------------------------------------------------------------
-    // 真实详情（`SiteViewModel.result`）
-    // ------------------------------------------------------------------
-    // 本项目没有 `runtime-livedata`（没有 observeAsState），沿用首页 / 搜索页的
-    // observeForever + onDispose 写法：销毁时一定摘除观察者，同时保留 LiveData
-    // 「立刻重放上一次值」的特性 —— Activity 重建时详情不会闪回骨架。
-
-    // ------------------------------------------------------------------
-    // 状态机（Plan B 第 1 步）：可变状态 / result 分流 / 跨源兜底 / folder 下探 /
-    // TMDB 元数据 / 收藏读写 / 弹窗关闭后的焦点恢复，全部由 [HeroDetailStateManager] 持有。
-    // 下面只是把同一份 snapshot state 用 `by` 委托成局部别名：读写点、重组时机、
-    // 首帧初值都与重构前完全一致，所以本函数后半段的渲染代码一个字都不用改。
-    // ------------------------------------------------------------------
-    val state = remember {
-        HeroDetailStateManager(
-            activity = activity,
-            siteViewModel = siteViewModel,
-            vodId = vodId,
-            siteKey = siteKey,
-            siteName = siteName,
-            inlineVod = inlineVod,
-        )
-    }
-    var detailResult by state.detailResultSlot
-    // TMDB 元数据状态：与详情接口并行，到达后由 `page` 重新合并（不阻塞首帧，失败也不影响起播）。
-    var tmdbState by state.tmdbStateSlot
-    // ---- 弹窗 / 跨源播放状态 ----
-    var showSourceDialog by state.showSourceDialogSlot
-    var showPlayDialog by state.showPlayDialogSlot
-    /** 选集弹窗实际渲染的线路：默认取本页详情；跨源兜底时换成那个源的线路。 */
-    var playFlags by state.playFlagsSlot
-    var playVod by state.playVodSlot
-    /** 选集弹窗起播用的源 key：默认本页源，跨源兜底时是预搜索命中的那个源。 */
-    var playSiteKey by state.playSiteKeySlot
-    /** 非 null = 正在等「播放兜底」那个源的详情回包；回包一到直接弹选集。 */
-    var pendingPlayId by state.pendingPlayIdSlot
-    var pendingPlaySite by state.pendingPlaySiteSlot
-    var pendingPlayVod by state.pendingPlayVodSlot
-    /** true = 用户点了「播放」但当前没有线路，正在等**本页**详情回包后自动弹选集。 */
-    var pendingPlayOpen by state.pendingPlayOpenSlot
-    /** 选集数据加载中：点过「播放」到回包之间显示加载圈，并挡掉重复请求。 */
-    var playLoading by state.playLoadingSlot
-    /** 播放目标无真实集数时的 folder 下探层数（detail → category → detail …），到上限就停。 */
-    var pendingPlayDrill by state.pendingPlayDrillSlot
-    /** 非 null = 正在等 folder 的二级目录回包（`categoryContent`），回包后继续拉子条目详情。 */
-    var pendingPlayCategory by state.pendingPlayCategorySlot
-    /** true = 当前源不可播、预搜索结果还没到：显示 Loading，结果一到自动继续（见 LaunchedEffect）。 */
-    var pendingPlayFallback by state.pendingPlayFallbackSlot
-    /** true = 这次播放来自「跨源兜底」：选集弹窗真正拿到真实剧集后提示用户已自动换源。 */
-    var autoSwitchNotice by state.autoSwitchNoticeSlot
-    // 本页是否真的拥有 `result` 通道：只有「自己发过详情请求」的页面才有资格消费它。
-    // 内联源 / 没有主键 / 需要特殊解析的页面从不发详情请求，任何 result 都不是给本页的。
-    val ownsResultChannel = state.ownsResultChannel
-    // 后台预搜索是**异步**到达的：下面的 `DisposableEffect` 只创建一次观察者，
-    // 直接捕获函数参数会永远拿到首帧的 null（换源按钮有名字了、播放兜底却拿不到结果）。
-    // `rememberUpdatedState` 让观察者每次回调读到的都是最新一次组合的值。
-    val latestSearchVod by rememberUpdatedState(firstSearchVod)
-    val latestSearchSite by rememberUpdatedState(firstSearchSite)
-    // 空态文案：result 观察者（播放兜底也失败）和页面正文都要用。
-    val special = state.special
-    val emptyHint = state.emptyHint
-
-    // 预搜索是异步的：当前源不可播、结果还没到时先登记等待，结果一到自动继续下探 / 拉详情。
-    LaunchedEffect(firstSearchVod, firstSearchSite, pendingPlayFallback) {
-        state.onPreSearchReady(firstSearchVod, firstSearchSite)
-    }
-    // 兜底等待不能无限转圈：预搜索完全没有结果时给一次明确反馈。
-    LaunchedEffect(pendingPlayFallback) {
-        state.onFallbackTimeout()
-    }
-    // 跨源兜底成功：选集弹窗真正拿到真实剧集后再提示，避免网络失败时误报。
-    LaunchedEffect(showPlayDialog, autoSwitchNotice) {
-        state.onPlayDialogShown()
-    }
-    DisposableEffect(siteViewModel, vodId) {
-        val observer = Observer<Result?> { result ->
-            // 分流逻辑全在状态机里（顺序：播放等待 → folder 下探 → 播放目标详情 → 换源弹窗 → 本页详情）。
-            // 两个 `rememberUpdatedState` 的当前值在这里才读取，保证异步到达的预搜索结果也能拿到。
-            state.onDetailResult(result, latestSearchVod, latestSearchSite)
-        }
-        siteViewModel.result.observeForever(observer)
-        onDispose { siteViewModel.result.removeObserver(observer) }
-    }
-    val vod = detailResult?.vod
-    // 【严格判定】只要 flags 非空就算有线路，**不再按 episodes 过滤**：
-    // 某条线路确实没有集数时，选集弹窗显示「该线路暂无集数」，
-    // 绝不能因为第一条线路是空占位就把整部剧判成「无可用剧集」。
-    val flags = remember(detailResult) { vod?.flags.orEmpty() }
-    // 先落到局部 val：`detailResult` 是委托属性，Kotlin 不对它做智能转换。
-    val result = detailResult
-    // 【关键】「加载中」「请求失败」「确实没有剧集」「需要特殊解析」是四种完全不同的状态：
-    // 请求失败时 `Result` 的 list 为空（`SiteViewModel` 失败时会 post `Result.empty()`），
-    // 以前这种情况会被误判成「该资源暂无可用剧集」，把失败说成没有资源。
-    // `flags` 优先判定：只要接口返回了线路（哪怕某条线路 episodes 为空），就算 Ready；
-    // 选集弹窗负责把空线路显示成「该线路暂无集数」，绝不把整部剧误判成「无可用剧集」。
-    val detailState = when {
-        flags.isNotEmpty() -> DetailState.Ready
-        vodId.isBlank() -> DetailState.Empty
-        special -> DetailState.Empty
-        result == null -> DetailState.Loading
-        result.list.isEmpty() -> DetailState.Error
-        else -> DetailState.Empty
-    }
-    val detailError = result?.msg.orEmpty()
-    // Intent 字段用于首帧直出；详情到达后整体换成真实 Vod（年份 / 地区 / 分类 / 简介 / 导演 / 主演）。
-    // `tmdbState` 是 key：TMDB 到达后在这层**基于新 base 重新合并**，绝不叠加在上一次 page 上
-    //（否则评分会被追加两次）。key 变化也会让 `cast` / `meta` 与演员下标同步刷新。
-    val page = remember(detail, detailResult, siteName, tmdbState) {
-        // 合并逻辑在状态机里：Intent 首帧 → 详情 → TMDB（基于新 base 重算，绝不叠加）。
-        state.buildPage(detail, vod, tmdbState)
-    }
-    // ------------------------------------------------------------------
-    // TMDB 元数据（阶段 1：展示 + 读 TmdbMatchCache）
-    // ------------------------------------------------------------------
-    // 为什么独立成 LaunchedEffect，而不是塞进 `detailResult` 的观察者：
-    // 1. 观察者在主线程回调，且播放兜底 / folder 下探都会让它重入，TMDB 的同步 OkHttp 请求会被触发多次；
-    // 2. LaunchedEffect 随 key 变化自动取消、离开页面随组合销毁自动停止，不必手写摘除。
-    // 闸门：没有 Key / 本页源被排除 / 没有真实 vodId（旧 adb 入口）时**一次网络都不发**，页面与改动前一致。
-    LaunchedEffect(vodId, siteKey, vod?.name, vod?.year) {
-        // 闸门 / 预取命中 / 缓存 → 搜索 → 详情 的完整流程在状态机里。
-        state.loadTmdb(vod)
-    }
-    // 两组可聚焦区域：按钮组 + 演职员行。跨区移动全部显式 requestFocus，不依赖 2D 焦点搜索。
-    val actionRequesters = remember { List(DETAIL_ACTIONS.size) { FocusRequester() } }
-    // 换源按钮文案：后台预搜索出第一个源之后，直接把源名写在按钮上（没结果时保持「换源」）。
-    val changeSourceLabel = remember(firstSearchSite) {
-        val name = firstSearchSite?.displayName.orEmpty()
-        if (name.isBlank()) "换源" else "换源 ($name)"
-    }
-    val castRequesters = remember(page.cast.size) { List(page.cast.size) { FocusRequester() } }
-    var focusedAction by remember { mutableIntStateOf(DETAIL_ACTION_PLAY) }
-    var focusedCast by remember { mutableIntStateOf(0) }
-    // `showPlayDialog` / `showSourceDialog` 已在 result 观察者之前声明（观察者要用它们分流）。
-    // 正在查看的演员下标；非 null 时演员详情弹窗可见。
-    var actorDialogIndex by state.actorDialogIndexSlot
-    // 弹窗关闭后要回去的演员下标；-1 表示「没有待恢复的演员焦点」。
-    var pendingCastFocus by state.pendingCastFocusSlot
-    // 弹窗关闭后要回去的按钮下标；-1 表示「没有待恢复的按钮焦点」。
-    // 换源弹窗关闭时必须回到「换源」，而不是默认的「播放」。
-    var pendingActionFocus by state.pendingActionFocusSlot
-
-    // ------------------------------------------------------------------
-    // 收藏（本地 Keep 表）
-    // ------------------------------------------------------------------
-    // 唯一键与 `TmdbDetailActivity.getHistoryKey()` 完全一致：siteKey@@@vodId@@@cid
-    //（`AppDatabase.SYMBOL` = "@@@"）。`Keep.find(String)` 内部正是按「当前 cid + 这个 key」查。
-    val keepKey = state.keepKey
-    /** 按钮当前是否已收藏：唯一数据源是 Keep 表，不用内存标记猜。 */
-    val keepCheckedState = state.keepCheckedState
-
-    /**
-     * 按数据库真实状态刷新收藏按钮（原版 `updateKeepState()`）。
-     * 实现在 [HeroDetailStateManager]，这里保留同名入口，`LaunchedEffect` 的 key 与点击回调都不用改。
-     */
-    fun updateKeepButtonState() = state.updateKeepButtonState()
-
-    /**
-     * 收藏 / 取消收藏（照抄原版 `DetailActivity.onKeep()`）：有则删、无则建，最后刷新按钮态。
-     * 实现在 [HeroDetailStateManager]，这里只补当前页的渲染上下文（context / vod / page）。
-     */
-    fun toggleKeep() = state.toggleKeep(context = context, vod = vod, page = page)
-
-    // 进页 + 每次 onResume 都按数据库刷新：别的入口删了这条收藏，回来必须变回「收藏」。
-    LaunchedEffect(keepRefreshTick, keepKey) { updateKeepButtonState() }
-
-    // 三个弹窗都关闭后才抢焦点：
-    // - 刚关掉演员弹窗 → 回到被点的那位演员（需求：焦点必须回到刚才点击的头像）；
-    // - 刚关掉换源弹窗 → 回到「换源」按钮（需求三.3）；
-    // - 否则（首次进入 / 关闭播放弹窗）→ 回到「播放」。
-    LaunchedEffect(showPlayDialog, showSourceDialog, actorDialogIndex) {
-        state.restoreFocus(actionRequesters, castRequesters)
-    }
-    // TMDB 演员列表整体替换占位数据后，旧的演员下标可能越界：夹回合法范围，空列表直接关闭弹窗。
-    //（`HeroActorDialog` 消费处另有 getOrNull 兜底，避免「重组先于本效果」的那一帧越界。）
-    LaunchedEffect(page.cast.size) {
-        state.clampActorDialogIndex(page.cast.size)
-    }
-
-    Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
-        // ---- 底层：全屏背景 + 两层遮罩（顺序：背景 → 横向遮罩 → 纵向遮罩）----
-        HeroDetailBackdrop(url = page.backdropUrl)
-        HeroDetailMaskHorizontal()
-        HeroDetailMaskVertical()
-
-        // ---- 右上角浮动小海报：150dp × 210dp（XML posterCard L30-48）----
-        // 原版规则：有 TMDB 背景大图时隐藏小海报（整块不进组合，不是改透明度）；
-        // 没有背景大图（无 Key / 未命中 / TMDB 无 backdrop）才用海报兜底，与改动前一致。
-        if (!page.hasTmdbBackdrop) {
-            HeroDetailPoster(
-                url = page.posterUrl,
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(top = POSTER_TOP_GAP, end = POSTER_END_GAP),
-            )
-        }
-
-        // ---- 左下内容区：整体贴底，左右 24dp、底部 32dp 防贴屏幕边缘 ----
-        Column(
-            modifier = Modifier
-                .align(Alignment.BottomStart)
-                .fillMaxWidth()
-                .padding(
-                    start = HERO_PADDING,
-                    end = HERO_PADDING,
-                    bottom = CONTENT_BOTTOM_PADDING,
-                ),
-        ) {
-            // 1. 剧名：有 Logo 显示艺术字，没有则 32sp 文字跑马灯（纯展示，不可聚焦）。
-            HeroDetailTitle(detail = page)
-            Spacer(modifier = Modifier.height(DETAIL_TITLE_META_GAP))
-
-            // 2. 元数据固定 20dp、文字贴底（XML L90-102）。
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(DETAIL_META_HEIGHT),
-                contentAlignment = Alignment.BottomStart,
-            ) {
-                Text(
-                    text = page.meta,
-                    color = DETAIL_META_COLOR,
-                    fontSize = DETAIL_META_SP.sp,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    style = TextStyle(shadow = DETAIL_META_SHADOW),
-                )
-            }
-            Spacer(modifier = Modifier.height(DETAIL_META_DESC_GAP))
-
-            // 3. 简介：最宽 440dp、最多 4 行、超出省略（纯展示，不可聚焦）。
-            Text(
-                text = page.synopsis,
-                modifier = Modifier.widthIn(max = DETAIL_DESC_MAX_WIDTH),
-                color = DETAIL_DESC_COLOR,
-                fontSize = DETAIL_DESC_SP.sp,
-                lineHeight = DETAIL_DESC_LINE_HEIGHT_SP.sp,
-                maxLines = DETAIL_DESC_MAX_LINES,
-                overflow = TextOverflow.Ellipsis,
-                style = TextStyle(shadow = DETAIL_DESC_SHADOW),
-            )
-
-            // 3.1 真实导演 / 主演：详情接口给了才显示，单行省略（纯展示，不可聚焦）。
-            val credit = page.creditLine()
-            if (credit.isNotBlank()) {
-                Spacer(modifier = Modifier.height(DETAIL_CREDIT_TOP_GAP))
-                Text(
-                    text = credit,
-                    modifier = Modifier.widthIn(max = DETAIL_DESC_MAX_WIDTH),
-                    color = DETAIL_META_COLOR,
-                    fontSize = DETAIL_CREDIT_SP.sp,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    style = TextStyle(shadow = DETAIL_META_SHADOW),
-                )
-            }
-
-            // 3.2 加载中 / 加载失败 / 空态分开显示：绝不把「请求失败」说成「没有剧集」，
-            // 也不把「临时 ID 需要特殊解析」说成「这个源没有这部剧」。
-            // `playLoading` 也算加载中：点了「播放」正在补详情时必须给出可见反馈。
-            if (detailState == DetailState.Loading || playLoading) {
-                Spacer(modifier = Modifier.height(DETAIL_CREDIT_TOP_GAP))
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(DETAIL_LOADING_GAP),
-                ) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(DETAIL_LOADING_SIZE),
-                        color = HeroAccentColor,
-                        strokeWidth = DETAIL_LOADING_STROKE,
-                    )
-                    Text(
-                        text = "正在加载剧集…",
-                        color = DETAIL_META_COLOR,
-                        fontSize = DETAIL_CREDIT_SP.sp,
-                    )
-                }
-            } else if (detailState == DetailState.Error) {
-                Spacer(modifier = Modifier.height(DETAIL_CREDIT_TOP_GAP))
-                Text(
-                    text = if (detailError.isBlank()) {
-                        "详情加载失败，按「播放」重试"
-                    } else {
-                        "详情加载失败：$detailError（按「播放」重试）"
-                    },
-                    modifier = Modifier.widthIn(max = DETAIL_DESC_MAX_WIDTH),
-                    color = DETAIL_ERROR_COLOR,
-                    fontSize = DETAIL_CREDIT_SP.sp,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            } else if (detailState == DetailState.Empty) {
-                Spacer(modifier = Modifier.height(DETAIL_CREDIT_TOP_GAP))
-                Text(
-                    text = emptyHint,
-                    modifier = Modifier.widthIn(max = DETAIL_DESC_MAX_WIDTH),
-                    color = DETAIL_META_COLOR,
-                    fontSize = DETAIL_CREDIT_SP.sp,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-
-            // 4. 按钮组：紧跟在简介下方，默认焦点「播放」。
-            Spacer(modifier = Modifier.height(DETAIL_ACTIONS_TOP_GAP))
-            HeroDetailActionRow(
-                requesters = actionRequesters,
-                // 「换源 (源名)」：源名来自进页预搜索的第一条结果。
-                changeSourceLabel = changeSourceLabel,
-                // 已收藏：收藏按钮换实心图标 +「已收藏」。
-                keepChecked = keepCheckedState.value,
-                onFocused = { index -> focusedAction = index },
-                // 「播放」拉起选集弹窗；「换源」拉起换源弹窗；「收藏」直接读写本地 Keep 表。
-                onConfirm = { index ->
-                    when (index) {
-                        DETAIL_ACTION_PLAY -> {
-                            // 【唯一数据源】选集弹窗只认 `flags`（`Vod.setFlags()` 从 playFrom/playUrl 解析）。
-                            // 判定标准不再看「有没有集数」：网盘源会把 `msubadd` 这类动作项伪装成集数，
-                            // 只有存在真实 http/m3u8 地址才算当前源可播；否则一律走预搜索兜底。
-                            val fallbackVod = firstSearchVod
-                            val fallbackSite = firstSearchSite
-                            val currentPlayable = flags.any { it.hasRealVideoUrl() }
-                            when {
-                                playLoading -> Notify.show("正在加载剧集，请稍候")
-                                // 1) 当前源有**真实视频链接**：直接弹自己的选集。
-                                currentPlayable -> {
-                                    autoSwitchNotice = false
-                                    playFlags = flags
-                                    playVod = vod
-                                    playSiteKey = siteKey
-                                    showPlayDialog = true
-                                }
-                                // 2) 详情还在加载：等回包后按同一套「真实链接」规则再判断。
-                                detailState == DetailState.Loading -> {
-                                    pendingPlayOpen = true
-                                    playLoading = true
-                                    Notify.show("正在加载剧集，请稍候")
-                                }
-                                // 3) 当前源不可播（动作项 / 伪集数 / 空地址）：改拉预搜索第一个结果。
-                                fallbackVod != null && fallbackSite != null && fallbackVod.id.isNotBlank() -> {
-                                    Log.e(
-                                        TAG_DETAIL,
-                                        "当前源无真实视频链接，自动切换: site=${fallbackSite.key} " +
-                                            "id=${fallbackVod.id} " +
-                                            "集数=${flags.sumOf { it.episodes.orEmpty().size }} " +
-                                            "真实链接线路=${flags.count { it.hasRealVideoUrl() }}",
-                                    )
-                                    autoSwitchNotice = true
-                                    Notify.show("当前源不可播，正在切换可用源…")
-                                    state.requestPlayTarget(fallbackVod, fallbackSite)
-                                }
-                                // 4) 预搜索还没回来：显示 Loading 等待，结果一到自动继续（见 LaunchedEffect）。
-                                else -> {
-                                    pendingPlayFallback = true
-                                    playLoading = true
-                                    Log.e(TAG_DETAIL, "当前源无真实视频链接，等待预搜索结果…")
-                                    Notify.show("正在寻找可用源，请稍候")
-                                }
-                            }
-                        }
-                        DETAIL_ACTION_CHANGE_SOURCE -> {
-                            // 【排查日志】换源按钮到底有没有点进来：没有这一行 = 点击事件没到。
-                            Log.e("ChangeSource", "详情页换源按钮点击，准备呼出换源弹窗")
-                            // 候选源规则与首页完全一致：
-                            // isSearchable + isChangeable + 非隐藏 + 未被屏蔽 + 非当前源，再按站点健康度排序。
-                            // 「当前源」= 这条数据自己的源（首页带过来的 site.key），不是首页源。
-                            var candidates = ChangeSourceDialog.candidates(siteKey)
-                            Log.e(
-                                "ChangeSource",
-                                "详情页换源候选源: size=${candidates.size}, keyword=[${page.title}], current=$siteKey",
-                            )
-                            if (candidates.isEmpty()) {
-                                // 【兜底】真实数据下候选源可能因为「当前源不可换 / 全被屏蔽」而空：
-                                // 退回全部可搜索源再试一次，绝不静默失败。
-                                candidates = VodConfig.get().getSites().filter { it.isSearchable }
-                                Log.e(
-                                    "ChangeSource",
-                                    "详情页候选源为空 → 兜底全部可搜索源: size=${candidates.size}",
-                                )
-                            }
-                            if (candidates.isEmpty() || page.title.isBlank()) {
-                                Log.e(
-                                    "ChangeSource",
-                                    "详情页换源不弹窗: sites=${candidates.size}, keyword=[${page.title}]",
-                                )
-                                Notify.show(context.getString(R.string.play_change_empty))
-                            } else {
-                                Log.e(
-                                    "ChangeSource",
-                                    "准备呼出: keyword=[${page.title}], sites=${candidates.size}",
-                                )
-                                pendingActionFocus = DETAIL_ACTION_CHANGE_SOURCE
-                                showSourceDialog = true
-                                // 打开换源弹窗 = 放弃这次「播放」等待：清掉在途的播放状态，
-                                // 否则弹窗里的详情回包会被本页误当成「选集数据」直接弹选集。
-                                playLoading = false
-                                pendingPlayOpen = false
-                                pendingPlayId = null
-                                pendingPlaySite = null
-                                pendingPlayVod = null
-                                pendingPlayDrill = 0
-                                pendingPlayCategory = null
-                                // 换源弹窗改为 View 体系独立 Dialog；showSourceDialog 只用于关闭后的焦点交还。
-                                try {
-                                    ChangeSourceDialog.show(
-                                        context = context,
-                                        sites = candidates,
-                                        // 详情页的剧名现在是真实值（来自首页 / 上一次换源），直接用它检索。
-                                        keyword = page.title,
-                                        // 全局并发搜索：先按 quick = false 跑，把不支持 quick 的源也搜一遍。
-                                        quick = false,
-                                        // 进页预搜索的结果直接铺开：弹窗首帧就有卡片，不再等一轮网络。
-                                        initialResults = preSearchResults,
-                                        onSourceSelected = { vod, site ->
-                                            Notify.show(
-                                                context.getString(
-                                                    R.string.source_sidebar_switched,
-                                                    "${site.displayName} · ${vod.name}",
-                                                ),
-                                            )
-                                            // 换源结果和首页点卡片完全一致：folder 条目走分类页，其余进详情页。
-                                            // 选中条目已经带好 site，不再按剧名二次搜索。
-                                            openHeroDetailOrFolder(activity, vod, site)
-                                        },
-                                        onClosed = {
-                                            showSourceDialog = false
-                                            playLoading = false
-                                            // 弹窗打开期间 result 通道归弹窗，本页的在途详情回包会被丢弃；
-                                            // 关窗后按自己的主键重拉一次：既恢复页面，也作废弹窗可能还在途的请求
-                                            // （`SiteViewModel.execute` 会 cancel 旧 future 并让旧回包失效）。
-                                            if (ownsResultChannel) {
-                                                Log.e(
-                                                    TAG_DETAIL,
-                                                    "换源弹窗关闭，重拉详情: site=$siteKey id=$vodId",
-                                                )
-                                                siteViewModel.detailContent(siteKey, vodId, false)
-                                            } else if (inlineVod != null) {
-                                                // 内联源不联网：把首帧那份线路原样恢复，绝不让弹窗的目录结果留在页面上。
-                                                detailResult = Result.vod(inlineVod)
-                                            }
-                                        },
-                                    )
-                                } catch (e: Throwable) {
-                                    // 【排查日志】弹窗构造 / show() 抛异常时不再静默闪退。
-                                    Log.e("ChangeSource", "弹窗呼出崩溃", e)
-                                    showSourceDialog = false
-                                    Notify.show("换源弹窗打开失败: ${e.message}")
-                                }
-                            }
-                        }
-                        // 收藏：原版 `DetailActivity.onKeep()` 的语义 —— 已收藏就删、未收藏就建。
-                        DETAIL_ACTION_KEEP -> toggleKeep()
-                    }
-                },
-                onMoveLeft = { index -> if (index > 0) focusAction(actionRequesters, index - 1) { focusedAction = it } },
-                onMoveRight = { index ->
-                    if (index < actionRequesters.lastIndex) focusAction(actionRequesters, index + 1) { focusedAction = it }
-                },
-                // ↓ 进入最底部的演职员行，落在上次停留的那位演员。
-                onMoveDown = { focusCast(castRequesters, focusedCast) },
-            )
-
-            // 5. 演职员行（最底部）：可横向浏览、可点击，↑ 回按钮组。
-            // 真实条目在 TMDB 到达前演员为空（不再显示假演员）：整行隐藏，避免只剩一个空标题。
-            if (page.cast.isNotEmpty()) {
-                Spacer(modifier = Modifier.height(DETAIL_CAST_TOP_GAP))
-                HeroCastSection(
-                    cast = page.cast,
-                    requesters = castRequesters,
-                    onFocused = { index -> focusedCast = index },
-                    // 命中 TMDB → 进 View 版人物页（首帧用 extras，随后按 personId 全量刷新）；
-                    // 未命中 → 保持原行为：记下「要回到哪个头像」并打开本地占位弹窗（不等网络）。
-                    onConfirm = { index ->
-                        val person = page.tmdbPersons.getOrNull(index)
-                        if (person != null) {
-                            TmdbPersonActivity.start(activity, person, siteKey, Setting.getDetailOpenMode())
-                        } else {
-                            pendingCastFocus = index
-                            actorDialogIndex = index
-                        }
-                    },
-                    onMoveUp = { focusAction(actionRequesters, DETAIL_ACTION_PLAY) { focusedAction = it } },
-                    onMoveLeft = { index -> if (index > 0) focusCast(castRequesters, index - 1) },
-                    onMoveRight = { index ->
-                        if (index < castRequesters.lastIndex) focusCast(castRequesters, index + 1)
-                    },
-                )
-            }
-        }
-    }
-
-    if (showPlayDialog && playFlags.isNotEmpty()) {
-        val episodeVod = playVod
-        // 起播的源：本页详情 → 本页源；跨源兜底 → 预搜索命中的那个源。
-        val episodeSiteKey = playSiteKey
-        // 起播 id：优先用详情回包里的 id；回包没带时，**只有本页自己的源**才能回落到页面主键
-        // （跨源时那个 id 属于别的源，绝不能拿来顶）。
-        val episodeVodId = episodeVod?.id.orEmpty().ifBlank {
-            if (episodeSiteKey == siteKey) vodId else ""
-        }
-        // 纯 View 选集弹窗：`EpisodeViewDialog` 是独立 Dialog 窗口（不是 Composable），
-        // 所以用 DisposableEffect 对齐原来 Compose `Dialog` 的生命周期：
-        // 进入条件成立就 show，条件消失 / 换了一份 flags 就 dispose 并 dismiss，绝不重复弹窗。
-        val dialogContext = LocalContext.current
-        DisposableEffect(playFlags) {
-            val dialog = EpisodeViewDialog(
-                context = dialogContext,
-                // 真实线路：`Vod.flags` 原样传入，某条线路没集数时弹窗内部显示「该线路暂无集数」。
-                flags = playFlags,
-                // 历史进度还没接本地库：-1 = 没看过，焦点落第 1 集。
-                lastWatchedEpisodeIndex = -1,
-                // 选中真实 (线路, 集) 后直接走原版起播入口，不自己拼 Intent。
-                onEpisodeSelected = { flag, episode ->
-                    // 先关弹窗再起播：VideoActivity 是另一个页面，弹窗留在背后会闪一下。
-                    showPlayDialog = false
-                    startEpisode(
-                        activity,
-                        episodeSiteKey,
-                        episodeVod,
-                        episodeVodId,
-                        flag,
-                        episode,
-                    )
-                },
-                onDismiss = { showPlayDialog = false },
-            )
-            dialog.show()
-            onDispose { dialog.dismiss() }
-        }
-    }
-
-    // 演员详情：点击即弹出，数据在弹窗内部异步加载。
-    // 演员列表可能因 TMDB 到达 / 未命中而变短或清空：这里用 getOrNull 兜底，绝不抛 IndexOutOfBounds。
-    actorDialogIndex?.let { index ->
-        page.cast.getOrNull(index)?.let { actor ->
-            HeroActorDialog(
-                actor = actor,
-                onDismiss = { actorDialogIndex = null },
-            )
-        }
-    }
-}
-
-/**
- * 首帧横图的提档目标：与首页 `highResBackdrop` 同为 `w1920`。
- *
- * 逐字一致才能直接命中首页预热好的 Coil 磁盘缓存；换成 `w1280` / `original` 都要重新下载。
- */
-private const val TMDB_BACKDROP_WIDTH = "w1920"
-
-/**
- * 剧名区：兼容 TMDB 艺术字 Logo。
- *
- * - 有 Logo：整行高 96dp（与首页统一）、最宽 720dp、等比缩放、贴底左对齐；
- *   图片没到 / 加载失败时，槽里继续渲染原本的 32sp 文字标题 —— 无感降级，不会先空一行。
- * - 无 Logo：32sp 粗体文字 + [basicMarquee]，长剧名持续滚动而不是被省略号吞掉。
- * 两种情况都不挂 `focusable` / `clickable`，遥控器选不中。
- */
-@Composable
-private fun HeroDetailTitle(detail: HeroDetail) {
-    // `orEmpty()` 而不是留着可空：下面 `if (hasLogo)` 分支里 Kotlin 无法把 `String?` 智能转型，
-    // 直接传 `rememberHeroImageModel(logo)` 会编译不过。
-    val logo = detail.logoUrl.orEmpty()
-    val hasLogo = logo.isNotBlank()
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(if (hasLogo) LOGO_HEIGHT else DETAIL_TITLE_HEIGHT),
-        contentAlignment = Alignment.BottomStart,
-    ) {
-        if (hasLogo) {
-            SubcomposeAsyncImage(
-                // 与首页共用同一份请求参数（含 300ms 淡入），首页预热过的艺术字这里直接命中磁盘缓存。
-                model = rememberHeroImageModel(logo),
-                contentDescription = detail.title,
-                contentScale = ContentScale.Fit,
-                // 等比缩放后仍靠左，避免窄 Logo 在 720dp 的盒子里居中。
-                alignment = Alignment.BottomStart,
-                // fillMaxHeight 吃满 96dp 行高；fillMaxWidth 是给 loading / error 槽里的文字
-                // 留排版宽度 —— Subcompose 在图片到达前没有固有尺寸，只写 widthIn 会缩成 0 宽。
-                modifier = Modifier
-                    .fillMaxHeight()
-                    .widthIn(max = LOGO_MAX_WIDTH)
-                    .fillMaxWidth(),
-                loading = { HeroDetailTitleFallback(detail.title) },
-                error = { HeroDetailTitleFallback(detail.title) },
-            )
-        } else {
-            HeroDetailTitleText(detail.title)
-        }
-    }
-}
-
-/**
- * Logo 槽里的文字兜底：贴底左对齐，和真正显示 Logo 时占同一条基线。
- *
- * 与首页 `HeroInfo` 的 loading / error 槽逐字同构：Subcompose 在图片未到达时
- * 不会自动按 `contentAlignment` 排槽内内容，必须自己包一层 `fillMaxSize` 的 Box。
- */
-@Composable
-private fun HeroDetailTitleFallback(text: String) {
-    Box(
-        modifier = Modifier.fillMaxSize(),
-        contentAlignment = Alignment.BottomStart,
-    ) {
-        HeroDetailTitleText(text)
-    }
-}
-
-/**
- * 详情页剧名的纯文字形态：32sp 粗体白字 + 阴影 + 跑马灯。
- *
- * 「无 Logo」「Logo 加载中」「Logo 加载失败」三处共用同一份样式，
- * 图片到位瞬间不会出现字号 / 位置跳变。
- */
-@Composable
-private fun HeroDetailTitleText(text: String) {
-    Text(
-        text = text,
-        modifier = Modifier
-            .fillMaxWidth()
-            .basicMarquee(),
-        color = Color.White,
-        fontSize = DETAIL_TITLE_SP.sp,
-        fontWeight = FontWeight.Bold,
-        maxLines = 1,
-        softWrap = false,
-        style = TextStyle(shadow = DETAIL_TITLE_SHADOW),
-    )
-}
-
-/** 背景切换时长（毫秒）：800ms 与首页一致，首帧 → TMDB 横图是缓慢交叉淡化，不会硬切。 */
-private const val DETAIL_BACKDROP_FADE_MS = 800
-
-/**
- * 全屏背景大图。
- *
- * 用 [Crossfade] 而不是裸 [AsyncImage]：首帧 `extra_backdrop`（首页预取的 w1920 横图）到
- * TMDB 真背景之间可能有一次替换，交叉淡入淡出才不会出现「闪一下黑底再出新图」。
- * 同一 URL 时 Crossfade 不启动动画，因此锁死背景后不会有多余的过渡。
- */
-@Composable
-private fun HeroDetailBackdrop(url: String) {
-    Crossfade(
-        targetState = url,
-        animationSpec = tween(durationMillis = DETAIL_BACKDROP_FADE_MS),
-        label = "heroDetailBackdrop",
-        modifier = Modifier.fillMaxSize(),
-    ) { backdropUrl ->
-        AsyncImage(
-            model = rememberHeroImageModel(backdropUrl),
-            contentDescription = null,
-            contentScale = ContentScale.Crop,
-            modifier = Modifier.fillMaxSize(),
-        )
-    }
-}
-
-/**
- * 横向遮罩（原版 `bg_hero_mask_h` / 首页 `maskLeft`）。
- *
- * 与首页同一组参数：只有左侧 35% 之内压黑托住剧名 / 简介，右侧 65% 起完全透亮，
- * 保证 TMDB 背景大图不被整屏灰掉。
- */
-@Composable
-private fun HeroDetailMaskHorizontal() {
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(
-                Brush.horizontalGradient(
-                    0.0f to Color.Black.copy(alpha = 0.85f),
-                    0.35f to Color.Black.copy(alpha = 0.0f),
-                    1.0f to Color.Transparent,
-                ),
-            ),
-    )
-}
-
-/**
- * 纵向遮罩（原版 `bg_hero_mask_v` / 首页 `maskBottom`）。
- *
- * 上 55% 全亮（背景图保持原亮度），底部渐到 0.9 黑，只托住左下角信息区与演员行。
- */
-@Composable
-private fun HeroDetailMaskVertical() {
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(
-                Brush.verticalGradient(
-                    0.0f to Color.Transparent,
-                    0.55f to Color.Transparent,
-                    1.0f to Color.Black.copy(alpha = 0.9f),
-                ),
-            ),
-    )
-}
-
-/**
- * 右上角浮动小海报：150dp × 210dp，marginTop 72dp、marginEnd 80dp、内边距 4dp
- * （XML `posterCard` L30-48：`shape_poster_card` 圆角 12dp + `black_20` 底 + `clipToOutline`）。
- * 只做视觉锚点，不参与焦点流转（不挂 focusable）。
- */
-@Composable
-private fun HeroDetailPoster(url: String, modifier: Modifier = Modifier) {
-    Box(
-        modifier = modifier
-            .size(width = POSTER_WIDTH, height = POSTER_HEIGHT)
-            .clip(POSTER_SHAPE)
-            .background(POSTER_BACKGROUND)
-            .padding(POSTER_INNER_PADDING),
-    ) {
-        AsyncImage(
-            model = rememberHeroImageModel(url),
-            contentDescription = null,
-            contentScale = ContentScale.Crop,
-            modifier = Modifier.fillMaxSize(),
-        )
-    }
-}
-
-/**
- * 演职员行（Netflix 风格）：标题「导演 / 主演」+ 横向 `LazyRow`。
- *
- * 与上一版不同，这里**可聚焦**：按钮组 ↓ 进入本行，行内 ←/→ 横移，↑ 回「播放」。
- * 头像 60dp 圆形，焦点态加 2dp 红圈并放大到 1.08 倍；名字 12sp 单行省略。
- */
-@Composable
-private fun HeroCastSection(
-    cast: List<HeroCast>,
-    requesters: List<FocusRequester>,
-    onFocused: (Int) -> Unit,
-    onConfirm: (Int) -> Unit,
-    onMoveUp: () -> Unit,
-    onMoveLeft: (Int) -> Unit,
-    onMoveRight: (Int) -> Unit,
-) {
-    HeroSectionTitle(text = "导演 / 主演", fontSize = CAST_TITLE_SP.sp)
-    Spacer(modifier = Modifier.height(CAST_TITLE_GAP))
-    LazyRow(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(CAST_ITEM_GAP),
-        // 列表铺到屏幕右缘，最后一位演员可以贴边滑出，不做硬性截断。
-        contentPadding = PaddingValues(end = HERO_PADDING),
-    ) {
-        itemsIndexed(items = cast, key = { _, item -> item.id }) { index, item ->
-            HeroCastItem(
-                cast = item,
-                requester = requesters[index],
-                onFocused = { onFocused(index) },
-                onConfirm = { onConfirm(index) },
-                onMoveUp = onMoveUp,
-                onMoveLeft = { onMoveLeft(index) },
-                onMoveRight = { onMoveRight(index) },
-            )
-        }
-    }
-}
-
-@Composable
-private fun HeroCastItem(
-    cast: HeroCast,
-    requester: FocusRequester,
-    onFocused: () -> Unit,
-    onConfirm: () -> Unit,
-    onMoveUp: () -> Unit,
-    onMoveLeft: () -> Unit,
-    onMoveRight: () -> Unit,
-) {
-    val interaction = remember { MutableInteractionSource() }
-    val isFocused by interaction.collectIsFocusedAsState()
-    // 焦点态轻微放大，配合红圈做选中反馈；160ms 过渡，避免 TV 上硬切。
-    val scale by animateFloatAsState(
-        targetValue = if (isFocused) CAST_FOCUS_SCALE else 1f,
-        label = "castScale",
-    )
-
-    Column(
-        modifier = Modifier
-            .width(CAST_ITEM_WIDTH)
-            .focusRequester(requester)
-            .onFocusChanged { if (it.isFocused) onFocused() }
-            .onPreviewKeyEvent { event ->
-                if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
-                when (event.key) {
-                    Key.DirectionUp -> {
-                        onMoveUp()
-                        true
-                    }
-
-                    Key.DirectionLeft -> {
-                        onMoveLeft()
-                        true
-                    }
-
-                    Key.DirectionRight -> {
-                        onMoveRight()
-                        true
-                    }
-
-                    // 演职员行是最底部区域，↓ 无处可去，直接消费。
-                    Key.DirectionDown -> true
-
-                    else -> false
-                }
-            }
-            .clickable(interactionSource = interaction, indication = null, onClick = onConfirm),
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        // 圆形头像：先 clip 再 border，描边画在图片之上；焦点态换成 2dp 红圈。
-        Box(
-            modifier = Modifier
-                .size(CAST_AVATAR_SIZE)
-                .scale(scale)
-                .clip(CircleShape)
-                .background(CAST_AVATAR_BACKGROUND)
-                .border(
-                    width = if (isFocused) CAST_FOCUS_BORDER else CAST_AVATAR_BORDER,
-                    color = if (isFocused) HeroAccentColor else CAST_AVATAR_BORDER_COLOR,
-                    shape = CircleShape,
-                ),
-        ) {
-            AsyncImage(
-                model = rememberHeroImageModel(cast.avatarUrl),
-                contentDescription = cast.name,
-                contentScale = ContentScale.Crop,
-                modifier = Modifier.fillMaxSize(),
-            )
-        }
-        Spacer(modifier = Modifier.height(CAST_NAME_GAP))
-        Text(
-            text = cast.name,
-            modifier = Modifier.fillMaxWidth(),
-            color = if (isFocused) Color.White else CAST_NAME_COLOR,
-            fontSize = CAST_NAME_SP.sp,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            textAlign = TextAlign.Center,
-        )
-    }
-}
-
-// ---------------------------------------------------------------------------
-// 演员详情：点击即弹窗，文本走轻量缓存，图片全部交给 Coil
-// ---------------------------------------------------------------------------
-
-/**
- * 演员详情弹窗（骨架）。
- *
- * **不阻塞 UI**：点击时只是把 [HeroDetailScreen] 里的 `actorDialogIndex` 置位，
- * Dialog 当帧组合、立刻显示「加载中」，遥控器不会卡。
- * 真正的数据请求在 [LaunchedEffect] 里切到 [Dispatchers.IO]；接 TMDB 时只改 [loadActorProfile]。
- *
- * 缓存策略：
- * - **只缓存文本**（简介 / 生日 / 出生地）→ [ActorProfileCache]，进程内 Map，轻量、无磁盘 IO。
- * - **头像与作品海报一律不落自定义缓存**，全交给 Coil 默认 LRU 磁盘缓存（满 250MB 自动淘汰），
- *   这里只通过 `AsyncImage(model = url)` 走默认 ImageLoader，不写任何下载/保存逻辑。
- */
-@Composable
-private fun HeroActorDialog(actor: HeroCast, onDismiss: () -> Unit) {
-    // 命中缓存时首帧就有内容；未命中则显示加载态。
-    var profile by remember(actor.id) { mutableStateOf(ActorProfileCache.get(actor.id)) }
-
-    LaunchedEffect(actor.id) {
-        if (profile != null) return@LaunchedEffect
-        val loaded = loadActorProfile(actor)
-        ActorProfileCache.put(actor.id, loaded)
-        profile = loaded
-    }
-
-    Dialog(
-        onDismissRequest = onDismiss,
-        properties = DialogProperties(
-            dismissOnBackPress = true,
-            dismissOnClickOutside = true,
-            usePlatformDefaultWidth = false,
-        ),
-    ) {
-        HeroDialogShell(modifier = Modifier.fillMaxWidth(ACTOR_DIALOG_WIDTH_FRACTION)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                AsyncImage(
-                    model = rememberHeroImageModel(actor.avatarUrl),
-                    contentDescription = null,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier
-                        .size(ACTOR_DIALOG_AVATAR)
-                        .clip(CircleShape)
-                        .background(CAST_AVATAR_BACKGROUND),
-                )
-                Spacer(modifier = Modifier.width(ACTOR_DIALOG_AVATAR_GAP))
-                Column {
-                    Text(
-                        text = actor.name,
-                        color = Color.White,
-                        fontSize = ACTOR_DIALOG_NAME_SP.sp,
-                        fontWeight = FontWeight.Bold,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    Spacer(modifier = Modifier.height(2.dp))
-                    Text(
-                        text = "演员档案",
-                        color = ACTOR_DIALOG_HINT_COLOR,
-                        fontSize = ACTOR_DIALOG_HINT_SP.sp,
-                        maxLines = 1,
-                    )
-                }
-            }
-            Spacer(modifier = Modifier.height(ACTOR_DIALOG_HEADER_GAP))
-            val loaded = profile
-            if (loaded == null) {
-                // Loading 态：2 秒假延迟期间显示，绝不占用主线程。
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(ACTOR_DIALOG_SPINNER),
-                        strokeWidth = 2.dp,
-                        color = HeroAccentColor,
-                    )
-                    Spacer(modifier = Modifier.width(10.dp))
-                    Text(
-                        text = "加载中…",
-                        color = ACTOR_DIALOG_HINT_COLOR,
-                        fontSize = ACTOR_DIALOG_BODY_SP.sp,
-                    )
-                }
-            } else {
-                Text(
-                    text = loaded.summary,
-                    color = Color.White,
-                    fontSize = ACTOR_DIALOG_BODY_SP.sp,
-                    lineHeight = ACTOR_DIALOG_BODY_LINE_HEIGHT.sp,
-                    maxLines = 6,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Spacer(modifier = Modifier.height(10.dp))
-                Text(
-                    text = "${loaded.birthday} · ${loaded.place}",
-                    color = ACTOR_DIALOG_HINT_COLOR,
-                    fontSize = ACTOR_DIALOG_HINT_SP.sp,
-                    maxLines = 1,
-                )
-            }
-        }
-    }
-}
-
-/**
- * 取演员文本档案：当前是 2 秒假延迟 + 占位文案，接口接好后替换函数体即可。
- *
- * 真实实现建议：`GET /person/{person_id}?language=zh-CN`，只取 `biography`/`birthday`/`place_of_birth`；
- * 头像（`profile_path`）与作品海报**不要**在这里下载，直接拼成 URL 交给 Coil。
- */
-private suspend fun loadActorProfile(actor: HeroCast): ActorProfile = withContext(Dispatchers.IO) {
-    delay(ACTOR_PROFILE_FAKE_DELAY_MS)
-    ActorProfile(
-        name = actor.name,
-        birthday = "1988-06-12",
-        place = "中国 · 上海",
-        summary = "演员详情开发中。\n\n这里将展示 TMDB 返回的演员简介：出生地、生日、代表作与个人履历。",
-    )
-}
-
-/** 演员文本档案：只放文本字段，图片 URL 由调用方直接喂给 Coil，不参与缓存。 */
-private data class ActorProfile(
-    val name: String,
-    val birthday: String,
-    val place: String,
-    val summary: String,
-)
-
-/**
- * 轻量文本缓存：进程内 Map，够用且零依赖。
- *
- * 换成 Room 时只需实现同样的 `get` / `put` 两个方法，调用点不动。
- * **绝不缓存图片**：Coil 自己的磁盘 LRU 已经处理了淘汰，重复缓存只会白白占空间。
- */
-private object ActorProfileCache {
-
-    private val store = java.util.concurrent.ConcurrentHashMap<String, ActorProfile>()
-
-    fun get(actorId: String): ActorProfile? = store[actorId]
-
-    fun put(actorId: String, profile: ActorProfile) {
-        store[actorId] = profile
-    }
-}
-
-/** 按钮组：播放 / 换源 / 收藏，横向排列、间距 12dp。 */
-@Composable
-private fun HeroDetailActionRow(
-    requesters: List<FocusRequester>,
-    /** 换源按钮的动态文案（`换源 (源名)`）：预搜索还没结果时就是「换源」。 */
-    changeSourceLabel: String,
-    /** 已收藏：收藏按钮换成实心图标 +「已收藏」。 */
-    keepChecked: Boolean,
-    onFocused: (Int) -> Unit,
-    onConfirm: (Int) -> Unit,
-    onMoveLeft: (Int) -> Unit,
-    onMoveRight: (Int) -> Unit,
-    onMoveDown: (Int) -> Unit,
-) {
-    Row(horizontalArrangement = Arrangement.spacedBy(DETAIL_ACTION_GAP)) {
-        DETAIL_ACTIONS.forEachIndexed { index, action ->
-            // 收藏按钮是唯一随数据库状态变化的按钮：已收藏 = 实心星 +「已收藏」。
-            val keepOn = index == DETAIL_ACTION_KEEP && keepChecked
-            HeroDetailActionButton(
-                action = if (keepOn) action.copy(iconRes = R.drawable.ic_detail_keep_on) else action,
-                // 「换源」显示动态源名，「收藏」显示收藏态，其余按钮保持 [DETAIL_ACTIONS] 里的静态文案。
-                label = when (index) {
-                    DETAIL_ACTION_CHANGE_SOURCE -> changeSourceLabel
-                    DETAIL_ACTION_KEEP -> if (keepOn) "已收藏" else action.label
-                    else -> action.label
-                },
-                requester = requesters[index],
-                onFocused = { onFocused(index) },
-                onConfirm = { onConfirm(index) },
-                onMoveLeft = { onMoveLeft(index) },
-                onMoveRight = { onMoveRight(index) },
-                onMoveDown = { onMoveDown(index) },
-            )
-        }
-    }
-}
-
-/**
- * 单颗按钮：高 36dp、字号 13sp、图标在左文字在右。
- *
- * 焦点态按需求取 [HeroFocusBrush] 红渐变色块 + 纯白文字/图标（实心块全局统一渐变）；
- * 常态沿用原版 `shape_detail_item_normal` 的 `white_10`（`#1AFFFFFF`）底 + 4dp 圆角。
- *
- * 方向键：←/→ 在按钮间移动，↓ 进入演职员行，↑ 已到内容区顶部、直接消费。
- */
-@Composable
-private fun HeroDetailActionButton(
-    action: HeroDetailAction,
-    /** 实际显示的文案：默认取 [action]，换源按钮由调用方覆盖成「换源 (源名)」。 */
-    label: String,
-    requester: FocusRequester,
-    onFocused: () -> Unit,
-    onConfirm: () -> Unit,
-    onMoveLeft: () -> Unit,
-    onMoveRight: () -> Unit,
-    onMoveDown: () -> Unit,
-) {
-    val interaction = remember { MutableInteractionSource() }
-    val isFocused by interaction.collectIsFocusedAsState()
-
-    Row(
-        modifier = Modifier
-            .height(DETAIL_ACTION_HEIGHT)
-            .focusRequester(requester)
-            .onFocusChanged { if (it.isFocused) onFocused() }
-            .onPreviewKeyEvent { event ->
-                if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
-                when (event.key) {
-                    Key.DirectionLeft -> {
-                        onMoveLeft()
-                        true
-                    }
-
-                    Key.DirectionRight -> {
-                        onMoveRight()
-                        true
-                    }
-
-                    Key.DirectionDown -> {
-                        onMoveDown()
-                        true
-                    }
-
-                    Key.DirectionUp -> true
-
-                    else -> false
-                }
-            }
-            .clip(DETAIL_ACTION_SHAPE)
-            // 焦点态 = 全局红渐变色块（原先是纯红 solid，现统一到 [HeroFocusBrush]）。
-            .then(
-                if (isFocused) {
-                    Modifier.background(HeroFocusBrush, DETAIL_ACTION_SHAPE)
-                } else {
-                    Modifier.background(DETAIL_ACTION_IDLE_BACKGROUND, DETAIL_ACTION_SHAPE)
-                },
-            )
-            .clickable(interactionSource = interaction, indication = null, onClick = onConfirm)
-            .padding(horizontal = DETAIL_ACTION_H_PADDING),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(DETAIL_ACTION_ICON_GAP),
-    ) {
-        Image(
-            painter = painterResource(id = action.iconRes),
-            contentDescription = null,
-            colorFilter = ColorFilter.tint(Color.White),
-            modifier = Modifier.size(action.iconSize),
-        )
-        Text(
-            text = label,
-            color = Color.White,
-            fontSize = DETAIL_ACTION_SP.sp,
-            // XML L134：textStyle="bold"，三颗按钮全部加粗。
-            fontWeight = FontWeight.Bold,
-            maxLines = 1,
-        )
-    }
-}
 
 /**
  * 在已挂载的 FocusRequester 列表里安全请求焦点：未组合的 Lazy 项会抛异常，这里降级返回 false。

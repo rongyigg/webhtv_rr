@@ -1,11 +1,12 @@
-# HERO-DETAIL-VIEW-01 · 详情页 Compose → View 迁移（Plan B 第 1 步：状态机抽离）
+# HERO-DETAIL-VIEW-01 · 详情页 Compose → View 迁移
 
-- 状态：**已实施，未编译**（按红线：本轮不编译，由用户自行验证）
+- 状态：**Plan A 已实施，未编译**（按红线：本轮不编译，由用户自行构建验证）
 - 基线 tag：`recovery/hero-detail-compose-baseline`（commit `615ff5dca`）
-- 改动文件：
-  - 新增 `app/src/main/java/com/fongmi/android/tv/ui/activity/HeroDetailStateManager.kt`
-  - 修改 `app/src/main/java/com/fongmi/android/tv/ui/activity/HeroDetailActivity.kt`
-  - 新增本文件
+- 阶段：
+  1. Plan B · 状态机抽离 → 第 1-8 节（已完成，commit `303e12f7d` 前）
+  2. 阶段 A 第一步 · 静态 XML 骨架 → 第 9 节（已完成，commit `303e12f7d`）
+  3. 阶段 A 第二步 · 纯 View 页面接真实数据 → 第 10 节（本轮）
+- 本文件是这次迁移**唯一**的任务文档，不再另建 plan / fix / assessment 文件。
 
 ---
 
@@ -288,3 +289,140 @@ adb shell am start -n com.silent.android.webhtv/com.fongmi.android.tv.ui.activit
 
 1. 用户电视核对排版 / 尺寸；若有偏差，只改 XML 常量。
 2. 确认后删除临时预览壳，接 Plan A 数据 / 焦点逻辑。
+
+---
+
+## 10. 阶段 A 第二步：纯 View 页面接真实数据（2026-11-12，未编译）
+
+目标：把 `HeroDetailActivity` 从 `ComponentActivity + setContent` 改成 `AppCompatActivity + setContentView(R.layout.activity_hero_detail_view)`，用**真实 Intent / 详情接口 / TMDB** 数据渲染，视觉与焦点契约对齐 Compose 版。
+
+### 10.1 架构
+
+```
+HeroDetailActivity (AppCompatActivity)
+├─ setContentView(activity_hero_detail_view.xml)   ← 25 个 id，代码 findViewById
+├─ HeroDetailStateManager                          ← 逻辑唯一归属（未改动）
+│   onDetailResult / requestPlayTarget / onPreSearchReady / onFallbackTimeout /
+│   onPlayDialogShown / loadTmdb / buildPage / updateKeepButtonState / toggleKeep / restoreFocus
+├─ render()  ← 纯函数式：currentPage() → 各个 bindXxx
+├─ HeroDetailCastAdapter（新增）→ item_hero_detail_cast.xml
+└─ 复用 EpisodeViewDialog / ChangeSourceDialog（原本就是纯 View）
+```
+
+**Activity 不再持有任何 Compose 状态**：`focusedAction` / `focusedCast` 用普通 `Int`，焦点请求用 `View.requestFocus()` + `postOnAnimation` 重试，替代 `FocusRequester` / `withFrameNanos`。
+
+### 10.2 文件清单
+
+| 文件 | 动作 | 说明 |
+|---|---|---|
+| `ui/activity/HeroDetailActivity.kt` | 重写类体，保留 helper 尾部 | 类体改为 View 渲染 + 生命周期；`needsSpecialParse` 之后的数据模型 / 合并函数 / 常量**逐字取自 HEAD**，避免逻辑漂移 |
+| `ui/activity/HeroDetailStateManager.kt` | 未改动 | 本轮零改动，仍是唯一逻辑归属 |
+| `ui/hero/HeroDetailCastAdapter.kt` | 新增 | 演职员行适配器，焦点下标 + 端点消费 |
+| `res/layout/activity_hero_detail_view.xml` | 改为真实数据布局 | 删掉硬编码 demo 演员 / 图标；演员行换成 `RecyclerView` |
+| `res/layout/item_hero_detail_cast.xml` | 新增 | 76dp 项宽、60dp 圆头像、12sp 单行名 |
+| `res/values/styles_hero_detail.xml` | 微调 | 演员项样式对齐 wrap_content + 76dp |
+| `ui/activity/HeroDetailViewPreviewActivity.kt` | 删除 | 临时预览壳已完成使命，连同 Manifest 节点一起删 |
+| `AndroidManifest.xml` | 改注释 | 去掉预览壳，详情页注释改为纯 View 入口 |
+
+### 10.3 数据流（与 Compose 版一致）
+
+1. **Intent 首帧** `parseIntent()` → `HeroDetail`：剧名 / 元数据 / 简介 / 海报 / 横图 / Logo / 是否已带线路。
+   - 横图只认 `TmdbItem.backdropUrl`（真横图），绝不拿竖图 `pic` 铺满；
+   - 真实条目演员列表为空，TMDB 未命中时整行隐藏（只有 adb demo 入口用假数据）。
+2. **详情请求**：`inlineVod` 有线路 → 跳过请求；`vodId` 为空 / msearch 临时 ID → 直接空态；否则 `SiteViewModel.detailContent(refresh=true)`。
+3. **result 分流**：`observeForever` → `state.onDetailResult(...)`（5 级优先级原样保留）。
+4. **TMDB**：`lifecycleScope.launch { state.loadTmdb(vod) }`，`onDestroy` 取消；Ready/Loading 守卫在状态机内。
+5. **渲染**：`currentPage() = state.buildPage(initialDetail, detailResult?.vod, tmdbState)`，每次基于新 base 重算，评分不叠加。
+
+### 10.4 焦点契约（逐条对齐 Compose）
+
+| 场景 | 行为 |
+|---|---|
+| 进页 | `post` 一次 → 焦点落在「播放」 |
+| 按钮组 ←/→ | 在 播放 / 换源 / 收藏 之间移动，首末项端点消费 |
+| 「播放」按 ↓ | 演员行非空 → 落在上次停留的演员；演员行为空 → **不消费**，交给系统搜索 |
+| 演员行 ↑ | 回「播放」 |
+| 演员行 ←/→ | 行内横移，首末项端点消费 |
+| 演员行 ↓ | 已是最底部，消费 |
+| 弹窗关闭 | `pendingCastFocus` → `pendingActionFocus` → 「播放」，`postOnAnimation` 最多 5 次重试 |
+
+### 10.5 刻意的行为差异（有意识，非回归）
+
+1. **没有 Compose 版演员档案弹窗**：点演员时命中 TMDB 人物直接进 `TmdbPersonActivity`；adb demo 入口的假演员只做回焦，不再弹假档案页。理由：真实条目演员来自 TMDB，人物页信息更全；假档案页只为 demo 存在。
+2. **marquee 静态**：剧名 `marquee` 只在获得焦点时滚动；纯展示文本无焦点，故长标题省略而不滚动。理由：详情页标题不可聚焦，滚动会与「纯展示」契约冲突。
+3. **demo 占位图保留但不再被布局引用**：`bg_hero_detail_demo_backdrop/logo/poster` 仍留在仓库（demo 入口可复用），布局不再硬编码。
+
+### 10.6 静态验证（未编译）
+
+| 检查 | 结果 |
+|---|---|
+| 布局 / Manifest XML 良构性（`[xml]`） | 通过 |
+| 布局 `@+id` 数量 / 唯一性 | 25 / 25 唯一 |
+| Activity 里 `R.id.*` 引用（17 个）在布局中存在 | 全部命中 |
+| Activity 里 `state.*` 成员（33 个）在状态机中存在 | 全部命中 |
+| `HeroDetailActivity.kt` 大括号配平 | 219/219（圆括号 597/603 的差额来自 `// 1)` `// 2)` 这类注释，不是语法问题） |
+| 残留 Compose UI 符号（`Composable` / `setContent` / `HeroDetailScreen` / `remember` / `Modifier` / `AsyncImage`） | 0（`setContentView` 命中不算；`LaunchedEffect` / `AsyncImage` 仅出现在注释里） |
+| `git diff --check` | 仅 LF→CRLF 提示，无空白错误 |
+| 编译 | **未执行（按红线）** |
+
+保留的 Compose 依赖：`RoundedCornerShape` / `Color` / `Shadow` / `Dp` / `dp` 仅用于**保留的常量尾部**（`DETAIL_*` / `POSTER_*` 等），本轮不删依赖。
+
+### 10.6.1 已知遗留（编译告警，不影响功能）
+
+尾部常量里有 63 个 Compose 尺寸常量已经**没有任何引用**（尺寸全部落到了 XML），`focusAction` / `focusCast(List<FocusRequester>, Int)` 两个 Compose 焦点辅助也已无人调用；`HeroDetailStateManager.restoreFocus(actionRequesters, castRequesters)` 同样已被 View 版 `restoreFocus()` 取代。它们只会产生「never used」告警，不影响编译和运行。
+
+**刻意本轮不删**：先把「真实数据 + 焦点行为」验证通过，再在下一阶段（删 Compose 依赖时）连同 `requestDetailFocus` 的 Compose 签名一起清理，避免这次构建同时引入行为改动和清理改动，出问题时分不清原因。
+
+
+### 10.7 用户验证步骤
+
+```bash
+# 1. 编译
+./gradlew :app:compileLeanbackArmeabi_v7aDebugKotlin
+
+# 2. demo 入口（无 Intent 参数，整页回落 DEMO_DETAIL）
+adb shell am start -n com.silent.android.webhtv/com.fongmi.android.tv.ui.activity.HeroDetailActivity
+
+# 3. 真实入口：从首页海报 / 历史 / 换源进详情
+```
+
+电视上逐项核对：排版尺寸、背景 / 海报、标题 / 元数据 / 简介、按钮组焦点态、演员行焦点放大与红圈、播放 → 选集弹窗 → 起播、换源弹窗、收藏切换、弹窗关闭回焦。
+
+### 10.8 回滚
+
+```bash
+git checkout recovery/hero-detail-compose-baseline -- \
+  app/src/main/java/com/fongmi/android/tv/ui/activity/HeroDetailActivity.kt \
+  app/src/main/AndroidManifest.xml \
+  app/src/main/res/layout/activity_hero_detail_view.xml \
+  app/src/main/res/values/styles_hero_detail.xml
+rm app/src/main/java/com/fongmi/android/tv/ui/hero/HeroDetailCastAdapter.kt \
+   app/src/main/res/layout/item_hero_detail_cast.xml
+```
+
+`HeroDetailStateManager.kt` 与本轮无关，回滚不需要动它。
+
+### 10.9 下一步
+
+1. 用户编译 `:app:compileLeanbackArmeabi_v7aDebugKotlin`，把编译错误原样贴回来（只做窄修复，不扩大范围）。
+2. 电视验证第 10.7 节清单；有偏差只改对应常量 / 布局，不改业务逻辑。
+3. 通过后提交 + recovery tag（本轮改动尚未提交）。
+4. 下一阶段：清理 10.6.1 的 Compose 遗留（常量 / 焦点辅助 / `restoreFocus` 重载），再评估移除 Compose 依赖与 `HeroDetailScreen` 死代码。
+
+### 10.10 工作区丢失与恢复（2026-11-12，已恢复）
+
+本轮收尾时发现工作区里 4 个文件凭空消失（`HeroDetailActivity.kt`、`HeroDetailStateManager.kt`、`activity_hero_detail_view.xml`、`styles_hero_detail.xml`，以及未跟踪的 `item_hero_detail_cast.xml`），`git status` 显示为 `D`。磁盘、回收站、卷影副本均无残留。
+
+恢复来源（全部为**本次会话自身的快照/记录**，不是重新手写）：
+
+- `HeroDetailActivity.kt`：OpenCode 会话快照库 `~/.local/share/opencode/snapshot/<project>/<repo>` 中的 blob `3e74bc59…`，62,436 字符、5 处 CRLF、大括号 219/219 —— 与丢失前的指纹（61,975 字符是更早一版，见下）逐项对齐后确认是**最后一次编辑后**的版本。
+- `activity_hero_detail_view.xml`：blob `1e764179…`（14,106 字符、25 个 id、无 `drawableStart`）。
+- `styles_hero_detail.xml`：blob `9eae927f…`（3,774 字符）。
+- `item_hero_detail_cast.xml`：blob `3e13336f…`（872 字符，根布局 76dp）。
+- `HeroDetailStateManager.kt`：本轮未改动，`git checkout HEAD --` 即恢复（内容与会话记录逐字节一致）。
+- `HeroDetailCastAdapter.kt`：未受影响，仍在工作区（与会话记录逐字节一致）。
+
+恢复后重新跑了第 10.6 节全部静态检查，结果一致（17 个 `R.id`、25 个布局 id、33 个 `state.*` 成员、XML 良构、样式引用齐全）。
+
+**教训**：本轮改动一直未提交，等于把全部成果押在工作区上。恢复后第一件事应当是编译验证通过即提交 + 打 tag，不要在未提交状态下继续叠加改动。
+

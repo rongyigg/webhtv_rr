@@ -1,12 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-    Hero 详情页（纯 View 体系）静态骨架，阶段 A 第一步。
+    Hero 详情页（纯 View 体系）。
 
-    本轮只画排版，不接数据、不写 Activity 业务逻辑：
-    - 文案：DEMO_DETAIL（后会无期 / 2026 · 剧情 · 全 50 集 · 9.1 / 10 位演员）
-    - 背景、海报、头像：本地渐变 drawable，不联网
-    - 按钮和演员项可聚焦，焦点态用 selector / stateListAnimator 静态演示
-    - 真实数据、焦点流转、点击事件、弹窗都在 Plan A 后续步骤接
+    真实数据来源（全部由 HeroDetailActivity 绑定）：
+    - 背景 / 海报 / Logo：Coil 加载 Intent 首帧 + 详情接口 + TMDB；
+    - 剧名 / 元数据 / 简介 / 导演主演：HeroDetail.mergeDetail / mergeTmdb；
+    - 按钮组：播放 / 换源 / 收藏，焦点态用 selector；
+    - 演职员行：RecyclerView + HeroDetailCastAdapter。
 
     尺寸基准：1920×1080 / density 2（960×540dp），Compose 规格逐项照抄。
     结构：
@@ -22,11 +22,11 @@
        ├─ 4dp
        ├─ synopsis（最宽 440dp、最多 4 行）
        ├─ credit（上间距 8dp）
-       ├─ loadingRow / stateText（默认 GONE，留给后续状态切换）
+       ├─ loadingRow / stateText（按详情状态切换）
        ├─ 12dp
        ├─ actionRow 36dp（播放 / 换源 / 收藏）
        └─ 16dp
-          castSection（红条标题 + 10 个 76dp 演员项）
+          castSection（红条标题 + 横向演员列表）
 -->
 <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools"
@@ -36,16 +36,15 @@
     android:background="#FF000000"
     android:clipChildren="false"
     android:clipToPadding="false"
-    tools:context=".ui.activity.HeroDetailViewPreviewActivity">
+    tools:context=".ui.activity.HeroDetailActivity">
 
-    <!-- ① 全屏背景大图：真实页面由 Coil 加载，这里用本地渐变占位。 -->
+    <!-- ① 全屏背景大图：只放横图（TMDB backdrop / 首页预取），竖图只进右上角小海报。 -->
     <androidx.appcompat.widget.AppCompatImageView
         android:id="@+id/backdrop"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
         android:contentDescription="@null"
-        android:scaleType="centerCrop"
-        android:src="@drawable/bg_hero_detail_demo_backdrop" />
+        android:scaleType="centerCrop" />
 
     <!-- ② 横向遮罩：左侧 35% 内压黑托住标题和简介，右侧保持透亮。 -->
     <View
@@ -63,7 +62,7 @@
 
     <!--
         ④ 右上角浮动小海报：150×210dp，top 72dp / end 80dp，内边距 4dp，圆角 12dp。
-        真实规则：有 TMDB 背景大图时整块 GONE；这里先显示，方便核对尺寸和位置。
+        真实规则：有 TMDB 背景大图时整块 GONE（由 HeroDetail.hasTmdbBackdrop 决定）。
     -->
     <FrameLayout
         android:id="@+id/posterCard"
@@ -81,8 +80,7 @@
             android:layout_width="match_parent"
             android:layout_height="match_parent"
             android:contentDescription="@null"
-            android:scaleType="centerCrop"
-            android:src="@drawable/bg_hero_detail_demo_poster" />
+            android:scaleType="centerCrop" />
 
     </FrameLayout>
 
@@ -139,17 +137,17 @@
                     android:shadowDy="2"
                     android:shadowRadius="12"
                     android:singleLine="true"
-                    android:text="后会无期"
                     android:textColor="@color/white"
                     android:textSize="32sp"
-                    android:textStyle="bold" />
+                    android:textStyle="bold"
+                    tools:text="后会无期" />
 
             </FrameLayout>
 
             <!--
-                Logo 槽：默认 GONE。真实页面用 Coil 加载 TMDB 艺术字；
+                Logo 槽：默认 GONE。Coil 加载 TMDB 艺术字；
                 槽本身固定 96dp 高、最宽 720dp，图片等比缩放并贴底左对齐。
-                切到 Logo 分支时：titleTextSlot 设 GONE，本槽设 VISIBLE。
+                图片未到 / 失败时 titleTextSlot 继续显示文字，无感降级。
             -->
             <FrameLayout
                 android:id="@+id/titleLogoSlot"
@@ -166,8 +164,7 @@
                     android:contentDescription="@null"
                     android:maxHeight="96dp"
                     android:maxWidth="720dp"
-                    android:scaleType="fitStart"
-                    android:src="@drawable/bg_hero_detail_demo_logo" />
+                    android:scaleType="fitStart" />
 
             </FrameLayout>
 
@@ -178,10 +175,7 @@
             android:layout_width="match_parent"
             android:layout_height="2dp" />
 
-        <!--
-            5.2 元数据：固定 20dp 高、14sp、#CCFFFFFF、文字贴底。
-            真实文案由详情接口 / TMDB 合并后填入。
-        -->
+        <!-- 5.2 元数据：固定 20dp 高、14sp、#CCFFFFFF、文字贴底。 -->
         <FrameLayout
             android:id="@+id/metaSlot"
             android:layout_width="match_parent"
@@ -199,9 +193,9 @@
                 android:shadowDy="1.5"
                 android:shadowRadius="8"
                 android:singleLine="true"
-                android:text="2026 · 剧情 · 全 50 集 · 9.1"
                 android:textColor="@color/white_80"
-                android:textSize="14sp" />
+                android:textSize="14sp"
+                tools:text="2026 · 剧情 · 全 50 集 · 9.1" />
 
         </FrameLayout>
 
@@ -226,13 +220,13 @@
             android:shadowDx="1.2"
             android:shadowDy="1.2"
             android:shadowRadius="6"
-            android:text="三个男人一路向西，在公路尽头重新认识了自己。他们带着各自的秘密出发，却在无人区里把话说得比过去十年都清楚。有人在加油站丢了钱包，有人在沙漠里捡回一条狗，还有人把最想说的话留到了最后一句。"
             android:textColor="#BBFFFFFF"
-            android:textSize="12sp" />
+            android:textSize="12sp"
+            tools:text="三个男人一路向西，在公路尽头重新认识了自己。他们带着各自的秘密出发，却在无人区里把话说得比过去十年都清楚。" />
 
         <!--
             5.4 真实导演 / 主演：上间距 8dp、12sp、单行省略。
-            真实逻辑：详情接口给了才显示；这里是静态占位，方便核对行高和宽度。
+            详情接口给了才显示（空串时整行 GONE）。
         -->
         <androidx.appcompat.widget.AppCompatTextView
             android:id="@+id/credit"
@@ -247,14 +241,13 @@
             android:shadowDy="1.5"
             android:shadowRadius="8"
             android:singleLine="true"
-            android:text="导演：韩寒 · 主演：冯绍峰 / 陈柏霖 / 钟汉良"
             android:textColor="@color/white_80"
-            android:textSize="12sp" />
+            android:textSize="12sp"
+            android:visibility="gone"
+            tools:text="导演：韩寒 · 主演：冯绍峰 / 陈柏霖 / 钟汉良"
+            tools:visibility="visible" />
 
-        <!--
-            5.5 加载 / 失败 / 空态：默认 GONE。
-            真实逻辑按 DetailState 切换可见性；这里保留 View 挂载点，不接数据。
-        -->
+        <!-- 5.5 加载 / 失败 / 空态：按 DetailState 切换可见性。 -->
         <LinearLayout
             android:id="@+id/loadingRow"
             android:layout_width="wrap_content"
@@ -291,10 +284,10 @@
             android:ellipsize="end"
             android:maxLines="2"
             android:maxWidth="440dp"
-            android:text="详情加载失败，按「播放」重试"
             android:textColor="#FFFF8A80"
             android:textSize="12sp"
-            android:visibility="gone" />
+            android:visibility="gone"
+            tools:text="详情加载失败，按「播放」重试" />
 
         <!-- 5.6 按钮组：上间距 12dp，按钮之间 12dp。默认焦点落在「播放」。 -->
         <LinearLayout
@@ -309,24 +302,18 @@
             <androidx.appcompat.widget.AppCompatTextView
                 android:id="@+id/actionPlay"
                 style="@style/Widget.HeroDetail.ActionButton"
-                android:drawableStart="@drawable/ic_widget_play"
-                android:nextFocusDown="@id/castItem0"
                 android:text="播放" />
 
             <androidx.appcompat.widget.AppCompatTextView
                 android:id="@+id/actionChangeSource"
                 style="@style/Widget.HeroDetail.ActionButton"
                 android:layout_marginStart="12dp"
-                android:drawableStart="@drawable/ic_detail_change"
-                android:nextFocusDown="@id/castItem0"
                 android:text="换源" />
 
             <androidx.appcompat.widget.AppCompatTextView
                 android:id="@+id/actionKeep"
                 style="@style/Widget.HeroDetail.ActionButton"
                 android:layout_marginStart="12dp"
-                android:drawableStart="@drawable/ic_detail_keep_off"
-                android:nextFocusDown="@id/castItem0"
                 android:text="收藏" />
 
         </LinearLayout>
@@ -339,7 +326,9 @@
             android:layout_marginTop="16dp"
             android:clipChildren="false"
             android:clipToPadding="false"
-            android:orientation="vertical">
+            android:orientation="vertical"
+            android:visibility="gone"
+            tools:visibility="visible">
 
             <LinearLayout
                 android:layout_width="wrap_content"
@@ -366,12 +355,11 @@
             </LinearLayout>
 
             <!--
-                横向列表：真实页面是 RecyclerView / LazyRow；
-                静态骨架用 HorizontalScrollView + 10 个固定项，方便在电视上一次看全。
-                列表尾部额外 24dp，对应 Compose contentPadding end = HERO_PADDING。
+                横向列表：RecyclerView + HeroDetailCastAdapter。
+                尾部额外 24dp，对应 Compose contentPadding end = HERO_PADDING。
             -->
-            <HorizontalScrollView
-                android:id="@+id/castScroll"
+            <androidx.recyclerview.widget.RecyclerView
+                android:id="@+id/castList"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="10dp"
@@ -379,161 +367,8 @@
                 android:clipToPadding="false"
                 android:focusable="false"
                 android:overScrollMode="never"
-                android:scrollbars="none">
-
-                <LinearLayout
-                    android:id="@+id/castList"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:clipChildren="false"
-                    android:clipToPadding="false"
-                    android:orientation="horizontal"
-                    android:paddingEnd="24dp">
-
-                    <LinearLayout
-                        android:id="@+id/castItem0"
-                        style="@style/Widget.HeroDetail.CastItem"
-                        android:nextFocusUp="@id/actionPlay">
-
-                        <FrameLayout style="@style/Widget.HeroDetail.CastAvatarFrame">
-                            <androidx.appcompat.widget.AppCompatImageView style="@style/Widget.HeroDetail.CastAvatar" />
-                        </FrameLayout>
-
-                        <androidx.appcompat.widget.AppCompatTextView
-                            style="@style/Widget.HeroDetail.CastName"
-                            android:text="李海潮" />
-
-                    </LinearLayout>
-
-                    <View style="@style/Widget.HeroDetail.CastGap" />
-
-                    <LinearLayout style="@style/Widget.HeroDetail.CastItem">
-
-                        <FrameLayout style="@style/Widget.HeroDetail.CastAvatarFrame">
-                            <androidx.appcompat.widget.AppCompatImageView style="@style/Widget.HeroDetail.CastAvatar" />
-                        </FrameLayout>
-
-                        <androidx.appcompat.widget.AppCompatTextView
-                            style="@style/Widget.HeroDetail.CastName"
-                            android:text="陈屿" />
-
-                    </LinearLayout>
-
-                    <View style="@style/Widget.HeroDetail.CastGap" />
-
-                    <LinearLayout style="@style/Widget.HeroDetail.CastItem">
-
-                        <FrameLayout style="@style/Widget.HeroDetail.CastAvatarFrame">
-                            <androidx.appcompat.widget.AppCompatImageView style="@style/Widget.HeroDetail.CastAvatar" />
-                        </FrameLayout>
-
-                        <androidx.appcompat.widget.AppCompatTextView
-                            style="@style/Widget.HeroDetail.CastName"
-                            android:text="林晚舟" />
-
-                    </LinearLayout>
-
-                    <View style="@style/Widget.HeroDetail.CastGap" />
-
-                    <LinearLayout style="@style/Widget.HeroDetail.CastItem">
-
-                        <FrameLayout style="@style/Widget.HeroDetail.CastAvatarFrame">
-                            <androidx.appcompat.widget.AppCompatImageView style="@style/Widget.HeroDetail.CastAvatar" />
-                        </FrameLayout>
-
-                        <androidx.appcompat.widget.AppCompatTextView
-                            style="@style/Widget.HeroDetail.CastName"
-                            android:text="周野" />
-
-                    </LinearLayout>
-
-                    <View style="@style/Widget.HeroDetail.CastGap" />
-
-                    <LinearLayout style="@style/Widget.HeroDetail.CastItem">
-
-                        <FrameLayout style="@style/Widget.HeroDetail.CastAvatarFrame">
-                            <androidx.appcompat.widget.AppCompatImageView style="@style/Widget.HeroDetail.CastAvatar" />
-                        </FrameLayout>
-
-                        <androidx.appcompat.widget.AppCompatTextView
-                            style="@style/Widget.HeroDetail.CastName"
-                            android:text="苏见月" />
-
-                    </LinearLayout>
-
-                    <View style="@style/Widget.HeroDetail.CastGap" />
-
-                    <LinearLayout style="@style/Widget.HeroDetail.CastItem">
-
-                        <FrameLayout style="@style/Widget.HeroDetail.CastAvatarFrame">
-                            <androidx.appcompat.widget.AppCompatImageView style="@style/Widget.HeroDetail.CastAvatar" />
-                        </FrameLayout>
-
-                        <androidx.appcompat.widget.AppCompatTextView
-                            style="@style/Widget.HeroDetail.CastName"
-                            android:text="顾云深" />
-
-                    </LinearLayout>
-
-                    <View style="@style/Widget.HeroDetail.CastGap" />
-
-                    <LinearLayout style="@style/Widget.HeroDetail.CastItem">
-
-                        <FrameLayout style="@style/Widget.HeroDetail.CastAvatarFrame">
-                            <androidx.appcompat.widget.AppCompatImageView style="@style/Widget.HeroDetail.CastAvatar" />
-                        </FrameLayout>
-
-                        <androidx.appcompat.widget.AppCompatTextView
-                            style="@style/Widget.HeroDetail.CastName"
-                            android:text="沈青禾" />
-
-                    </LinearLayout>
-
-                    <View style="@style/Widget.HeroDetail.CastGap" />
-
-                    <LinearLayout style="@style/Widget.HeroDetail.CastItem">
-
-                        <FrameLayout style="@style/Widget.HeroDetail.CastAvatarFrame">
-                            <androidx.appcompat.widget.AppCompatImageView style="@style/Widget.HeroDetail.CastAvatar" />
-                        </FrameLayout>
-
-                        <androidx.appcompat.widget.AppCompatTextView
-                            style="@style/Widget.HeroDetail.CastName"
-                            android:text="许知白" />
-
-                    </LinearLayout>
-
-                    <View style="@style/Widget.HeroDetail.CastGap" />
-
-                    <LinearLayout style="@style/Widget.HeroDetail.CastItem">
-
-                        <FrameLayout style="@style/Widget.HeroDetail.CastAvatarFrame">
-                            <androidx.appcompat.widget.AppCompatImageView style="@style/Widget.HeroDetail.CastAvatar" />
-                        </FrameLayout>
-
-                        <androidx.appcompat.widget.AppCompatTextView
-                            style="@style/Widget.HeroDetail.CastName"
-                            android:text="叶南" />
-
-                    </LinearLayout>
-
-                    <View style="@style/Widget.HeroDetail.CastGap" />
-
-                    <LinearLayout style="@style/Widget.HeroDetail.CastItem">
-
-                        <FrameLayout style="@style/Widget.HeroDetail.CastAvatarFrame">
-                            <androidx.appcompat.widget.AppCompatImageView style="@style/Widget.HeroDetail.CastAvatar" />
-                        </FrameLayout>
-
-                        <androidx.appcompat.widget.AppCompatTextView
-                            style="@style/Widget.HeroDetail.CastName"
-                            android:text="宋一诺" />
-
-                    </LinearLayout>
-
-                </LinearLayout>
-
-            </HorizontalScrollView>
+                android:paddingEnd="24dp"
+                android:scrollbars="none" />
 
         </LinearLayout>
 

@@ -1,12 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-    Hero 详情页（纯 View）静态骨架专用样式。
+    Hero 详情页（纯 View）样式。
 
-    只服务 activity_hero_detail_view.xml，尺寸全部照抄 HeroDetailActivity.kt：
+    服务 activity_hero_detail_view.xml 与 item_hero_detail_cast.xml，尺寸全部照抄 Compose 版：
     - 按钮：36dp 高 / 13sp 加粗 / 左右 16dp / 图标文字间距 4dp / 4dp 圆角
-    - 演员项：76dp 宽 / 头像 60dp / 名字 12sp / 项间距 12dp
-
-    真实数据、焦点流转、点击事件都不在这里，后续 Plan A 接逻辑时直接复用这些样式。
+    - 演员项：76dp 宽 / 头像 60dp / 名字 12sp / 项间距由 HeroHorizontalGapDecoration 提供 12dp
 -->
 <resources>
 
@@ -61,12 +59,11 @@
         <item name="android:stateListAnimator">@animator/hero_cast_focus_scale</item>
     </style>
 
-    <!-- 头像图：真实页面由 Coil 填，静态骨架用本地渐变占位。 -->
+    <!-- 头像图：由 Coil 按演员头像地址填充，加载失败回落到本地渐变占位。 -->
     <style name="Widget.HeroDetail.CastAvatar">
         <item name="android:layout_width">match_parent</item>
         <item name="android:layout_height">match_parent</item>
         <item name="android:scaleType">centerCrop</item>
-        <item name="android:src">@drawable/bg_hero_detail_demo_avatar</item>
         <item name="android:contentDescription">@null</item>
     </style>
 
@@ -81,12 +78,6 @@
         <item name="android:duplicateParentState">true</item>
         <item name="android:textColor">@color/selector_hero_detail_cast_name</item>
         <item name="android:textSize">12sp</item>
-    </style>
-
-    <!-- 演员项之间的 12dp 间距（对应 Compose Arrangement.spacedBy）。 -->
-    <style name="Widget.HeroDetail.CastGap">
-        <item name="android:layout_width">12dp</item>
-        <item name="android:layout_height">1dp</item>
     </style>
 
 </resources>

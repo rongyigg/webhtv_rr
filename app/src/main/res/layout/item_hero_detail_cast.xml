@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Hero 详情页演职员行单格：76dp 宽、头像 60dp、名字 12sp。
+    焦点态（2dp 红圈 + 1.08 放大）由样式里的 selector / stateListAnimator 负责，
+    与 activity_hero_detail_view.xml 原来的静态演员项完全一致。
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="76dp"
+    android:layout_height="wrap_content"
+    style="@style/Widget.HeroDetail.CastItem">
+
+    <FrameLayout style="@style/Widget.HeroDetail.CastAvatarFrame">
+
+        <androidx.appcompat.widget.AppCompatImageView
+            android:id="@+id/castAvatar"
+            style="@style/Widget.HeroDetail.CastAvatar" />
+
+    </FrameLayout>
+
+    <androidx.appcompat.widget.AppCompatTextView
+        android:id="@+id/castName"
+        style="@style/Widget.HeroDetail.CastName"
+        tools:text="李海潮" />
+
+</LinearLayout>
