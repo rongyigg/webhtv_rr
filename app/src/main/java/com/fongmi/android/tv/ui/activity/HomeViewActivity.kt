@@ -461,6 +461,8 @@ class HomeViewActivity : AppCompatActivity() {
             style = HomeChipStyle.NAV,
             onFocused = { },
             onSelected = ::onNavSelected,
+            // 顶栏环形焦点：最后一项「设置」再按 → 回到左侧小房子。
+            onRightEdge = { homeBtn.requestFocus() },
         )
         navRecycler.adapter = navAdapter
         navAdapter.submit(NAV_LABELS)
@@ -509,6 +511,17 @@ class HomeViewActivity : AppCompatActivity() {
     private fun setupActions() {
         // 小房子 / 菜单键共用同一个入口：全局接口源侧边栏。
         homeBtn.setOnClickListener { openSourceSidebar() }
+        // 顶栏环形焦点：小房子再按 ← 回到顶栏最后一项「设置」。
+        // 焦点链在 [wireFocusChain] 里只声明了「小房子 → 右 = navRecycler」，
+        // 没有方向键监听时 ← 会被系统几何搜索吞掉（往右 / 往上找候选），所以这里显式接住。
+        homeBtn.setOnKeyListener { _, event ->
+            if (event.action == KeyEvent.ACTION_DOWN && event.keyCode == KeyEvent.KEYCODE_DPAD_LEFT) {
+                focusNavItem(navAdapter.itemCount - 1)
+                true
+            } else {
+                false
+            }
+        }
     }
 
     /**
@@ -2093,10 +2106,18 @@ class HomeViewActivity : AppCompatActivity() {
         private const val TAB_SWITCH_DEBOUNCE_MS = 220L
 
         /**
-         * 海报行间距：`ref_docs/HomeActivityV2.java` L776 `L.setHorizontalSpacing(g2.b(16))`。
-         * 原版是 16dp（不是 Compose 版的 12dp）。
+         * 海报行间距：步进必须是原版的 **132dp**（卡宽 116dp + 间距 16dp）。
+         *
+         * 原版 `ref_docs/xx0.java` 的 `I(Style)`：`(960 − 6×16 − 48) / 7 = 116dp` 卡宽，
+         * 加 16dp 间距 → 132dp 步进。本项目海报卡固定 120dp（`HeroPosterCard`，历史页 / 搜索页共用，
+         * 不能改），所以把间距收成 12dp，步进仍是 132dp，实测原版卡心 81.8 / 214.2 / 346.8 / 479.2…
+         * 与本项目 24 + 132k + 60 完全对上：
+         *  - 静止：24 + 7×120 + 6×12 = 936dp，第 8 张起点 948dp → 屏宽 960dp 正好露出 12dp 卡边；
+         *  - 居中：焦点卡两侧各 3 整卡（3×132 = 396dp）刚好铺满 24dp 内边距到屏幕中心；
+         *  - 第 4 张（第 5 张卡）卡心 = 24 + 4×132 + 60 = 612dp，滚动量 612 − 480 = 132dp，
+         *    前 4 张卡心都在视口中心左侧、dx ≤ 0 被夹成 0，所以「到第 5 张才开始滚」。
          */
-        private const val POSTER_GAP_DP = 16
+        private const val POSTER_GAP_DP = 12
 
         /** 分类 Tab 间距：同文件 L786 `K.setHorizontalSpacing(g2.b(12))`。 */
         private const val TAB_GAP_DP = 12
@@ -2165,6 +2186,8 @@ private class HomeChipAdapter(
     private val style: HomeChipStyle,
     private val onFocused: (Int) -> Unit,
     private val onSelected: (Int) -> Unit,
+    /** 顶栏最后一项再按 → 的回调：把焦点交回左侧「小房子」，与「小房子 ←」一起构成环形焦点。 */
+    private val onRightEdge: () -> Unit = {},
 ) : RecyclerView.Adapter<HomeChipAdapter.Holder>() {
 
     private val items = ArrayList<String>()
@@ -2209,13 +2232,29 @@ private class HomeChipAdapter(
                 val position = holder.bindingAdapterPosition
                 if (position != RecyclerView.NO_POSITION) onSelected(position)
             }
+            if (style == HomeChipStyle.NAV) {
+                // 顶栏环形焦点：焦点在最后一项（设置）时再按 →，交回左侧「小房子」，
+                // 而不是交给系统几何搜索去乱跳。中间项照常向右移动。
+                holder.text.setOnKeyListener { _, event ->
+                    if (event.action == KeyEvent.ACTION_DOWN &&
+                        event.keyCode == KeyEvent.KEYCODE_DPAD_RIGHT &&
+                        holder.bindingAdapterPosition == itemCount - 1
+                    ) {
+                        onRightEdge()
+                        true
+                    } else {
+                        false
+                    }
+                }
+            }
             holder.text.setOnFocusChangeListener { _, hasFocus ->
                 val position = holder.bindingAdapterPosition
                 if (hasFocus && position != RecyclerView.NO_POSITION) onFocused(position)
                 applyVisual(holder, hasFocus, position)
                 if (style == HomeChipStyle.NAV) {
                     // 顶栏焦点态整体平滑放大 1.1 倍（只走绘制层，不动布局）。
-                    // 缩放对象是「文字 + 下划线」整列，下划线与文字始终同心。
+                    // 缩放对象是「文字 + 下划线」整列，下划线与文字始终同心；pivot = 竖列中心（= 64dp 行心），
+                    // 所以基准 44..46dp / 20dp 的横线放大后正好落在原版实测的 45..47dp / 22dp。
                     holder.root.animate()
                         .scaleX(if (hasFocus) TOP_BAR_FOCUS_SCALE else 1f)
                         .scaleY(if (hasFocus) TOP_BAR_FOCUS_SCALE else 1f)
@@ -2226,9 +2265,14 @@ private class HomeChipAdapter(
         }
 
     /**
-     * 顶栏文字项：竖列 = [24dp 文字区] + 6dp 间距 + [26×2dp 红色短横线]，
-     * 顶部再预留 8dp（= 间距 + 横线高），使 24dp 文字区的中心正好落在 64dp 行高的中线上
-     * （与 Compose 版 `TOP_BAR_UNDERLINE_RESERVE / TEXT_BOX / GAP / HEIGHT` 逐值一致）。
+     * 顶栏文字项：竖列 = [24dp 文字区] + [20×2dp 红色短横线]，**两者之间不留间距**，
+     * 顶部再预留 2dp（= 横线高），使 24dp 文字区正好落在 64dp 行的 20..44dp、横线紧贴 44..46dp。
+     *
+     * 几何来源（`ref_docs/1.png`，1920×1080 @2x，焦点在「搜索」）：文字墨迹 y 23.5..39dp、
+     * 红色短横线 y 45..47dp、横线宽 22dp。原版焦点态把整项放大 1.1 倍（pivot = 行心 32dp），
+     * 所以基准几何是「横线 44..46dp、宽 20dp」：`32 + (44−32)×1.1 = 45.2dp`、`20 × 1.1 = 22dp`，
+     * 与实测逐像素吻合。旧实现按 Compose 版在文字与横线之间留了 6dp（基准 50..52dp），
+     * 放大后落在 51.8..54dp，比原版低 7dp；横线也按 26dp 画，放大后 28.6dp，比原版宽 6.6dp。
      *
      * 横线常驻布局、只切透明度：焦点切换时文字宽度变化不会把横线顶跑，也不会顶动整行。
      */
@@ -2264,12 +2308,11 @@ private class HomeChipAdapter(
             }
             // 常驻布局，焦点态只改透明度（原版 150ms 淡入淡出）。
             alpha = 0f
+            // 紧贴文字区下沿：竖列里不设 topMargin，几何完全由 [TOP_BAR_UNDERLINE_RESERVE_DP] 决定。
             layoutParams = LinearLayout.LayoutParams(
                 dp(TOP_BAR_UNDERLINE_WIDTH_DP),
                 dp(TOP_BAR_UNDERLINE_HEIGHT_DP),
-            ).apply {
-                topMargin = dp(TOP_BAR_UNDERLINE_GAP_DP)
-            }
+            )
         }
         column.addView(text)
         column.addView(underline)
@@ -2330,7 +2373,7 @@ private class HomeChipAdapter(
             HomeChipStyle.NAV -> {
                 text.setTextColor(if (focused) Color.WHITE else TOP_BAR_IDLE_TEXT)
                 text.typeface = if (focused) NAV_FOCUS_TYPEFACE else NAV_IDLE_TYPEFACE
-                // 横线始终占位（2dp + 6dp 间距），这里只切透明度：文字宽度变化不会顶动它。
+                // 横线始终占位（2dp，紧贴文字区下沿），这里只切透明度：文字宽度变化不会顶动它。
                 holder.underline?.alpha = if (focused) 1f else 0f
             }
             HomeChipStyle.TAB -> {
@@ -2339,7 +2382,7 @@ private class HomeChipAdapter(
                 // 三态严格判断，顺序不能换：
                 //   1. hasFocus            → bg_global_focus_capsule（红渐变实心胶囊），白字
                 //   2. 未聚焦 && 已选中     → bg_global_selected_capsule_border（同圆角细线红框），白字
-                //   3. 其余                → 深色半透明底，暗白字
+                //   3. 其余                → 深色半透明胶囊底，暗白字
                 text.isSelected = selected
                 text.background = tabBackground(focused, selected)
                 text.setTextColor(if (focused || selected) Color.WHITE else tabIdleText)
@@ -2351,7 +2394,8 @@ private class HomeChipAdapter(
      * 分类 Tab 背景 —— 三态唯一的生成入口，焦点 / 选中态全部复用全局 Drawable，代码里不写色值：
      * - [focused]：`@drawable/bg_global_focus_capsule`（换源弹窗站点标签同款红渐变胶囊，28dp 全圆角）；
      * - 选中未聚焦：`@drawable/bg_global_selected_capsule_border`（同形状透明底 + 细线红框）；
-     * - 其余：`home_tab_idle_surface` 深色半透明底（未选中态本轮未改动）。
+     * - 其余：`home_tab_idle_surface` 深色半透明**胶囊**（与焦点 / 选中态同 28dp 全圆角，
+     *   照抄 `ref_docs/shape_chip_round_normal.xml` 的 `corners radius=28dp`）。
      */
     private fun tabBackground(focused: Boolean, selected: Boolean): Drawable {
         val global = when {
@@ -2391,18 +2435,19 @@ private class HomeChipAdapter(
         /** 顶栏文字区固定高度：Compose `TOP_BAR_TEXT_BOX = 24dp`（16sp 字形的上沿高度）。 */
         private const val TOP_BAR_TEXT_BOX_DP = 24
 
-        /** 焦点红色短横线：Compose `TOP_BAR_UNDERLINE_WIDTH/HEIGHT` = 26dp × 2dp。 */
-        private const val TOP_BAR_UNDERLINE_WIDTH_DP = 26
+        /** 焦点红色短横线：20dp × 2dp（焦点态整项放大 1.1 倍后，正好是原版实测的 22dp 宽）。 */
+        private const val TOP_BAR_UNDERLINE_WIDTH_DP = 20
         private const val TOP_BAR_UNDERLINE_HEIGHT_DP = 2
-
-        /** 文字与短横线之间的间距：Compose `TOP_BAR_UNDERLINE_GAP = 6dp`。 */
-        private const val TOP_BAR_UNDERLINE_GAP_DP = 6
 
         /** 短横线端部圆角：ref_docs/shape_red_bar.xml `corners radius=2dp`。 */
         private const val TOP_BAR_UNDERLINE_RADIUS_DP = 2
 
-        /** 顶部预留 = 间距 + 横线高（Compose `TOP_BAR_UNDERLINE_RESERVE`）：保证文字区与 64dp 行同心。 */
-        private const val TOP_BAR_UNDERLINE_RESERVE_DP = TOP_BAR_UNDERLINE_GAP_DP + TOP_BAR_UNDERLINE_HEIGHT_DP
+        /**
+         * 顶部预留 = 横线高（2dp）：让 24dp 文字区在 64dp 行里居中（20..44dp），
+         * 横线紧贴文字区下沿（44..46dp）。原版没有「文字与横线之间」的间距，
+         * 横线是直接接在文字区下沿的（放大 1.1 后落在实测的 45..47dp）。
+         */
+        private const val TOP_BAR_UNDERLINE_RESERVE_DP = TOP_BAR_UNDERLINE_HEIGHT_DP
 
         /** 分类 Tab 字号：ref_docs/adapter_type.xml `android:textSize="13sp"`。 */
         private const val TAB_TEXT_SP = 13f
@@ -2428,8 +2473,14 @@ private class HomeChipAdapter(
         private val NAV_IDLE_TYPEFACE: Typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
         private val NAV_FOCUS_TYPEFACE: Typeface = Typeface.create("sans-serif", Typeface.BOLD)
 
-        /** 分类 Tab 常态小圆角：原版就是矩形/小圆角矩形，禁止做成 28dp 大胶囊。 */
-        private const val TAB_IDLE_RADIUS_DP = 4
+        /**
+         * 分类 Tab 常态底圆角：直接照抄 `ref_docs/shape_chip_round_normal.xml` 的 `corners radius=28dp`。
+         *
+         * 28dp 远超 26dp 行高的一半，`GradientDrawable` 会把它夹成「全圆角」，
+         * 于是常态底和焦点 / 选中态的 28dp 胶囊完全同形（只是不填充红色），不会出现「常态是方角、
+         * 一聚焦突然变胶囊」的跳变。
+         */
+        private const val TAB_IDLE_RADIUS_DP = 28
 
         private const val FOCUS_ANIM_MS = 150L
     }

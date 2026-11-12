@@ -501,3 +501,66 @@ java.lang.IllegalStateException: Cannot call this method while RecyclerView is c
 - 待真机验证：演员行 11 位全部完整显示（末位右边距 24dp）；线路 2 / 3 在网格左右边缘反复翻页不崩、且线路不会被悄悄切回线路 1；线路 1 行为不变。
 - 回滚：`git checkout -- app/src/main/res/values/styles_hero_detail.xml app/src/main/res/layout/item_hero_detail_cast.xml app/src/main/res/layout/activity_hero_detail_view.xml app/src/main/java/com/fongmi/android/tv/ui/hero/EpisodeViewDialog.kt app/src/main/java/com/fongmi/android/tv/ui/hero/EpisodeAdapter.kt app/src/main/java/com/fongmi/android/tv/ui/hero/HeroDetailCastAdapter.kt`。
 
+### 10.13 详情页头像红圈 + 首页顶栏 / Tab / 海报行四处对齐（2026-11-12，未编译）
+
+用户报 5 个视觉问题：① 详情页演员头像「溢出红圈」；② 首页顶栏红色下划线偏低；③ 顶栏焦点到「设置」后 → 无处可去，希望环形回绕；④ 分类 Tab 常态黑底是方角，要求跟红色实心胶囊同形；⑤ 海报行静止 7 整卡 + 第 8 张卡边、第 5 张起才滚动、居中两侧各 3 整卡。
+
+真机取样：`wm size = 1920x1080`、`wm density = 320` → 960×540dp（1dp = 2px），内容列左右各 24dp 内边距 → 可用 912dp。
+
+#### ① 演员头像红圈：去掉 drawable 里的 `<inset>`
+
+`Widget.HeroDetail.CastAvatarFrame` 是 60dp 圆，描边走 **foreground**（`selector_hero_detail_cast_border`，画在头像之上），头像走子 View + `clipToOutline`，焦点态由 `hero_cast_focus_scale.xml` 整框放大 1.08 倍。
+
+旧 drawable 套了 `<inset 1dp>`（常态 0.5dp），圆环外径只剩 58dp，放大后 62.6dp；而头像被裁成 60dp 圆、放大后 64.8dp → 头像从红圈外侧露出一圈，看起来就是「溢出红圈」。
+
+去掉 `<inset>` 后：`GradientDrawable` 自己会把形状矩形按半个描边宽内缩，2dp 描边正好落在 0..2dp（直径 56..60dp），外沿 = 头像框边界，放大后 64.8dp 与头像外沿完全重合。常态 1dp 同理（0..1dp）。两个 drawable 的注释都改成了这套几何说明。
+
+#### ② 顶栏下划线：基准 44..46dp / 20dp 宽（放大 1.1 后 = 实测 45..47dp / 22dp）
+
+原版 `ref_docs/1.png` 实测（焦点在「搜索」）：文字墨迹 y 23.5..39dp、红色短横线 y 45..47dp、横线宽 22dp。我们的 2.png 实测：横线 y 51.5..53.5dp、宽 29dp。
+
+关键推断：原版焦点态把**整项**放大 1.1 倍（pivot = 64dp 行心 32dp）。把实测值反解回基准：
+
+```
+y：  32 + (44 − 32) × 1.1 = 45.2dp     → 基准 44..46dp  → 放大后 45.2..47.4dp  ≈ 实测 45..47
+宽： 20 × 1.1 = 22dp                    → 基准 20dp      → 放大后 22dp        = 实测 22dp
+```
+
+同一模型也解释了文字：基准墨迹 24.3..38.4dp → 放大后 23.5..39.0dp = 实测 23.5..39dp。旧实现按 Compose 版在文字与横线之间留了 6dp（基准 50..52dp），放大后 51.8..54dp，比原版低约 7dp；横线按 26dp 画，放大后 28.6dp，比原版宽约 6.6dp。
+
+改动（`HomeViewActivity.kt`）：`TOP_BAR_UNDERLINE_WIDTH_DP` 26 → 20；删掉 `TOP_BAR_UNDERLINE_GAP_DP`（6dp 间距）与横线的 `topMargin`；`TOP_BAR_UNDERLINE_RESERVE_DP` 由「间距 + 横线高 = 8dp」改为「横线高 = 2dp」。竖列结构、`gravity=CENTER`、1.1 倍缩放（作用在整列）全部保留 → 24dp 文字区落在 20..44dp、横线 44..46dp，放大后正好 45.2..47.4dp。
+
+#### ③ 顶栏环形焦点：设置 →（右）→ 小房子 →（左）→ 设置
+
+`HomeChipAdapter` 新增构造参数 `onRightEdge: () -> Unit`，只对 `HomeChipStyle.NAV` 的 item 注册 `setOnKeyListener`：`ACTION_DOWN` + `KEYCODE_DPAD_RIGHT` + `bindingAdapterPosition == itemCount - 1` 时调 `onRightEdge()` 并吞掉事件。`setupRecyclerViews` 传入 `{ homeBtn.requestFocus() }`。
+
+反向在 `setupActions` 里给小房子注册 `setOnKeyListener`：`ACTION_DOWN` + `KEYCODE_DPAD_LEFT` → `focusNavItem(navAdapter.itemCount - 1)`（即「设置」）。`focusNavItem` 已有「holder 没挂上就先 `scrollToPosition` + 下一拍补抢」的逻辑，直接复用。
+
+`dispatchKeyEvent` 只接管海报行的 ←/→（`posterFocused` 为真时），顶栏 / 小房子上的方向键原样落到 View 层，不会被 Activity 吞掉。
+
+#### ④ 分类 Tab 常态底：方角 → 胶囊
+
+`ref_docs/shape_chip_round_normal.xml` 是 `corners radius=28dp`，焦点 / 选中态用的全局胶囊也是 28dp。旧代码常态用 4dp 小圆角，聚焦瞬间会「方角变胶囊」。`TAB_IDLE_RADIUS_DP` 4 → 28：`GradientDrawable` 会把半径夹到 `min(w,h)/2 = 13dp`（26dp 行高），于是三态同形，只是填充色不同。
+
+#### ⑤ 海报行：步进 136dp → 132dp
+
+原版卡宽来自 `ref_docs/xx0.java` 的 `I(Style)`：`(960 − 6×16 − 48) / 7 = 116dp`，加 16dp 间距 → **步进 132dp**；`1.png` 实测卡心 81.8 / 214.2 / 346.8 / 479.2 / 611.8 / 744.8 / 876.5dp，间距恒为 132dp。
+
+本项目海报卡固定 120dp（`HeroPosterCard`，历史页 / 搜索页共用，不能改），旧 `POSTER_GAP_DP = 16` 导致步进 136dp（`2.png` 实测卡心 83.5 / 219.8 / 355.5 / 491.8 / …）。改成 `POSTER_GAP_DP = 12`：
+
+```
+步进      = 120 + 12 = 132dp                     （= 原版 116 + 16）
+静止      = 24 + 7×120 + 6×12 = 936dp            → 第 8 张起点 948dp，960dp 屏宽露出 12dp 卡边
+居中      = 3×132 = 396dp = 480 − 24 − 60        → 焦点卡左沿 420dp，左侧正好 3 整卡贴住 24dp 内边距
+第 5 张   = 24 + 4×132 + 60 = 612dp              → 滚动量 612 − 480 = 132dp
+前 4 张   = 卡心 84 / 216 / 348 / 480dp          → dx ≤ 0，被 RecyclerView 夹成 0，不滚动
+```
+
+`CenterSmoothScroller` 与 `scrollPostersTo` 一行未改：首尾贴边、行首不滚本来就是「视口中心 − 目标中心」+ 系统夹取的自然结果，改步进后自动成立。
+
+#### 验证与回滚
+
+- 静态：两个 drawable 用 Python `minidom` 解析通过；`HomeViewActivity.kt` 大括号 / 圆括号 / 方括号配平（314/314、1063/1063、81/81）；`git diff --check` 无空白错误；上表四条几何断言（132 / 936 / 948+12 / 612）全部由脚本复算通过。
+- 待真机验证：演员头像焦点态红圈完整包住头像、头像不再露到圈外；顶栏下划线在「搜索」下方 45..47dp、宽约 22dp；「设置」按 → 回到小房子、小房子按 ← 回到「设置」；分类 Tab 常态是胶囊、聚焦不再跳形；海报行静止 7 整卡 + 右侧 12dp 卡边，第 5 张起才滚动、居中时两侧各 3 整卡。
+- 回滚：`git checkout -- app/src/main/java/com/fongmi/android/tv/ui/activity/HomeViewActivity.kt app/src/main/res/drawable/shape_hero_detail_cast_border_focused.xml app/src/main/res/drawable/shape_hero_detail_cast_border_normal.xml`。
+

@@ -1,16 +1,19 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-    头像焦点描边：2dp #FF0000。
-    inset 1dp 让 2dp 描边完整落在 60dp 圆内，和 Compose 的 2dp border 同视觉厚度。
+    头像焦点描边：2dp #FF0000，紧贴 60dp 头像框的外沿。
+
+    **不要套 <inset>**：`GradientDrawable` 自己会把形状矩形按「半个描边宽」内缩，
+    所以 60dp 的椭圆画 2dp 描边时，圆环正好落在 0..2dp（直径 56..60dp），外沿就是头像框边界。
+    之前 inset 1dp 把整圈又往里缩了 1dp（外径只剩 58dp），而焦点态头像框要放大 1.08 倍到 64.8dp、
+    头像本身也被 `clipToOutline` 裁成同样 64.8dp 的圆，于是头像从红圈外侧露出一圈，
+    看起来就是「头像溢出红圈」。去掉 inset 后，放大后的红圈外沿与头像外沿完全重合（都是 64.8dp）。
 -->
-<inset xmlns:android="http://schemas.android.com/apk/res/android"
-    android:inset="1dp">
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="oval">
 
-    <shape android:shape="oval">
-        <solid android:color="@android:color/transparent" />
-        <stroke
-            android:width="2dp"
-            android:color="@color/hero_accent" />
-    </shape>
+    <solid android:color="@android:color/transparent" />
+    <stroke
+        android:width="2dp"
+        android:color="@color/hero_accent" />
 
-</inset>
+</shape>
