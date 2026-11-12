@@ -1896,7 +1896,7 @@ private data class HeroDetailAction(
  * 点击时改用下标去 [HeroDetail.tmdbPersons] 取完整 `TmdbPerson` 交给人物页。
  * 旧 adb 入口仍是 picsum 占位数据。
  */
-private data class HeroCast(val id: String, val name: String, val avatarUrl: String)
+internal data class HeroCast(val id: String, val name: String, val avatarUrl: String)
 
 /**
  * 详情加载状态：四态互斥，UI 与播放按钮都按它分支。
