@@ -558,9 +558,25 @@ y：  32 + (44 − 32) × 1.1 = 45.2dp     → 基准 44..46dp  → 放大后 45
 
 `CenterSmoothScroller` 与 `scrollPostersTo` 一行未改：首尾贴边、行首不滚本来就是「视口中心 − 目标中心」+ 系统夹取的自然结果，改步进后自动成立。
 
+#### ⑥ CI 编译失败与修复（2026-11-12，第一次打包）
+
+GitHub Actions `:app:compileLeanbackArmeabi_v7aDebugKotlin` 报 6 条错误，全部指向两处新增的 `setOnKeyListener`：
+
+```
+HomeViewActivity.kt:517:34 Argument type mismatch: actual type is 'Function2<View!, Int, Boolean>',
+                                but 'Function3<View!, Int, KeyEvent!, Boolean>!' was expected
+HomeViewActivity.kt:518:23 Unresolved reference 'action'
+HomeViewActivity.kt:518:63 Unresolved reference 'keyCode'
+HomeViewActivity.kt:2238/2239/2240 同形（adapter 里那一处）
+```
+
+原因：`View.OnKeyListener.onKey(View v, int keyCode, KeyEvent event)` 是**三参数**。写成 `{ _, event -> }` 时 Kotlin 把第二个参数推断成 `Int keyCode`，`event` 就变成了 `Int`，于是 `.action` / `.keyCode` 全部解析失败。
+
+修复：两处都改成 `{ _, _, event -> }`（Kotlin 允许多个 `_` 占位），并在两处注释里写死「三参数」这条约束。资源侧无问题：同一份构建里 `mergeLeanbackArmeabi_v7aDebugResources` 已经通过（两个 drawable 都被资源合并正常处理）。
+
 #### 验证与回滚
 
-- 静态：两个 drawable 用 Python `minidom` 解析通过；`HomeViewActivity.kt` 大括号 / 圆括号 / 方括号配平（314/314、1063/1063、81/81）；`git diff --check` 无空白错误；上表四条几何断言（132 / 936 / 948+12 / 612）全部由脚本复算通过。
+- 静态：两个 drawable 用 Python `minidom` 解析通过；`HomeViewActivity.kt` 大括号 / 圆括号 / 方括号配平（314/314、1065/1065、81/81）；`git diff --check` 无空白错误；上表四条几何断言（132 / 936 / 948+12 / 612）全部由脚本复算通过。
 - 待真机验证：演员头像焦点态红圈完整包住头像、头像不再露到圈外；顶栏下划线在「搜索」下方 45..47dp、宽约 22dp；「设置」按 → 回到小房子、小房子按 ← 回到「设置」；分类 Tab 常态是胶囊、聚焦不再跳形；海报行静止 7 整卡 + 右侧 12dp 卡边，第 5 张起才滚动、居中时两侧各 3 整卡。
 - 回滚：`git checkout -- app/src/main/java/com/fongmi/android/tv/ui/activity/HomeViewActivity.kt app/src/main/res/drawable/shape_hero_detail_cast_border_focused.xml app/src/main/res/drawable/shape_hero_detail_cast_border_normal.xml`。
 

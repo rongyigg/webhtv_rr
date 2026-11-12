@@ -514,7 +514,8 @@ class HomeViewActivity : AppCompatActivity() {
         // 顶栏环形焦点：小房子再按 ← 回到顶栏最后一项「设置」。
         // 焦点链在 [wireFocusChain] 里只声明了「小房子 → 右 = navRecycler」，
         // 没有方向键监听时 ← 会被系统几何搜索吞掉（往右 / 往上找候选），所以这里显式接住。
-        homeBtn.setOnKeyListener { _, event ->
+        // 注意 `View.OnKeyListener.onKey(v, keyCode, event)` 是**三参数**，少写一个参数会被当成 keyCode。
+        homeBtn.setOnKeyListener { _, _, event ->
             if (event.action == KeyEvent.ACTION_DOWN && event.keyCode == KeyEvent.KEYCODE_DPAD_LEFT) {
                 focusNavItem(navAdapter.itemCount - 1)
                 true
@@ -2235,7 +2236,8 @@ private class HomeChipAdapter(
             if (style == HomeChipStyle.NAV) {
                 // 顶栏环形焦点：焦点在最后一项（设置）时再按 →，交回左侧「小房子」，
                 // 而不是交给系统几何搜索去乱跳。中间项照常向右移动。
-                holder.text.setOnKeyListener { _, event ->
+                // `View.OnKeyListener.onKey(v, keyCode, event)` 是**三参数**。
+                holder.text.setOnKeyListener { _, _, event ->
                     if (event.action == KeyEvent.ACTION_DOWN &&
                         event.keyCode == KeyEvent.KEYCODE_DPAD_RIGHT &&
                         holder.bindingAdapterPosition == itemCount - 1
