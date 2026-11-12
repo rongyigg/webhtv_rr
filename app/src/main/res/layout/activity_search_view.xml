@@ -16,7 +16,7 @@
        │   └─ 右列（weight 1，NestedScrollView）：历史 + 热搜 / 建议
        └─ resultSection（marginTop 12dp，GONE）
            ├─ 站点 Tab 行 38dp（26dp 胶囊 + 2dp paddingBottom + 10dp marginBottom）
-           └─ 海报区 215dp（120×180dp 海报 + 13sp 剧名，卡间距 16dp）
+           └─ 海报区 215dp（120×180dp 海报 + 13sp 剧名，卡间距 12dp）
 
     尺寸核对（截图实测）：
     - 根左 24dp → 输入框红边 x=144..454px（24+36+12 = 72dp = 144px）✓
@@ -260,12 +260,13 @@
 
         </androidx.appcompat.widget.LinearLayoutCompat>
 
-        <!-- 下半区：站点 Tab + 海报行（4 + 38 + 223 = 265dp，正好是 540 - 24 - 251） -->
+        <!-- 下半区：站点 Tab + 海报行（12 + 38 + 215 = 265dp，正好是 540 - 24 - 251）。
+             12dp 与 38dp 里的 2 + 10dp 相等：键盘 → Tab、Tab → 卡片的上下间距都是 12dp。 -->
         <androidx.appcompat.widget.LinearLayoutCompat
             android:id="@+id/resultSection"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="4dp"
+            android:layout_marginTop="12dp"
             android:clipChildren="false"
             android:orientation="vertical"
             android:visibility="gone">
@@ -283,13 +284,13 @@
                 android:overScrollMode="never"
                 android:paddingBottom="2dp" />
 
-            <!-- 海报区：223dp。卡片约 207dp（180 海报 + 8 剧名间距 + 19 剧名），
-                 RecyclerView paddingTop 8dp 后占 8..215；聚焦放大 1.08 后是 -0.2..223.2 ——
-                 顶边正好落在容器顶（与 tab 行保持 10dp），底边正好落在容器底，剧名不会再被顶出屏幕。
-                 215dp 容器放不下：卡底 215 已经贴着屏幕底边，放大后剧名会被切掉一截。 -->
+            <!-- 海报区：215dp（原版 FrameLayout 高度）。卡片约 207dp（180 海报 + 8 剧名间距 + 19 剧名），
+                 顶部不加上内边距 —— 卡片顶边正好落在 215dp 容器的顶边，与 Tab 行保持 12dp。
+                 聚焦放大 1.08 后卡顶向上溢出约 8dp 画进那段 12dp 间隙，卡底只多出 0.3dp，
+                 剧名完整可见（之前给 RecyclerView 加 8dp 上内边距把卡整体下推，卡底顶到屏幕底，剧名被切）。 -->
             <FrameLayout
                 android:layout_width="match_parent"
-                android:layout_height="223dp"
+                android:layout_height="215dp"
                 android:clipChildren="false"
                 android:clipToPadding="false"
                 android:descendantFocusability="afterDescendants">
@@ -300,10 +301,9 @@
                     android:layout_height="match_parent"
                     android:clipChildren="false"
                     android:clipToPadding="false"
-                    android:overScrollMode="never"
-                    android:paddingTop="8dp" />
+                    android:overScrollMode="never" />
 
-                <!-- 加载 / 空态提示：画在 223dp 容器内部，不改尺寸，也不参与焦点 -->
+                <!-- 加载 / 空态提示：画在 215dp 容器内部，不改尺寸，也不参与焦点 -->
                 <androidx.appcompat.widget.AppCompatTextView
                     android:id="@+id/posterEmpty"
                     android:layout_width="wrap_content"

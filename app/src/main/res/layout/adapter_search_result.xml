@@ -2,8 +2,8 @@
 <!--
     搜索页结果卡（原版 `adapter_vod_rect.xml` + `vs3(Style.rect())` 的 rect 卡，尺寸全部来自逆向数据）。
 
-    - 海报 120×180dp（`adapter_vod_rect.xml` L24-25）：7 张卡 + 6 × 16dp 间距 = 936dp，
-      比可视宽度 912dp 多 24dp，第 7 张正好在屏幕右缘被裁 —— 与截图完全一致；
+    - 海报 120×180dp（`adapter_vod_rect.xml` L24-25）：7 张卡 + 6 × 12dp 间距 = 912dp，
+      正好铺满 912dp 内容区，最左 / 最右卡到屏幕边缘都是 24dp（与原版截图一致）；
     - 剧名 13sp / `white_80` / 居中单行 / marginTop 8dp（同文件 L46-57）；
     - 焦点红框只包海报：`selector_vod` 挂在 `imageWrapper` 上，`duplicateParentState`
       把根节点的 focused 状态透传下来；剧名在框外，所以不会再「框住卡片和字」；
