@@ -126,6 +126,13 @@ public class TmdbMatchViewDialog {
     private int suggestSeq;
     private boolean searching;
     /**
+     * 联想词行里最后一次拿到焦点的下标。
+     *
+     * <p>结果卡片按 ↑ 时要回到「刚才停留的那一枚」联想词，而不是永远跳第一枚；
+     * 联想词行没出过焦点时默认 0（第一枚）。
+     */
+    private int lastSuggestionIndex = 0;
+    /**
      * 长按下键呼出弹窗时的"连发封锁"。弹窗出现的瞬间手指还按在遥控器上，InputDispatcher 会把
      * 那次长按遗留的 ACTION_DOWN(repeatCount &gt; 0) 继续投给这个新窗口，方向键会在胶囊 /
      * 结果卡 / 键盘之间乱跳，甚至把焦点顶回底层首页。默认锁死，只认抬手。
@@ -501,9 +508,33 @@ public class TmdbMatchViewDialog {
         suggestionAdapter = new SuggestionAdapter();
         suggestionView.setLayoutManager(new LinearLayoutManager(activity, RecyclerView.HORIZONTAL, false));
         suggestionView.setItemAnimator(null);
+        // 焦点必须落在胶囊自己身上：默认 FOCUS_BEFORE_DESCENDANTS 会把焦点给 RecyclerView 容器，
+        // 容器没有焦点态，用户看到的就是「按上来了，但一行联想词没有任何高亮」。
+        suggestionView.setDescendantFocusability(ViewGroup.FOCUS_AFTER_DESCENDANTS);
         suggestionView.setAdapter(suggestionAdapter);
         String name = vod == null ? "" : vod.getName();
         buildSuggestions(TextUtils.isEmpty(initialKeyword) ? name : initialKeyword);
+    }
+
+    /**
+     * 把焦点交给第 {@code index} 枚联想词胶囊（越界自动夹回）。
+     *
+     * <p>先 {@code scrollToPosition} 再下一拍取 holder：目标可能还没布局出来，
+     * 直接 {@code findViewHolderForAdapterPosition} 会拿到 null，焦点就会停在原处，
+     * 表现为「按了 → 但什么都没发生」。联想词行没内容 / 被隐藏时退回键盘（改前的行为）。
+     */
+    private void focusSuggestion(int index) {
+        if (suggestionView == null || suggestions.isEmpty() || suggestionView.getVisibility() != View.VISIBLE) {
+            focusKeyboard();
+            return;
+        }
+        int target = Math.max(0, Math.min(index, suggestions.size() - 1));
+        suggestionView.scrollToPosition(target);
+        suggestionView.post(() -> {
+            RecyclerView.ViewHolder holder = suggestionView.findViewHolderForAdapterPosition(target);
+            if (holder != null) holder.itemView.requestFocus();
+            else suggestionView.requestFocus();
+        });
     }
 
     // ------------------------------------------------------------------ 虚拟键盘
@@ -824,6 +855,30 @@ public class TmdbMatchViewDialog {
                 keyword.setSelection(value.length());
                 search();
             });
+            // 记住停留位置：结果卡片按 ↑ 要回到这一枚，而不是永远跳第一枚。
+            holder.text.setOnFocusChangeListener((view, hasFocus) -> {
+                if (!hasFocus) return;
+                int current = holder.getBindingAdapterPosition();
+                if (current != RecyclerView.NO_POSITION) lastSuggestionIndex = current;
+            });
+            // 联想词行是弹窗最上面一行，左右必须环形：最右 → 回到最左、最左 ← 回到最右，
+            // 否则系统几何搜索会把这个方向交给输入框 / 放大镜 / 结果卡，看起来像「按了没反应」。
+            // ↑ 无处可去，就地吃掉，绝不让焦点冒到弹窗外。
+            holder.text.setOnKeyListener((view, keyCode, event) -> {
+                if (event == null || event.getAction() != KeyEvent.ACTION_DOWN) return false;
+                int current = holder.getBindingAdapterPosition();
+                if (current == RecyclerView.NO_POSITION) return false;
+                int count = suggestions.size();
+                if (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT && current == count - 1) {
+                    focusSuggestion(0);
+                    return true;
+                }
+                if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT && current == 0) {
+                    focusSuggestion(count - 1);
+                    return true;
+                }
+                return keyCode == KeyEvent.KEYCODE_DPAD_UP;
+            });
         }
 
         @Override
@@ -856,6 +911,15 @@ public class TmdbMatchViewDialog {
             holder.title.setText(item.getTitle());
             holder.meta.setText(item.getSubtitle());
             ImgUtil.load(item.getTitle(), item.getPosterUrl(), holder.image);
+            // ↑：回到顶部联想词行（原版 g0() 把卡片的 ↑ 指向键盘；这里按用户要求改成联想词）。
+            // 联想词行没内容 / 隐藏时 [focusSuggestion] 会退回键盘，行为与改前一致。
+            // 其余方向保持原样：← 走 g0() 的 nextFocusLeftId（放大镜），→ / ↓ 交给焦点搜索。
+            holder.itemView.setOnKeyListener((view, keyCode, event) -> {
+                if (event == null || event.getAction() != KeyEvent.ACTION_DOWN) return false;
+                if (keyCode != KeyEvent.KEYCODE_DPAD_UP) return false;
+                focusSuggestion(lastSuggestionIndex);
+                return true;
+            });
         }
 
         @Override

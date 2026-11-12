@@ -2,11 +2,13 @@ package com.fongmi.android.tv.ui.activity
 
 import android.app.Activity
 import android.content.Context
+import android.content.res.ColorStateList
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
+import android.graphics.drawable.StateListDrawable
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -505,6 +507,8 @@ class HomeViewActivity : AppCompatActivity() {
             style = HomeChipStyle.TAB,
             onFocused = ::onTabFocused,
             onSelected = ::selectTab,
+            // 选中位变化要同步刷到已附着的 Tab 上（不发 notify，避免异步重绑留下选中红框残影）。
+            host = typeRecycler,
         )
         tabAdapter.selectedIndex = 0
         typeRecycler.adapter = tabAdapter
@@ -2086,7 +2090,7 @@ class HomeViewActivity : AppCompatActivity() {
     private fun onTabFocused(index: Int) {
         // 【崩溃防线】焦点变化回调可能发生在 Tab 行**自己的布局过程中**（长按 → 被几何搜索
         // 抢到 Tab 栏，或 `focusTab()` 在 post 里抢焦点时撞上 layout）。此刻
-        // `notifyItemChanged` / `startSmoothScroll` 会抛
+        // `startSmoothScroll`（[scrollTabToCenter]）会抛
         // `IllegalStateException: Cannot call this method while RecyclerView is computing
         // a layout or scrolling` —— 这正是「极小几率、难复现」的那个崩溃。
         // 布局中一律推迟到下一拍：选中态与请求都不会丢，只是晚一帧。
@@ -2356,6 +2360,11 @@ private class HomeChipAdapter(
     private val style: HomeChipStyle,
     private val onFocused: (Int) -> Unit,
     private val onSelected: (Int) -> Unit,
+    /**
+     * 宿主 RecyclerView：`selectedIndex` 一变就要**同步**把 `isSelected` 刷到已附着的子项上。
+     * 顶栏（NAV）用不到，默认 null。
+     */
+    private val host: RecyclerView? = null,
     /** 顶栏最后一项再按 → 的回调：把焦点交回左侧「小房子」，与「小房子 ←」一起构成环形焦点。 */
     private val onRightEdge: () -> Unit = {},
 ) : RecyclerView.Adapter<HomeChipAdapter.Holder>() {
@@ -2371,15 +2380,45 @@ private class HomeChipAdapter(
     private val tabIdleSurface = ContextCompat.getColor(context, R.color.home_tab_idle_surface)
     private val tabIdleText = ContextCompat.getColor(context, R.color.home_tab_idle_text)
 
-    /** 选中下标：Tab 用它画「失焦仍选中」的红色描边；-1 = 未选中。 */
+    /**
+     * 分类 Tab 文字色（状态驱动）：聚焦 / 选中 → 纯白，其余 → 60% 白。
+     * 与 [tabBackground] 一起交给状态机，代码里不再按事件顺序改色。
+     */
+    private val tabTextColors: ColorStateList = ColorStateList(
+        arrayOf(
+            intArrayOf(android.R.attr.state_focused),
+            intArrayOf(android.R.attr.state_selected),
+            intArrayOf(),
+        ),
+        intArrayOf(Color.WHITE, Color.WHITE, tabIdleText),
+    )
+
+    /**
+     * 选中下标：Tab 用它画「失焦仍选中」的红色描边；-1 = 未选中。
+     *
+     * 【残影根因 · 2026-11-12】旧实现用 `notifyItemChanged(old/value)` 换背景：那是**异步**的，
+     * 焦点 A→B 时 A 已经失焦、`selectedIndex` 还是 A，于是 A 先按「选中未聚焦」画成细线红框，
+     * 等下一次 layout 重绑才变回常态底 —— 屏幕上就是「实心胶囊已经到 B，A 还留着一个红框」。
+     * 现在改成两件事：① 背景 / 文字色由 [tabBackground] 的 `StateListDrawable` 按 View 真实
+     * 状态位取值（每帧都正确，不可能过期）；② 这里**同步**刷 `isSelected`，不发任何 notify，
+     * 也就不会再撞上 Tab 行自己的 layout（那个 `IllegalStateException` 的另一个来源）。
+     */
     var selectedIndex: Int = -1
         set(value) {
             if (field == value) return
-            val old = field
             field = value
-            if (old >= 0) notifyItemChanged(old)
-            if (value >= 0) notifyItemChanged(value)
+            syncSelection()
         }
+
+    /** 把 `isSelected` 立刻同步到已附着的子项；未附着的项由 [onBindViewHolder] 按当前下标补上。 */
+    private fun syncSelection() {
+        val recycler = host ?: return
+        for (index in 0 until recycler.childCount) {
+            val child = recycler.getChildAt(index)
+            val position = recycler.getChildAdapterPosition(child)
+            if (position != RecyclerView.NO_POSITION) child.isSelected = position == selectedIndex
+        }
+    }
 
     fun submit(next: List<String>) {
         if (next == items) return
@@ -2493,8 +2532,8 @@ private class HomeChipAdapter(
     /**
      * 分类 Tab：逐项照抄 `ref_docs/adapter_type.xml` —— 13sp、`layout_height="26dp"`、宽 wrap_content。
      *
-     * 三态底色（原版 `selector_item_round.xml` 的 focused / selected / normal）在 Kotlin 侧由
-     * [tabBackground] 生成，见该方法与 `colors.xml` 的 `home_tab_*`；这里只做首帧的常态底。
+     * 三态底色（原版 `ref_docs/selector_item_round.xml` 的 focused / selected / normal）在 Kotlin 侧由
+     * [tabBackground] 生成的状态机负责，见该方法与 `colors.xml` 的 `home_tab_*`。
      *
      * 左右留白：`setBackground` 会把 drawable 自带的 padding 写进 View，但这里用的
      * `GradientDrawable` 没有自带 padding，所以水平留白恒为实测的 12dp。
@@ -2506,8 +2545,9 @@ private class HomeChipAdapter(
                 dp(TAB_ITEM_HEIGHT_DP),
             )
             setTextSize(TypedValue.COMPLEX_UNIT_SP, TAB_TEXT_SP)
-            setTextColor(tabIdleText)
-            background = tabBackground(focused = false, selected = false)
+            // 文字色与三态底色都交给状态机：焦点 / 选中怎么变，都由 View 当时的真实状态位取值。
+            setTextColor(tabTextColors)
+            background = tabBackground()
             setPadding(dp(TAB_ITEM_PADDING_H_DP), 0, dp(TAB_ITEM_PADDING_H_DP), 0)
         }
         return Holder(root = text, text = text, underline = null)
@@ -2528,6 +2568,8 @@ private class HomeChipAdapter(
 
     override fun onBindViewHolder(holder: Holder, position: Int) {
         holder.text.text = items[position]
+        // 复用 / 新绑定时补上选中位（`syncSelection` 只覆盖已附着的子项）。
+        if (style == HomeChipStyle.TAB) holder.text.isSelected = position == selectedIndex
         applyVisual(holder, holder.text.isFocused, position)
     }
 
@@ -2535,8 +2577,9 @@ private class HomeChipAdapter(
      * 焦点视觉（照抄 Compose 版 `HeroTopBarItem`，L1730-1816）：
      * - 顶栏：常态白 60% + Medium；焦点纯白 + SemiBold（系统 `sans-serif` BOLD）+ 下方红色短横线。
      *   缩放在焦点监听里做，只作用于绘制层，下划线不会跳动。
-     * - 分类 Tab：严格三态 —— 聚焦 = 全局实心焦点胶囊（红渐变 + 28dp 全圆角）；
-     *   选中未聚焦 = 同形状全局细线红框胶囊；其余 = 深色半透明底。三态都由 [tabBackground] 生成。
+     * - 分类 Tab：**不在这里画**。三态（聚焦 = 实心红渐变胶囊 / 选中未聚焦 = 细线红框胶囊 /
+     *   其余 = 深色半透明胶囊）由 [tabBackground] 的 `StateListDrawable` + [tabTextColors] 的
+     *   `ColorStateList` 按状态位自动取值，见 [selectedIndex] 上的残影说明。
      */
     private fun applyVisual(holder: Holder, focused: Boolean, position: Int) {
         val text = holder.text
@@ -2547,38 +2590,38 @@ private class HomeChipAdapter(
                 // 横线始终占位（2dp，紧贴文字区下沿），这里只切透明度：文字宽度变化不会顶动它。
                 holder.underline?.alpha = if (focused) 1f else 0f
             }
-            HomeChipStyle.TAB -> {
-                // position 可能是 NO_POSITION(-1)，必须排除，否则会把 -1 当成「已选中」。
-                val selected = position >= 0 && position == selectedIndex
-                // 三态严格判断，顺序不能换：
-                //   1. hasFocus            → bg_global_focus_capsule（红渐变实心胶囊），白字
-                //   2. 未聚焦 && 已选中     → bg_global_selected_capsule_border（同圆角细线红框），白字
-                //   3. 其余                → 深色半透明胶囊底，暗白字
-                text.isSelected = selected
-                text.background = tabBackground(focused, selected)
-                text.setTextColor(if (focused || selected) Color.WHITE else tabIdleText)
-            }
+            HomeChipStyle.TAB -> Unit
         }
     }
 
     /**
-     * 分类 Tab 背景 —— 三态唯一的生成入口，焦点 / 选中态全部复用全局 Drawable，代码里不写色值：
-     * - [focused]：`@drawable/bg_global_focus_capsule`（换源弹窗站点标签同款红渐变胶囊，28dp 全圆角）；
-     * - 选中未聚焦：`@drawable/bg_global_selected_capsule_border`（同形状透明底 + 细线红框）；
-     * - 其余：`home_tab_idle_surface` 深色半透明**胶囊**（与焦点 / 选中态同 28dp 全圆角，
+     * 分类 Tab 背景 —— 三态唯一的生成入口（与原版 `selector_item_round.xml` 同构），
+     * 焦点 / 选中态全部复用全局 Drawable，代码里不写色值：
+     * - `state_focused`：`@drawable/bg_global_focus_capsule`（红渐变实心胶囊，28dp 全圆角）；
+     * - `state_selected`：`@drawable/bg_global_selected_capsule_border`（同形状透明底 + 细线红框）；
+     * - 其余：`home_tab_idle_surface` 深色半透明**胶囊**（同 28dp 全圆角，
      *   照抄 `ref_docs/shape_chip_round_normal.xml` 的 `corners radius=28dp`）。
+     *
+     * 用 `StateListDrawable` 而不是在焦点回调里 `setBackground`：焦点与选中是两个独立状态位，
+     * 代码里分两处按事件顺序重画，一旦「先失焦、后改 selectedIndex」就会留下一帧
+     * 「实心胶囊已在 B、A 还是选中红框」的残影；交给状态机后每帧按真实状态取值。
      */
-    private fun tabBackground(focused: Boolean, selected: Boolean): Drawable {
-        val global = when {
-            focused -> R.drawable.bg_global_focus_capsule
-            selected -> R.drawable.bg_global_selected_capsule_border
-            else -> 0
+    private fun tabBackground(): Drawable {
+        val states = StateListDrawable()
+        ContextCompat.getDrawable(context, R.drawable.bg_global_focus_capsule)?.let {
+            states.addState(intArrayOf(android.R.attr.state_focused), it)
         }
-        if (global != 0) ContextCompat.getDrawable(context, global)?.let { return it }
-        return GradientDrawable().apply {
-            cornerRadius = dp(TAB_IDLE_RADIUS_DP).toFloat()
-            setColor(tabIdleSurface)
+        ContextCompat.getDrawable(context, R.drawable.bg_global_selected_capsule_border)?.let {
+            states.addState(intArrayOf(android.R.attr.state_selected), it)
         }
+        states.addState(intArrayOf(), idleCapsule())
+        return states
+    }
+
+    /** 未选中常态底：深色半透明胶囊（与焦点 / 选中态同 28dp 全圆角，切换时不跳形）。 */
+    private fun idleCapsule(): Drawable = GradientDrawable().apply {
+        cornerRadius = dp(TAB_IDLE_RADIUS_DP).toFloat()
+        setColor(tabIdleSurface)
     }
 
     private fun dp(value: Int): Int = (value * density).roundToInt()

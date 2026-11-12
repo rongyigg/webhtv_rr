@@ -637,4 +637,48 @@ appendPage(list, site, pageCount) // T1 的追加分支：空页 / 全重复 →
 - 待真机验证：海报行任意位置长按 → / ← 都只在行内逐张移动，行尾停住且不再跳 Tab 栏、不再崩；分类 Tab / 目录下探滚到最后两张时自动追加下一页（焦点卡不缩小、Hero 不闪），行尾按 → 也能触发；推荐 Tab 行为与以前一致；小房子未聚焦时完全无边框、聚焦仍是红渐变圆；演员头像焦点圈与首页 Tab 选中态同色。
 - 回滚：`git checkout -- app/src/main/java/com/fongmi/android/tv/ui/activity/HomeViewActivity.kt app/src/main/java/com/fongmi/android/tv/ui/hero/HeroPosterAdapter.kt app/src/main/res/drawable/shape_home_logo_normal.xml app/src/main/res/drawable/selector_home_logo.xml app/src/main/res/drawable/shape_hero_detail_cast_border_focused.xml app/src/main/res/drawable/selector_hero_detail_cast_border.xml`。
 
+### 10.15 首页 Tab 焦点残影 + TMDB 匹配弹窗联想词环形焦点（2026-11-12，未编译）
+
+用户报 2 个问题：① 首页分类 Tab 焦点从 A 移到 B 时，A 会遗留一个红框，实心胶囊到 B 后红框才消失，像残影；②「换源弹窗」里联想词按到最右不会回到最左，结果卡片按 ↑ 不会回到联想词。
+
+#### ① 残影根因：焦点态同步改，选中态异步改
+
+`HomeChipAdapter` 旧实现把同一个 Tab 的三态分两处画：
+
+- 焦点回调 `setOnFocusChangeListener` → `applyVisual()` → `setBackground()` / `setTextColor()`：**同步**，本帧生效；
+- 选中位 `selectedIndex` setter → `notifyItemChanged(old)` + `notifyItemChanged(value)`：**推迟到下一趟 layout**。
+
+焦点 A→B 的顺序是「A 失焦（此刻 `selectedIndex` 还是 A）→ B 得焦 → `selectedIndex` 改成 B（只发 notify）」。A 在 notify 真正落地前一直按「选中未聚焦」画 `bg_global_selected_capsule_border` 细线红框，而 B 的实心胶囊已经同步画好 —— 屏幕上就是「实心胶囊在 B、A 还挂着红框」。`DefaultItemAnimator` 的换绑淡入还会把这个中间态多留一两帧。
+
+#### ① 改法：Tab 三态交给 View 状态机，选中位同步刷 `isSelected`
+
+与原版 `ref_docs/selector_item_round.xml`（focused / selected / normal 三段）同构：
+
+- 新增 `tabBackground(): Drawable` → `StateListDrawable`：`state_focused` → `@drawable/bg_global_focus_capsule`（红渐变实心胶囊）；`state_selected` → `@drawable/bg_global_selected_capsule_border`（同形状细线红框）；默认 → `idleCapsule()`（`home_tab_idle_surface` + 28dp 圆角，仍是胶囊）。
+- 新增 `tabTextColors: ColorStateList`：focused / selected → 纯白，默认 → `home_tab_idle_text`（60% 白）。
+- `createTabHolder` 里 `setTextColor(tabTextColors)` + `background = tabBackground()`，**一次装好，此后不再改背景**；`applyVisual` 的 `HomeChipStyle.TAB` 分支改成 `Unit`（Tab 不再按事件顺序重画）。
+- `selectedIndex` setter 改成同步：新增 `syncSelection()` 遍历宿主 RecyclerView 已附着的子项，把 `isSelected` 立刻刷成 `position == selectedIndex`，**不再发任何 notify**。适配器新增构造参数 `host: RecyclerView?`（`setupRecyclerViews` 传 `typeRecycler`，顶栏 NAV 不传）。
+- `onBindViewHolder` 补 `holder.text.isSelected = position == selectedIndex`，覆盖「新绑定 / 回收复用」的子项。
+
+结果：焦点、选中是两个独立状态位，每帧都按 View 当时的真实状态取值，不可能出现「实心胶囊已到 B、A 还是红框」的中间态；顺带也去掉了 `notifyItemChanged` 这个「Tab 行布局中调用即崩」的来源（`onTabFocused` 顶部的 `isComputingLayout` 推迟仍然保留，因为 `scrollTabToCenter` → `startSmoothScroll` 依旧不能在布局中调用）。
+
+#### ② 用户说的「换源弹窗」= TMDB 手动匹配弹窗
+
+代码里只有 `TmdbMatchViewDialog`（首页卡片长按下键打开）同时具备「顶部联想词行 `@id/suggestion`」与「右侧结果卡片 `@id/candidate`」；`ChangeSourceDialog`（长按确定键）用的是 `dialog_source.xml`，其 `keywordRow` 从未被 bind（恒 `gone`），没有任何联想词。所以本轮只改 `TmdbMatchViewDialog`。
+
+#### ② 联想词环形 + 卡片 ↑ 回联想词
+
+- `setupSuggestions()`：`suggestionView.setDescendantFocusability(ViewGroup.FOCUS_AFTER_DESCENDANTS)`。默认 `FOCUS_BEFORE_DESCENDANTS` 会把焦点给 RecyclerView 容器本身，容器没有焦点态，看起来就是「按上来了但没有任何高亮」。
+- `SuggestionAdapter.onBindViewHolder`：
+  - 焦点变化时记录 `lastSuggestionIndex`（结果卡片 ↑ 要回到「刚才那一枚」，不是永远第一枚）；
+  - `setOnKeyListener`：最右一枚按 → → `focusSuggestion(0)`；第 0 枚按 ← → `focusSuggestion(count - 1)`；↑ 就地吃掉（联想词行是弹窗最上一行，不能再往外冒）。
+- 新增 `focusSuggestion(int index)`：越界夹回 → `scrollToPosition(target)` → 下一拍取 holder 再 `requestFocus()`（目标还没布局出来时 `findViewHolderForAdapterPosition` 是 null，直接抢会表现为「按了没反应」）。联想词为空 / 行被隐藏时退回 `focusKeyboard()`。
+- `CandidateAdapter.onBindViewHolder`：卡片 `setOnKeyListener` 把 ↑ 改成 `focusSuggestion(lastSuggestionIndex)`（原版 `g0()` 把卡片的 ↑ 指向键盘）。← / → / ↓ 保持原样：← 仍是 `nextFocusLeftId = @id/searchBtn`（`onChildViewAttachedToWindow` 里设的）。
+
+#### 验证与回滚
+
+- 静态：`HomeViewActivity.kt` 括号配平（331/331、1154/1154、90/90），`TmdbMatchViewDialog.java`（169/169、670/670、10/10）；剥离注释与字符串后无跨行不配平；`git diff --check` 无空白错误；两个全局 Drawable 与 `home_tab_*` 颜色引用均在。
+- 待真机验证：Tab 焦点 A→B 时 A 立刻回到深色胶囊、不再残留红框；失焦的选中 Tab 仍是细线红框；焦点回到同一个 Tab 时实心胶囊立刻恢复。TMDB 弹窗里联想词最右按 → 回到最左、最左按 ← 回到最右、↑ 不冒到弹窗外；结果卡片按 ↑ 回到刚才停留的那一枚联想词，联想词为空时 ↑ 仍回键盘。
+- 回滚：`git checkout -- app/src/main/java/com/fongmi/android/tv/ui/activity/HomeViewActivity.kt app/src/main/java/com/fongmi/android/tv/ui/dialog/TmdbMatchViewDialog.java`。
+
 
