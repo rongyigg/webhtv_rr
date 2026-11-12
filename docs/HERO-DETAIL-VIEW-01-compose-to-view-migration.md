@@ -446,3 +446,58 @@ CI（`da07193c0`）编译 `:app:compileLeanbackArmeabi_v7aDebugKotlin` 报 2 个
 
 **未做**：未跑本地编译（本机无 Gradle 环境），由用户/CI 验证。
 
+### 10.12 演员行末位被切 + 选集翻页崩溃（2026-11-12）
+
+用户反馈两处：① 详情页演员行 11 个头像，最后一个被屏幕右缘切掉；② 选集弹窗里只有线路 1 能左右翻页，线路 2 / 3 一翻页就崩溃（CustomActivityOnCrash 的瓢虫页）。
+
+#### ① 演员行：76dp → 72dp
+
+真机 `wm size = 1920x1080`、`wm density = 320` → 屏宽 960dp，内容区左右各 24dp，可用宽度 **912dp**。
+
+旧版每项 76dp + 项间距 12dp（`HeroHorizontalGapDecoration`，末项不加间距）：
+
+```
+11 × 76 + 10 × 12 = 956dp  >  912dp     →  溢出 44dp，最后一位被切
+11 × 72 + 10 × 12 = 912dp  =  912dp     →  正好铺满
+```
+
+改动：
+
+- `values/styles_hero_detail.xml`：`Widget.HeroDetail.CastItem` 宽度 76dp → 72dp（注释写明算式）；
+- `layout/item_hero_detail_cast.xml`：根布局 76dp → 72dp；
+- `layout/activity_hero_detail_view.xml`：`castList` 去掉 `paddingEnd="24dp"`。外层 `detailContent` 已有 24dp 右内边距，这条 padding 在「内容正好 912dp」时只会多出 24dp 可滚动量，聚焦末位时整行可能被推走。
+- `HeroDetailCastAdapter` 的 KDoc 同步。
+
+头像 60dp、名字 12sp、间距 12dp、焦点 1.08 放大全部不变（放大后 64.8dp 仍在 72dp 项内，左右各溢出 2.4dp 进间距，不会重叠）。
+
+#### ② 选集翻页崩溃：`isListBusy()` 闸门
+
+**真机堆栈**（`adb logcat -b crash`，14:13:21 / 14:14:14 两次复现完全一致）：
+
+```
+java.lang.IllegalStateException: Cannot call this method while RecyclerView is computing a layout or scrolling
+  androidx.recyclerview.widget.RecyclerView{... #7f0b0282 app:id/episodeRecycler}, layout:GridLayoutManager
+  at RecyclerView.assertNotInLayoutOrScroll
+  at EpisodeAdapter.submit → notifyDataSetChanged
+  at EpisodeViewDialog.refresh
+  at EpisodeViewDialog.selectFlag
+  at EpisodeViewDialog$ChipAdapter.onFocusChange  (线路 chip)
+  at ViewGroup.removeViewInternal → rootViewRequestFocus
+  at LinearLayoutManager.detachAndScrapAttachedViews → GridLayoutManager.onLayoutChildren
+  at RecyclerView.onMeasure ← 网格正在测量/布局
+```
+
+链条：翻页 → `episodeAdapter.submit()` → `notifyDataSetChanged()` → 下一帧网格重新布局 → `detachAndScrapAttachedViews` 移除持焦卡片 → `ViewGroup.removeViewInternal` 调 `rootViewRequestFocus()` 重新找焦点 → 此刻网格还没有子 View，焦点落到**第一个可聚焦 View = 线路 chip 0** → `onFocusChange` → `selectFlag(0)` → `refresh()` → 在正在布局的 RecyclerView 上 `notifyDataSetChanged()` → 崩。
+
+**为什么只有线路 1 正常**：系统塞过来的焦点永远是 chip 0；`selectedFlag == 0` 时被 `onChipFocus` 里的 `index != selectedFlag` 挡掉，只有线路 2 / 3 才会真的走进 `selectFlag`。
+
+修复（`EpisodeViewDialog.kt`）：新增 `isListBusy()`（三个 RecyclerView 的 `isComputingLayout` 取或），在 `selectFlag()` 与 `selectPage()` 入口**忽略**布局过程中的焦点事件。焦点随后由已有的 `requestCellFocus()` 重试循环还给网格（`notifyDataSetChanged` 会让 `findViewHolderForAdapterPosition` 返回 null，重试才会持续到布局结束，这正是必须保留全量刷新的原因，已在 `EpisodeAdapter.submit` 的 KDoc 里写死）。
+
+这里**刻意不推迟一帧**（与 `HeroSearchActivity.render()` 的写法相反）：推迟会把系统塞给 chip 0 的焦点当成用户选择，静默把线路切回第 1 条。
+
+#### 验证与回滚
+
+- 静态：三个 XML 用 `minidom` 解析通过；三个 Kotlin 文件大括号/圆括号配平（110/110、11/11、16/16）；`72×11 + 12×10 = 912 = 960 − 48` 与布局里 `detailContent` 的 24dp 内边距吻合；`git diff --check` 无空白错误。
+- 待真机验证：演员行 11 位全部完整显示（末位右边距 24dp）；线路 2 / 3 在网格左右边缘反复翻页不崩、且线路不会被悄悄切回线路 1；线路 1 行为不变。
+- 回滚：`git checkout -- app/src/main/res/values/styles_hero_detail.xml app/src/main/res/layout/item_hero_detail_cast.xml app/src/main/res/layout/activity_hero_detail_view.xml app/src/main/java/com/fongmi/android/tv/ui/hero/EpisodeViewDialog.kt app/src/main/java/com/fongmi/android/tv/ui/hero/EpisodeAdapter.kt app/src/main/java/com/fongmi/android/tv/ui/hero/HeroDetailCastAdapter.kt`。
+

@@ -4,7 +4,7 @@
 
     服务 activity_hero_detail_view.xml 与 item_hero_detail_cast.xml，尺寸全部照抄 Compose 版：
     - 按钮：36dp 高 / 13sp 加粗 / 左右 16dp / 图标文字间距 4dp / 4dp 圆角
-    - 演员项：76dp 宽 / 头像 60dp / 名字 12sp / 项间距由 HeroHorizontalGapDecoration 提供 12dp
+    - 演员项：72dp 宽 / 头像 60dp / 名字 12sp / 项间距由 HeroHorizontalGapDecoration 提供 12dp
 -->
 <resources>
 
@@ -30,9 +30,15 @@
         <item name="android:clickable">true</item>
     </style>
 
-    <!-- 演员项：固定 76dp 宽，头像和名字纵向居中。 -->
+    <!--
+        演员项：固定 72dp 宽，头像和名字纵向居中。
+
+        72dp 不是随手改的：内容区左右各 24dp（1920×1080 / 320dpi = 960dp 屏宽），
+        可用宽度 = 960 − 48 = 912dp；一行 11 位演员正好铺满 11 × 72 + 10 × 12 = 912dp，
+        最后一位不会再被屏幕右缘切掉。改成 76dp 就会溢出 44dp（原来的问题）。
+    -->
     <style name="Widget.HeroDetail.CastItem">
-        <item name="android:layout_width">76dp</item>
+        <item name="android:layout_width">72dp</item>
         <item name="android:layout_height">wrap_content</item>
         <item name="android:orientation">vertical</item>
         <item name="android:gravity">center_horizontal</item>

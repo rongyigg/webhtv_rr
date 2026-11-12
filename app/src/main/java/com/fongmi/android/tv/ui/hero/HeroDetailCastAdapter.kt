@@ -16,7 +16,7 @@ import com.fongmi.android.tv.ui.activity.HeroCast
 /**
  * 详情页演职员行适配器（纯 View）。
  *
- * 每一格就是 `item_hero_detail_cast.xml`：76dp 宽、60dp 圆头像、12sp 单行名字；
+ * 每一格就是 `item_hero_detail_cast.xml`：72dp 宽、60dp 圆头像、12sp 单行名字；
  * 焦点态（2dp 红圈 + 1.08 放大）由样式里的 selector / stateListAnimator 负责，
  * 这里只维护「焦点下标」与方向键边界，与 Compose 版 `HeroCastItem` 一致：
  * - ↑ 回按钮组「播放」；↓ 已是最底部，直接消费；

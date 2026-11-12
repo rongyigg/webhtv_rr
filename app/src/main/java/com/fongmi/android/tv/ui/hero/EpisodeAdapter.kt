@@ -34,7 +34,15 @@ internal class EpisodeAdapter(
     private var items: List<Episode> = emptyList()
     private var playing: Episode? = null
 
-    /** 换组 / 换线路 / 翻转排序都整批替换，最多 32 项，直接全量刷新即可。 */
+    /**
+     * 换组 / 换线路 / 翻转排序都整批替换，最多 32 项，直接全量刷新即可。
+     *
+     * 这里**必须**保持 `notifyDataSetChanged`：它会让
+     * [RecyclerView.findViewHolderForAdapterPosition] 返回 null，从而让
+     * [EpisodeViewDialog.requestCellFocus] 的重试循环一直重试到布局结束、把焦点还给网格。
+     * 换成 `notifyItemRangeChanged` 会立刻拿到旧 ViewHolder、请求焦点「成功」而不再重试，
+     * 卡片随后在重新布局中被 detach，焦点就再也回不到网格。
+     */
     fun submit(list: List<Episode>, playingEpisode: Episode?) {
         items = list
         playing = playingEpisode

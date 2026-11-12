@@ -356,7 +356,9 @@
 
             <!--
                 横向列表：RecyclerView + HeroDetailCastAdapter。
-                尾部额外 24dp，对应 Compose contentPadding end = HERO_PADDING。
+                不要再加 paddingEnd：外层 detailContent 已有 24dp 右内边距，而 11 位演员正好
+                铺满 912dp 可用宽度（11 × 72 + 10 × 12），再加尾部 padding 会让列表多出 24dp
+                可滚动量，聚焦最后一位时整行可能被推走。
             -->
             <androidx.recyclerview.widget.RecyclerView
                 android:id="@+id/castList"
@@ -367,7 +369,6 @@
                 android:clipToPadding="false"
                 android:focusable="false"
                 android:overScrollMode="never"
-                android:paddingEnd="24dp"
                 android:scrollbars="none" />
 
         </LinearLayout>

@@ -261,6 +261,29 @@ internal class EpisodeViewDialog(
 
     private val currentFlag: Flag? get() = flags.getOrNull(selectedFlag)
 
+    /**
+     * 【崩溃防线】三个 RecyclerView 是否有一个正在测量 / 布局。
+     *
+     * 卡片被 detach 时（`notifyDataSetChanged` 后的重新布局）Android 会走
+     * `ViewGroup.removeViewInternal → rootViewRequestFocus` 重新找焦点；此刻网格还没有子 View，
+     * 焦点会**短暂落到线路 chip 上**并触发它的 `onFocusChange`。
+     *
+     * 若当场 `selectFlag()` → `refresh()` → `notifyDataSetChanged()`，就会撞上正在布局的
+     * RecyclerView，抛 `IllegalStateException: Cannot call this method while RecyclerView is
+     * computing a layout or scrolling`（真机堆栈：ChipAdapter.onFocusChange → selectFlag → refresh）。
+     *
+     * 这也解释了「只有线路 1 正常」：系统重新找焦点时落的是**第一个**可聚焦 View = chip 0，
+     * 线路 1 时 `index != selectedFlag` 直接挡掉，其它线路才会真的走进 `selectFlag` 然后崩。
+     *
+     * 这种焦点是系统在布局过程中塞过来的、不是用户按出来的：直接忽略。焦点随后由
+     * [requestCellFocus] 还给网格；用户真实按方向键切线路时网格并不在布局，不会被误伤。
+     *
+     * 注意**不能**照抄 `HeroSearchActivity.render()` 的「推迟一帧再执行」：那里推迟的是状态重绘，
+     * 这里推迟会把「系统塞给 chip 0 的焦点」当成用户选择，静默把线路切回第 1 条。
+     */
+    private fun isListBusy(): Boolean =
+        episodeRecycler.isComputingLayout || groupRecycler.isComputingLayout || flagRecycler.isComputingLayout
+
     // ------------------------------------------------------------------
     // 刷新（= Compose 重组时的那些 remember 计算）
     // ------------------------------------------------------------------
@@ -332,6 +355,8 @@ internal class EpisodeViewDialog(
      */
     private fun selectFlag(index: Int) {
         if (index !in flags.indices || index == selectedFlag) return
+        // 布局过程中的焦点是系统抢的、不是用户选的（见 [isListBusy]）：忽略掉才既不崩也不串线路。
+        if (isListBusy()) return
         selectedFlag = index
         ordered = orderedNow()
         page = 0
@@ -356,6 +381,8 @@ internal class EpisodeViewDialog(
      */
     private fun selectPage(target: Int) {
         if (target !in 0 until pageCount()) return
+        // 同 [selectFlag]：分页标签在布局过程中被系统塞进焦点时，绝不当场刷新网格。
+        if (isListBusy()) return
         val items = ordered.drop(target * pageSize()).take(pageSize())
         if (items.isEmpty()) return
         page = target
