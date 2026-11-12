@@ -681,4 +681,42 @@ appendPage(list, site, pageCount) // T1 的追加分支：空页 / 全重复 →
 - 待真机验证：Tab 焦点 A→B 时 A 立刻回到深色胶囊、不再残留红框；失焦的选中 Tab 仍是细线红框；焦点回到同一个 Tab 时实心胶囊立刻恢复。TMDB 弹窗里联想词最右按 → 回到最左、最左按 ← 回到最右、↑ 不冒到弹窗外；结果卡片按 ↑ 回到刚才停留的那一枚联想词，联想词为空时 ↑ 仍回键盘。
 - 回滚：`git checkout -- app/src/main/java/com/fongmi/android/tv/ui/activity/HomeViewActivity.kt app/src/main/java/com/fongmi/android/tv/ui/dialog/TmdbMatchViewDialog.java`。
 
+### 10.16 TMDB 艺术字语言过滤 / 图床档位 / 预取重构（2026-11-12，未编译）
+
+用户报 3 件事：① 我们的艺术字比原版小一圈（图 1 vs 图 2）；② 原版能给外文片（不只是英文）出原语种艺术字（图 3 / 图 4），我们只有纯文字剧名（图 5 / 图 6）；③ 原版的 TMDB 预取很流畅，我们发涩。
+
+#### ①② 根因：详情接口固定带 `include_image_language`
+
+`TmdbService.detailUrl()` 一直带 `include_image_language=<config.getLanguage()>,null`。TMDB 这个参数只保留**语言码完全相等**的图和 `iso_639_1 = null` 的图：
+
+- 中文片的 logo 绝大多数标 `zh`，而配置是 `zh-CN` → 被整批过滤，只剩 `iso_639_1 = null` 的**替代版**（同一部剧往往还有一张更大的 `zh` 主 logo）→ 图在，但比原版小一圈；
+- 外文片（`hu` / `it` / `ja` …）的 logo 全是原语种 → 一张不剩 → 只剩 32sp 文字标题。
+
+原版 `ref_docs/TmdbApi.java` 是另一条链路：`k(id, media)` 单独请求 `/{movie|tv}/{id}/images`，**只带 api_key、不带任何语言过滤**；`r(json)` 先取 `iso_639_1` 以 `zh` 开头的，没有就取第一张有 `file_path` 的。所以原版既能拿到 `zh` 主 logo，也能拿到外文片的原语种 logo。
+
+#### ①② 改法：新增无过滤 `/images`，作为唯一取 logo 入口
+
+- `TmdbService.images(item, config)`：`/{movie|tv}/{id}/images` 只带 api_key，按 `DETAIL_CACHE_TTL`（7 天）落盘，key = `images|<mediaType>|<tmdbId>`。
+- `HeroDetailActivity.kt` 新增 `loadTmdbLogo(service, item, detail, config)`：先 `/images`（`extractTmdbLogo` 的 zh 优先规则不变，与原版 `r()` 逐条对齐），失败或为空再退回详情自带的那份。协程取消照抛，其它异常一律当「没有」。
+- 首页 `loadTmdbDetail` 与详情页 `HeroDetailStateManager.loadTmdb` 都改走它；详情页把结果经 `TmdbDetailState.Ready.logo` 传给 `mergeTmdb(logo = ...)`，保持「合并函数在组合期 / 主线程执行，绝不发网络请求」这条约束。
+- 图床档位：原版 logo 拼的是 `zu1.C()`（**w500**），我们的 `getImageBase()` 是海报档 `w342`。logo 又宽又扁，按 72dp 高度铺开时宽度常远超 342px，w342 会发虚。新增 `tmdbLogoBase()`：只把比 w500 更小的标准档位提到 w500，`w780` / `w1280` / `original` 与用户自定义的非 TMDB 图床原样返回。
+- 布局一行未动：`activity_home_view.xml` 的 `heroLogoImg` 与原版 `activity_home_v2.xml` 完全一致（`wrap_content × 72dp`、`adjustViewBounds`、`maxWidth 720dp`、`fitStart`），尺寸差异只来自「选中哪张 logo 文件 + 图床档位」，不在布局。
+
+#### ③ 预取重构：窗口只做匹配，整批去抖
+
+旧实现是 `Map<Int, Job>`，窗口内每张卡各起一条完整的 `fetchTmdbDetailForPosition`（搜索 + 详情 + 演员 + 译文 + 艺术字，3~4 个请求），4 张并发 → 十几条请求同时在跑，焦点那一条反而排在后面，所以「原版顺、我们涩」。
+
+改法：
+
+- 字段换成单个 `tmdbWindowJob: Job?`，焦点一动就整批 `cancel()` 再重建（对齐原版 `v.getAndSet(Runnable)` 的去抖语义）；4 处清理点（`onDestroy` / 换源 / 目录落地 / 换页）同步改成 `tmdbWindowJob?.cancel()`。
+- 新增 `prefetchTmdbMatch(position)`：只发 1 个搜索请求。手动 / 自动缓存命中直接 return；命中后 `persistAutoTmdbMatch` 落盘（冷启动直接有横图），并把横图按 `w1920` 静默预下。**详情不再预取**，留给焦点那一条。
+- 并发 `PREFETCH_PARALLEL = 2`（分批串行 + 批内并发），比原版 `o93.b` 的 4 线程更保守：焦点请求永远优先拿到连接，预取不许把它挤慢。
+- 整条预取链路包 try/catch（`lifecycleScope.launch` 里未捕获异常会直接崩进程），取消照抛。焦点详情仍由 `tmdbRequestJob` 负责，链路与结果落地口一行未改。
+
+#### 验证与回滚
+
+- 静态：4 个文件括号配平（`TmdbService.java` / `HeroDetailActivity.kt` / `HeroDetailStateManager.kt` / `HomeViewActivity.kt`），`tmdbWindowJobs` 已无残留，`PREFETCH_PARALLEL` / `prefetchTmdbMatch` / `loadTmdbLogo` / `imagesCacheKey` 均已就位，`git diff --check` 无空白错误。
+- 待真机验证：中文片艺术字与图 1 大小一致（`zh` 主 logo，w500）；外文片（SÁTÁNTANGÓ / La figlia di Ryan 这类）出原语种艺术字，不再只剩文字；快速左右移动焦点时首屏元数据不排队、Hero 不空转，进详情页艺术字同样生效。
+- 回滚：`git checkout -- app/src/main/java/com/fongmi/android/tv/service/TmdbService.java app/src/main/java/com/fongmi/android/tv/ui/activity/HeroDetailActivity.kt app/src/main/java/com/fongmi/android/tv/ui/activity/HeroDetailStateManager.kt app/src/main/java/com/fongmi/android/tv/ui/activity/HomeViewActivity.kt`。
+
 

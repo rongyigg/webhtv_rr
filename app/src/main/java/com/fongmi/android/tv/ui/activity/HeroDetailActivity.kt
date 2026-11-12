@@ -59,6 +59,7 @@ import com.fongmi.android.tv.ui.hero.upgradeTmdbImage
 import com.fongmi.android.tv.utils.Notify
 import com.google.gson.JsonArray
 import com.google.gson.JsonObject
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
@@ -1238,6 +1239,13 @@ internal sealed class TmdbDetailState {
         val detail: JsonObject,
         val persons: List<TmdbPerson>,
         val manual: Boolean,
+        /**
+         * 艺术字 Logo 的完整地址；null = 这部剧没有 logo（回落文字标题）。
+         *
+         * 由 [loadTmdbLogo] 在 IO 线程算好带进来（**不带语言过滤**的 `/images` 优先），
+         * 不在 [mergeTmdb] 里现取：那是组合期 / 主线程，绝不能发网络请求。
+         */
+        val logo: String? = null,
     ) : TmdbDetailState()
 
     class Error(val message: String) : TmdbDetailState()
@@ -1350,6 +1358,8 @@ internal fun HeroDetail.mergeTmdb(
     persons: List<TmdbPerson>,
     config: TmdbConfig,
     manualHit: Boolean,
+    /** [loadTmdbLogo] 在 IO 线程算好的艺术字地址；null = 这部剧没有 logo，保持原值（回落文字）。 */
+    logo: String? = null,
 ): HeroDetail {
     if (item == null) return this
     val rating = TmdbRatingFormatter.format(item)
@@ -1379,9 +1389,9 @@ internal fun HeroDetail.mergeTmdb(
         hasTmdbBackdrop = tmdbBackdrop.isNotBlank() || hasWideBackdrop,
         // 一旦拿到横图（首页 / TMDB）就长期为 true：源站详情永远不能用竖图把背景盖回去。
         hasWideBackdrop = hasWideBackdrop || tmdbBackdrop.isNotBlank(),
-        // 艺术字 Logo：TMDB `images.logos` 里优先中文，命中就替换 32sp 文字标题；
-        // 提取不到（无 logos / 结构异常 / path 为空）返回 null，`?: logoUrl` 保持原来的 null 回落文字。
-        logoUrl = extractTmdbLogo(detail, config.getImageBase()) ?: logoUrl,
+        // 艺术字 Logo：由 [loadTmdbLogo] 在 IO 线程取好（无语言过滤的 `/images` 优先，
+        // 详情里那份只作兜底），这里只做「有就换、没有就保持原值（回落 32sp 文字）」。
+        logoUrl = logo ?: logoUrl,
         cast = persons.mapIndexed { index, person ->
             HeroCast(
                 // 下标入 key：同一演员被判给多个角色时 personId 可能重复，LazyRow 的 key 必须唯一。
@@ -1425,7 +1435,7 @@ private fun tmdbImagePath(url: String): String {
 /**
  * 从 TMDB 详情 JSON 的 `images.logos` 里取艺术字 Logo（透明 PNG）。
  *
- * 优先级与 `TmdbService.detail` 的 `include_image_language` 对齐：
+ * 优先级与原版 `TmdbApi.r(json)` 完全一致：
  * 1. `iso_639_1` 以 `zh` 开头的中文 Logo（zh-CN / zh-TW / zh-HK …）；
  * 2. 没有中文就退到第一张有 `file_path` 的（通常是英文 / 原语种）。
  *
@@ -1464,6 +1474,54 @@ internal fun extractTmdbLogo(detail: JsonObject?, imageBase: String): String? {
     }
     return null
 }
+
+/**
+ * 艺术字 Logo 的唯一取图入口（首页 / 详情页共用）。
+ *
+ * 先问**不带语言过滤**的 `/images`（原版 `TmdbApi.k(id, media)` + `r(json)` 的同一条链路），
+ * 再退回详情 JSON 里那份。为什么必须这样：
+ * - 详情固定带 `include_image_language=<语言>,null`，原语种（`hu` / `it` / `ja` …）的艺术字
+ *   会被整批过滤掉 —— 外文片因此一张 logo 都没有（SÁTÁNTANGÓ / La figlia di Ryan 就是这样，
+ *   原版出艺术字、我们只剩纯文字）；
+ * - 中文片命中的是 `iso_639_1 = null` 的替代版 logo，而同一部剧往往还有一张 `zh` 主 logo，
+ *   于是「图在，但比原版小一圈」。
+ *
+ * `/images` 失败（网络 / 鉴权 / 结构异常）一律当作「没有」，继续用详情里那份：
+ * 艺术字是装饰，绝不因为它把整页拖崩。协程取消照常抛出。
+ */
+internal fun loadTmdbLogo(service: TmdbService, item: TmdbItem, detail: JsonObject?, config: TmdbConfig): String? {
+    val imageBase = tmdbLogoBase(config.getImageBase())
+    val images = try {
+        service.images(item, config)
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        null
+    }
+    return extractTmdbLogo(images, imageBase) ?: extractTmdbLogo(detail, imageBase)
+}
+
+/**
+ * 艺术字图床档位：原版 `TmdbApi.r()` 拼的是 `zu1.C()`，即 **w500**。
+ *
+ * 我们的 [TmdbConfig.getImageBase] 是海报档 `w342`。logo 又宽又扁，按 72dp 高度铺开时
+ * 宽度常常远超 342px，用 w342 会发虚（观感上就是「我们的艺术字更小更糊」）。
+ * 只把比 w500 更小的标准档位提上来；`w780` / `w1280` / `original` 与用户自定义的
+ * 非 TMDB 图床**原样返回**，绝不改写别人的地址。
+ */
+private fun tmdbLogoBase(imageBase: String): String {
+    val marker = "/t/p/"
+    val index = imageBase.indexOf(marker)
+    if (index < 0) return imageBase
+    val sizeStart = index + marker.length
+    val slash = imageBase.indexOf('/', sizeStart)
+    val sizeEnd = if (slash < 0) imageBase.length else slash
+    if (imageBase.substring(sizeStart, sizeEnd) !in SMALL_LOGO_TIERS) return imageBase
+    return imageBase.substring(0, sizeStart) + "w500" + imageBase.substring(sizeEnd)
+}
+
+/** 比 w500 小的标准档位（只有这些需要提档）。 */
+private val SMALL_LOGO_TIERS = setOf("w45", "w92", "w154", "w185", "w300", "w342")
 
 /**
  * 真实起播：只调用原版公开入口 [VideoActivity.startDirectFullscreen]，绝不自己拼 Intent、

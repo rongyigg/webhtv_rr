@@ -541,6 +541,7 @@ internal class HeroDetailStateManager(
                 detail = prefetched.detail ?: JsonObject(),
                 persons = prefetched.cast,
                 manual = prefetched.manual,
+                logo = prefetched.logoUrl,
             )
             Log.d(
                 TAG_DETAIL,
@@ -563,7 +564,9 @@ internal class HeroDetailStateManager(
                     ?: return@withContext null
                 // 3) 详情与演员必须来自同一份 JSON（append_to_response 已在服务端拼好，且带 7 天磁盘缓存）。
                 val detail = service.detail(item, config)
-                TmdbDetailState.Ready(item, detail, service.cast(detail, config), manual != null)
+                // 艺术字：**无语言过滤**的 `/images` 优先（原版 `dc3.k`），详情里那份只作兜底。
+                val logo = loadTmdbLogo(service, item, detail, config)
+                TmdbDetailState.Ready(item, detail, service.cast(detail, config), manual != null, logo)
             } catch (e: CancellationException) {
                 // 页面已退出 / key 已变化：原样抛出，交给协程取消机制。
                 throw e
@@ -657,6 +660,7 @@ internal class HeroDetailStateManager(
             persons = ready.persons,
             config = TmdbConfig.effectiveCurrent(),
             manualHit = ready.manual,
+            logo = ready.logo,
         )
     }
 

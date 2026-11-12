@@ -81,6 +81,7 @@ import com.fongmi.android.tv.utils.Util
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.Locale
@@ -358,8 +359,14 @@ class HomeViewActivity : AppCompatActivity() {
      */
     private var tmdbRequestJob: Job? = null
 
-    /** 滑动窗口 `i-2 … i+2`：下标 → 该位置的预取 Job，出窗即取消。 */
-    private val tmdbWindowJobs = mutableMapOf<Int, Job>()
+    /**
+     * 滑动窗口 `i-2 … i+2` 的预取批次（一次只留一批，原版 `v.getAndSet(Runnable)` 的去抖语义）。
+     *
+     * 焦点一动就整批 `cancel()` 再重建：正在跑的搜索立刻作废，绝不和焦点那一条抢连接。
+     * 旧实现是 `Map<Int, Job>`（每个下标一条完整详情流水线），焦点快速移动时会有 4 条流水线
+     * 同时在跑、十几条请求一起挤，焦点那一条反而排在后面 —— 这就是「预取不如原版顺」的根因。
+     */
+    private var tmdbWindowJob: Job? = null
 
     override fun attachBaseContext(newBase: Context) {
         // 与全站其它页面共用同一套「设计画布」（同 HeroHomeActivity）。
@@ -408,8 +415,8 @@ class HomeViewActivity : AppCompatActivity() {
         isTmdbShowing = false
         // 在途 TMDB 请求（焦点那条 + 整个滑动窗口）一起作废：Activity 已经没了，回调绝不能再去碰 View。
         tmdbRequestJob?.cancel()
-        tmdbWindowJobs.values.forEach { it.cancel() }
-        tmdbWindowJobs.clear()
+        tmdbWindowJob?.cancel()
+        tmdbWindowJob = null
         // 取消两个长生命周期 ImageView 上的在途请求（回收站里的是 Adapter 自己的职责）。
         heroLogoImg.dispose()
         posterCardImg.dispose()
@@ -956,8 +963,8 @@ class HomeViewActivity : AppCompatActivity() {
         // 换了一整页数据：上一页解析出来的横图地址全部作废（换源 / 换 Tab 后 key 可能撞上旧值）。
         syncBackdrops.clear()
         // 上一页的窗口预取同样作废：下标已经指向另一批条目，整批取消后由 [updateTmdbWindow] 重建。
-        tmdbWindowJobs.values.forEach { it.cancel() }
-        tmdbWindowJobs.clear()
+        tmdbWindowJob?.cancel()
+        tmdbWindowJob = null
         navBar.visibility = View.VISIBLE
         if (next.isEmpty()) {
             showEmpty()
@@ -1398,36 +1405,70 @@ class HomeViewActivity : AppCompatActivity() {
     }
 
     /**
-     * 原版滑动窗口 `i-2 … i+2`：出窗的 Job 立刻取消并移除，入窗且没缓存的位置起一条新 Job。
+     * 原版滑动窗口 `i-2 … i+2` 的预取：**只做匹配**，不做详情（对齐原版 `gd3.h` 的单条轻链路）。
      *
-     * 只有「做减法」的淘汰和「做加法」的预取，没有任何排队 / 信号量 / 延时。
+     * 与旧实现的三处关键差异，也是「原版预取更顺」的根因：
+     * 1. 旧实现给窗口内每张卡各起一条 [fetchTmdbDetailForPosition]（搜索 + 详情 + 演员 + 译文 +
+     *    艺术字，3~4 个请求），4 张并发 → 十几条请求同时在跑，焦点那一条反而排在后面；
+     *    这里只发最便宜的「匹配」（1 个搜索请求）+ 横图预下，详情留给焦点那一条。
+     * 2. 旧实现按 `Map<Int, Job>` 逐个淘汰，焦点快速移动时上一批还在跑；
+     *    这里整批一个 [tmdbWindowJob]，焦点一动就整批作废（原版 `v.getAndSet(Runnable)`）。
+     * 3. 并发 2（[PREFETCH_PARALLEL]）：比原版 `o93.b` 的 4 线程更保守，留出连接与带宽余量
+     *    给焦点那一条，预取永远不许把焦点请求挤慢。
+     *
      * 中心位置由 [tmdbRequestJob] 负责，这里跳过，避免同一条并发两次。
      */
     private fun updateTmdbWindow(centerIndex: Int) {
+        // 先掐断上一批：焦点已经动了，旧窗口的匹配结果对当前画面没有价值。
+        tmdbWindowJob?.cancel()
+        tmdbWindowJob = null
         val start = (centerIndex - 2).coerceAtLeast(0)
         val end = (centerIndex + 2).coerceAtMost(items.size - 1)
-
-        // 1. 淘汰：遍历 map，对于 index < start 或 > end 的 job，直接 cancel 并从 map 移除
-        val iterator = tmdbWindowJobs.iterator()
-        while (iterator.hasNext()) {
-            val entry = iterator.next()
-            if (entry.key < start || entry.key > end) {
-                entry.value.cancel()
-                iterator.remove()
+        val targets = (start..end).filter { it != centerIndex && !hasTmdbCache(it) }
+        if (targets.isEmpty()) return
+        tmdbWindowJob = lifecycleScope.launch(Dispatchers.IO) {
+            // 分批串行 + 批内并发：任何时刻最多 [PREFETCH_PARALLEL] 条搜索在跑。
+            for (chunk in targets.chunked(PREFETCH_PARALLEL)) {
+                coroutineScope {
+                    chunk.forEach { position -> launch { prefetchTmdbMatch(position) } }
+                }
             }
         }
+    }
 
-        // 2. 预取：遍历 start..end，没有缓存且 map 里没有正在跑的 job，就起一条
-        for (i in start..end) {
-            if (i == centerIndex) continue
-            if (!hasTmdbCache(i) && !tmdbWindowJobs.containsKey(i)) {
-                val job = lifecycleScope.launch(Dispatchers.IO) {
-                    fetchTmdbDetailForPosition(i)
-                    // 成功后从 map 移除
-                    withContext(Dispatchers.Main) { tmdbWindowJobs.remove(i) }
-                }
-                tmdbWindowJobs[i] = job
-            }
+    /**
+     * 单条「匹配」预取（**只在 IO 线程调用**）：只发 1 个搜索请求，不拉详情。
+     *
+     * 目的只有一个：焦点真落到这张卡时，[fetchTmdbDetailForPosition] 直接命中
+     * `TmdbMatchCache`，跳过在线搜索，只剩详情 / 演员那几个请求 —— 首屏元数据来得更快。
+     * 顺带把横图静默下进 Coil 缓存（搜索结果的 `backdropUrl` 就是最终横图，只是档位低一档，
+     * 按 [TMDB_BACKDROP_WIDTH] 提档后再预下，焦点移过去直接命中）。
+     *
+     * 缓存已命中（手动 / 自动）直接 return：条目已经有了，再搜一遍纯属浪费。
+     * 预取失败一律吞掉：它只是锦上添花，绝不能影响焦点那一条，更不能把页面变成错误态。
+     * （`lifecycleScope` 的 `launch` 里抛出的未捕获异常会直接崩进程，所以整条链路包一层。）
+     */
+    private suspend fun prefetchTmdbMatch(position: Int) {
+        try {
+            val item = items.getOrNull(position) ?: return
+            val config = TmdbConfig.effectiveCurrent()
+            if (!config.isReady() || item.vod.name.orEmpty().isBlank()) return
+            if (!TmdbSitePolicy.isEnabled(config, item.site.key, item.vod.id)) return
+            val siteKey = item.site.key
+            val vod = item.vod
+            val cache = Setting.getTmdbMatchCache()
+            // 手动 / 自动缓存命中：与 [loadTmdbDetail] 的读取顺序一致，直接不搜。
+            if (cache.findManual(siteKey, vod.id, vod.name) != null) return
+            if (cache.find(siteKey, vod.id, vod.name) != null) return
+            val matched = TmdbMatcher(TmdbService(), config).searchAndMatch(vod.name, vod) ?: return
+            // 落盘：下次冷启动 / 焦点真落到这张卡时直接命中，不必再搜。
+            persistAutoTmdbMatch(siteKey, vod, matched)
+            val backdrop = matched.backdropUrl.orEmpty()
+            if (backdrop.isNotBlank()) prefetchBackdropImage(upgradeTmdbImage(backdrop, TMDB_BACKDROP_WIDTH))
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            if (BuildConfig.DEBUG) Log.d(TAG, "TMDB 预取失败: ${e.message}")
         }
     }
 
@@ -1468,7 +1509,10 @@ class HomeViewActivity : AppCompatActivity() {
                 cast = service.cast(detail, config),
                 overview = service.translatedOverview(detail, config).orEmpty(),
                 // 与详情页共用同一套提取规则，避免两处逻辑漂移。
-                logoUrl = extractTmdbLogo(detail, config.getImageBase()),
+                // 【艺术字】无语言过滤的 `/images` 优先（原版 `dc3.k`）：详情里的 `images` 带
+                // `include_image_language`，外文片一张 logo 都没有，中文片只能拿到 `null` 语种的
+                // 替代版（比 `zh` 主 logo 小一圈）。
+                logoUrl = loadTmdbLogo(service, matched, detail, config),
                 // 【只提横图】没有 `backdropUrl` 时留空，首页继续走竖图分支（E2 的 if-else）。
                 highResBackdrop = if (matched.backdropUrl.isNullOrBlank()) {
                     ""
@@ -2011,8 +2055,8 @@ class HomeViewActivity : AppCompatActivity() {
         applyFirstPageMeta(pageCount)
         // 换了一整页目录数据：上一页解析出来的横图 / 预取窗口全部作废。
         syncBackdrops.clear()
-        tmdbWindowJobs.values.forEach { it.cancel() }
-        tmdbWindowJobs.clear()
+        tmdbWindowJob?.cancel()
+        tmdbWindowJob = null
         posterProgress.visibility = View.GONE
         // 数据回来了：卡片可以接焦点了（对应原版进入目录前的 FOCUS_BLOCK_DESCENDANTS）。
         recycler.descendantFocusability = ViewGroup.FOCUS_AFTER_DESCENDANTS
@@ -2046,8 +2090,8 @@ class HomeViewActivity : AppCompatActivity() {
         // 出栈恢复上一层的翻页状态（原版 `U1()` 连 `R0` 的页码一起还原）：返回后还能继续翻页。
         paging = state.paging
         syncBackdrops.clear()
-        tmdbWindowJobs.values.forEach { it.cancel() }
-        tmdbWindowJobs.clear()
+        tmdbWindowJob?.cancel()
+        tmdbWindowJob = null
         posterProgress.visibility = View.GONE
         posterEmpty.visibility = View.GONE
         recycler.descendantFocusability = ViewGroup.FOCUS_AFTER_DESCENDANTS
@@ -2318,6 +2362,14 @@ class HomeViewActivity : AppCompatActivity() {
 
         /** 横向背景图提档目标：w1920（TMDB 实测支持的档位）。 */
         private const val TMDB_BACKDROP_WIDTH = "w1920"
+
+        /**
+         * 滑动窗口预取的并发上限（只用于「匹配」这一步）。
+         *
+         * 原版是 `o93.b` 固定 4 线程；这里取 2 更保守：焦点那一条永远优先拿到连接，
+         * 预取只是让焦点落下去时少一次搜索，绝不允许把焦点请求挤慢。
+         */
+        private const val PREFETCH_PARALLEL = 2
 
         /** 与 `HeroLogoCache`（`HeroShared.kt`）共用同一份 prefs。 */
         private const val LOGO_CACHE_PREFS = "hero_logo_cache"
