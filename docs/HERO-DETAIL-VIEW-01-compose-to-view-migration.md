@@ -426,3 +426,23 @@ rm app/src/main/java/com/fongmi/android/tv/ui/hero/HeroDetailCastAdapter.kt \
 
 **教训**：本轮改动一直未提交，等于把全部成果押在工作区上。恢复后第一件事应当是编译验证通过即提交 + 打 tag，不要在未提交状态下继续叠加改动。
 
+### 10.11 首次 CI 编译错误修复（2026-11-12，+41 行）
+
+CI（`da07193c0`）编译 `:app:compileLeanbackArmeabi_v7aDebugKotlin` 报 2 个错，且只有这 2 个：
+
+| 位置 | 错误 |
+| --- | --- |
+| `HeroDetailActivity.kt:194:61` | `Unresolved reference 'hydrateInlineEpisodes'` |
+| `HeroDetailActivity.kt:920:41` | `Unresolved reference 'TMDB_BACKDROP_WIDTH'` |
+
+**根因**：把纯 View 版正文与保留的辅助函数尾巴拼接时，被丢弃的那段区域里除了 Compose UI 组件，还夹着两个**非 UI** 声明：
+
+- `private fun Vod.hydrateInlineEpisodes(): Boolean`（含 KDoc，`Vod.isFolderTarget` 之后）
+- `private const val TMDB_BACKDROP_WIDTH = "w1920"`（含 KDoc，`PLAY_FALLBACK_WAIT_MS` 之后）
+
+这两处**调用点**（第 194 行内联线路水合、第 920 行首帧横图提档）属于纯 View 版仍在用的逻辑，因此保留了下来，而声明被一起删掉 —— 所以报错恰好成对出现，没有第三种错误。
+
+**修复**：从 `30f3090a5` 逐字节取回这两个声明（含原 KDoc），插回原位置；diff 仅 `+41` 行，无其它改动。文件 63,854 字符、大括号 232/232、5 处 CRLF 保持原样。
+
+**未做**：未跑本地编译（本机无 Gradle 环境），由用户/CI 验证。
+

@@ -1071,6 +1071,13 @@ internal const val MAX_PLAY_DRILL = 3
 /** 当前源不可播、预搜索结果还没到时最多等这么久，避免「正在寻找可用源」无限转圈。 */
 internal const val PLAY_FALLBACK_WAIT_MS = 10_000L
 
+/**
+ * 首帧横图的提档目标：与首页 `highResBackdrop` 同为 `w1920`。
+ *
+ * 逐字一致才能直接命中首页预热好的 Coil 磁盘缓存；换成 `w1280` / `original` 都要重新下载。
+ */
+private const val TMDB_BACKDROP_WIDTH = "w1920"
+
 /** 网盘聚合插件的 folder 壳前缀（与 `ChangeSourceDialog` / `HeroEntryRoute` 的判定一致）。 */
 private const val ATVP_FOLDER_PREFIX = "atvp_detail:"
 
@@ -1131,6 +1138,40 @@ internal fun Vod.isActionItem(): Boolean =
  */
 internal fun Vod.isFolderTarget(): Boolean =
     isFolder || id.startsWith(ATVP_FOLDER_PREFIX, ignoreCase = true)
+
+/**
+ * 传入的 [Vod] 是否已经自带可播放线路；顺手把「只有 urls、还没拆成 episodes」的线路补好。
+ *
+ * `Flag.setEpisodes("")` 会造出一条空地址剧集，所以只在 `urls` 非空时才补，
+ * 绝不能直接对整个 Vod 调 `setFlags()`。
+ */
+private fun Vod.hydrateInlineEpisodes(): Boolean {
+    val flagCount = flags.size
+    flags.forEach { flag ->
+        if (flag.episodes.isNullOrEmpty() && flag.urls.isNotBlank()) {
+            // `Flag.setEpisodes()` 内部直接操作 `getEpisodes()`，若该字段为 null 会 NPE；
+            // 这里兜住异常并打日志，绝不让详情页因为一条坏线路崩溃。
+            runCatching { flag.setEpisodes(flag.urls) }
+                .onSuccess {
+                    Log.e(
+                        TAG_DETAIL,
+                        "hydrate: flag=${flag.flag} urlsLen=${flag.urls.length} -> " +
+                            "episodes=${flag.episodes.orEmpty().size}",
+                    )
+                }
+                .onFailure {
+                    Log.e(TAG_DETAIL, "hydrate 失败: flag=${flag.flag} urlsLen=${flag.urls.length}", it)
+                }
+        }
+    }
+    val playable = flags.count { !it.episodes.isNullOrEmpty() }
+    Log.e(
+        TAG_DETAIL,
+        "hydrateInlineEpisodes: flags=$flagCount playableLines=$playable, " +
+            "playUrlLen=${playUrl.length}（playableLines=0 时详情页会走网络请求）",
+    )
+    return playable > 0
+}
 
 /**
  * 在已挂载的 FocusRequester 列表里安全请求焦点：未组合的 Lazy 项会抛异常，这里降级返回 false。
