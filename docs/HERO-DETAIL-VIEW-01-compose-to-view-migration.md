@@ -785,4 +785,53 @@ appendPage(list, site, pageCount) // T1 的追加分支：空页 / 全重复 →
 - 待真机验证：① 伟大的长征这类中文片艺术字尺寸接近原版（约 500x212px，而不是 338x142px）；② SÁTÁNTANGÓ / La figlia di Ryan 这类外文片出原语种艺术字；③ 左右移动焦点时 Hero 不空转、不闪回文字标题，进详情页艺术字同样生效。
 - 回滚：`git checkout -- app/src/main/java/com/fongmi/android/tv/ui/activity/HeroDetailActivity.kt app/src/main/java/com/fongmi/android/tv/ui/activity/HomeViewActivity.kt app/src/main/java/com/fongmi/android/tv/ui/activity/HeroDetailStateManager.kt app/src/main/java/com/fongmi/android/tv/service/TmdbService.java app/src/main/res/layout/activity_home_view.xml`。
 
+### 10.18 TMDB 预取回归：焦点优先 + 可取消去重预取 + DoH 对齐原版（2026-11-13，未编译）
 
+10.17 提交（`0933705ee`）后用户确认「剧名大小、外文剧名修好了」，但紧接着报出**新回归**：
+
+> 预加载反而更慢了，焦点所在的卡片经常拉取不到大海报，焦点在有大海报的卡片停留了 20 秒再移动到下一张卡片依旧没拉取到大海报，这种情况会频繁出现。
+
+#### ① 回归来源就是 10.17 的「窗口整链预取」
+
+10.17 把窗口预取从「只做匹配」升级成「窗口内 4 个邻居的**整条详情链**」（搜索 + 详情 + 演员 + 译文简介 + 艺术字 + **w1920 横图**），并且：
+
+- 每按一次方向键，整批 `cancel()` 后**立刻**重建下一批 —— 但 `HeroImageView.prefetch()` 当时**故意不保存 `Disposable`**，注释写着「焦点走了也让预取写完」；
+- 于是每移动一次焦点就留下若干张 **528KB** 的 w1920 下载，它们和焦点那张**共用同一个 `OkHttpClient` 的 `maxRequestsPerHost = 5`**；
+- 更要命的是**焦点那张自己也在预取自己**：`fetchTmdbDetailForPosition()` 一落地就 `prefetchBackdropImage(highResBackdrop)`，紧接着 `onTmdbDetailReady → applyHero → heroBg.loadImage()` 又对**同一条 URL** 发一次显示请求 —— 同一条 URL 并发下两次 528KB；
+- 连按几下 = 4 条邻居链 × 528KB + 焦点图 ×2，焦点图只能排在最后 → 停留 20 秒也轮不到，频繁复现。
+
+#### ② 实测数据（2026-11-12，PowerShell 直连 TMDB 图床）
+
+| URL | 大小 | 耗时 |
+| --- | --- | --- |
+| `image.tmdb.org/t/p/w1920/…jpg` | 528 121 B | 1629 ms（含建连） |
+| `image.tmdb.org/t/p/w1280/…jpg` | 174 424 B | 177 ms |
+| `image.tmdb.org/t/p/w780/…jpg` | 85 766 B | 180 ms |
+| `image.tmdb.org/t/p/original/…jpg` | 1 542 984 B | 180 ms |
+| `images.tmdb.org/t/p/w1920/…jpg` | 528 121 B | 749 ms |
+| `image.tmdb.org/t/p/w1920/…png`（logo 用的那张） | 585 761 B | 1219 ms |
+
+结论：**问题不是档位选大**（原版 backdrop 也是 `w1920`，`zu1.C()` 的 `w500` 直接 `replace("/w500","/w1920")`），而是**并发与排队**：一张 528KB，5 条并发就是 2.6MB，任何一条链路慢下来都会把焦点图压到队尾。所以这一轮**不动 `TMDB_BACKDROP_WIDTH`**，只修排队。
+
+#### ③ 原版为什么流畅（逆向核对）
+
+- `PosterCache`(`je2`)：**自有文件缓存 + 自有下载队列**，`b` 按 `url@tag` 去重、`d` 按页下标登记并**取消滑出窗口的下载**、`s()` 对下载过慢的直接 `Call.cancel()` 重开；
+- `gd3.g(list)`：窗口预取走 `o93.b`（**它自己的** 4 线程池），与焦点链路不共用连接池；
+- `gd3.h(vod)`：`v.getAndSet(runnable)` **去抖**（新任务顶掉旧任务）+ `u` / `q` 代次号丢弃过期任务 + `a` 按名字去重；
+- `TmdbDns`(`x52`)：`lookup` 第一步**先查配置 hosts 映射** → 用户自选 DoH 优先 → 纯 IP 短路 → 非 TMDB 交系统 → 否则系统 + 阿里 + 腾讯三路竞速，`CountDownLatch.await(2s)` 取第一个非空。
+
+#### ④ 改法（对齐原版语义，保留我们的 Coil 单例与 3GB 磁盘缓存）
+
+1. **焦点绝不预取自己**：`fetchTmdbDetailForPosition(position, allowImagePrefetch)` 新增开关，焦点链固定传 `false`（消灭同 URL 双下载）；
+2. **预取可取消**：`HeroImageView.prefetch()` 改为返回 `Disposable`（并接收 `ImageRequest.Listener`），`HomeViewActivity` 用 `prefetchInFlight: Map<URL, Disposable>` 记账；`cancelBackdropPrefetch()` 一次性 `dispose()` 全部在途预取（对齐 `je2.d`，我们更狠：焦点一动全取消）；
+3. **按 URL 去重**：`prefetchDone`（FIFO 上限 32，对齐 `je2.b`）+ 在途表双重去重；入队前先占位，防止「内存缓存命中 → 回调早于 `enqueue` 返回」把句柄丢掉；
+4. **窗口预取挂在大图落地之后**：`bindBackdrop()` 在发焦点大图请求前先 `cancelBackdropPrefetch()` + `tmdbWindowJob?.cancel()`，再把 `scheduleTmdbWindow()` 挂到 `heroBg.loadImage()` 的完成回调上（无横图分支直接排），**焦点大图没上屏就绝不启动邻居的 528KB 下载**；
+5. **去抖 + 串行 + 近优先**：`scheduleTmdbWindow()` 先 `delay(PREFETCH_DEBOUNCE_MS = 400ms)`（对齐 `v.getAndSet` 去抖），邻居按 `|i - center|` 排序后**串行**跑（原版有独立 4 线程池，我们和焦点共用同一个 `OkHttpClient`，只能取 1）；`windowTargets()` 在主线程算好下标，IO 线程不再读 `items`；
+6. **大图只预取 i±1**：i±2 只备元数据（几十 KB 的 JSON），不提前占带宽；
+7. **DoH 对齐原版**：`HeroHttpDns.lookup()` 改为「配置 `hosts` 映射 → 纯 IP 短路 → 非 TMDB 交 `OkHttp.dns()` → 用户自选 DoH 优先 → 系统 + 阿里 + 腾讯 DoH 三路竞速 2s」；为此给 `catvod` 的 `OkDns` 增加只读映射的 `target(hostname)`（**只读表、不发请求**），并保留「用户 DoH 失败/返回空则继续竞速」的兜底（比原版更稳）。
+
+#### 验证与回滚
+
+- 静态（`check_round8.py`）：四个改动文件括号配平；`updateTmdbWindow` / `PREFETCH_PARALLEL` / `chunked(` / `coroutineScope` 全部无残留；`fetchTmdbDetailForPosition(index, allowImagePrefetch = false)` 存在且两处 `prefetchBackdropImage` 都带 `allowImagePrefetch` 守卫；`cancelBackdropPrefetch()` ≥ 6 个调用点（onDestroy / renderHome / renderFolder / exitFolder / requestFocusedTmdbDetail / bindBackdrop）；`heroBg.loadImage(backdrop, position) { scheduleTmdbWindow() }` 存在；`HeroImageView.prefetch` 返回 `Disposable`；`HeroHttpDns` 含 `target(hostname)` / `userDoh` / `IPV4` / `Setting.getDoh()`；`git diff --check` 无空白错误。
+- 待真机验证：① 连续快速左右移动焦点 10 次，焦点卡的 w1920 横图应在数秒内出图（不再 20 秒空转）；② 停在一张卡上不动，日志里应只有 1 条该 URL 的图片请求；③ 停稳约 0.4s 后才出现邻居详情请求，移动焦点时这些请求立刻消失；④ 配了自定义 DoH / `hosts` 的环境下 TMDB 图仍能出。
+- 回滚：`git checkout -- app/src/main/java/com/fongmi/android/tv/ui/activity/HomeViewActivity.kt app/src/main/java/com/fongmi/android/tv/ui/custom/HeroImageView.java app/src/main/java/com/fongmi/android/tv/net/HeroHttpDns.kt catvod/src/main/java/com/github/catvod/net/OkDns.java`。

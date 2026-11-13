@@ -33,8 +33,10 @@ import androidx.recyclerview.widget.LinearSmoothScroller
 import androidx.recyclerview.widget.RecyclerView
 import coil3.dispose
 import coil3.load
+import coil3.request.Disposable
 import coil3.request.ErrorResult
 import coil3.request.ImageRequest
+import coil3.request.SuccessResult
 import coil3.request.crossfade
 import coil3.request.error
 import coil3.request.placeholder
@@ -82,7 +84,8 @@ import com.fongmi.android.tv.utils.Util
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.Locale
@@ -370,6 +373,20 @@ class HomeViewActivity : AppCompatActivity() {
      */
     private var tmdbWindowJob: Job? = null
 
+    /** 背景大图预取的互斥锁：入队 / 落地在 IO 线程（详情链），取消在主线程（焦点变化）。 */
+    private val prefetchLock = Any()
+
+    /**
+     * 在途的大图预取：URL → 取消句柄（`null` = 已占位、句柄还没拿到）。
+     *
+     * 对齐原版 `PosterCache` 的 `b`（按 URL 去重）+ `d`（按页取消）：焦点一动全部 `dispose()`，
+     * 底层 OkHttp 调用当场结束，连接立刻还给焦点那张真正要显示的大图。
+     */
+    private val prefetchInFlight = HashMap<String, Disposable?>()
+
+    /** 最近预取成功的 URL（FIFO，上限 [PREFETCH_DONE_MAX]）：同一张图不再重复入队。 */
+    private val prefetchDone = LinkedHashSet<String>()
+
     override fun attachBaseContext(newBase: Context) {
         // 与全站其它页面共用同一套「设计画布」（同 HeroHomeActivity）。
         super.attachBaseContext(Setting.wrapDisplay(newBase))
@@ -419,6 +436,8 @@ class HomeViewActivity : AppCompatActivity() {
         tmdbRequestJob?.cancel()
         tmdbWindowJob?.cancel()
         tmdbWindowJob = null
+        // 在途的大图预取同样要掐掉：Activity 已经销毁，下载完也没人用，只会白占连接。
+        cancelBackdropPrefetch()
         // 取消两个长生命周期 ImageView 上的在途请求（回收站里的是 Adapter 自己的职责）。
         heroLogoImg.dispose()
         posterCardImg.dispose()
@@ -964,9 +983,10 @@ class HomeViewActivity : AppCompatActivity() {
         applyFirstPageMeta(pageCount)
         // 换了一整页数据：上一页解析出来的横图地址全部作废（换源 / 换 Tab 后 key 可能撞上旧值）。
         syncBackdrops.clear()
-        // 上一页的窗口预取同样作废：下标已经指向另一批条目，整批取消后由 [updateTmdbWindow] 重建。
+        // 上一页的窗口预取同样作废：下标已经指向另一批条目，整批取消后由 [scheduleTmdbWindow] 重建。
         tmdbWindowJob?.cancel()
         tmdbWindowJob = null
+        cancelBackdropPrefetch()
         navBar.visibility = View.VISIBLE
         if (next.isEmpty()) {
             showEmpty()
@@ -1261,8 +1281,15 @@ class HomeViewActivity : AppCompatActivity() {
             posterCard.visibility = View.GONE
             HeroImageView.setSharedUrl(backdrop)
             heroBg.visibility = View.VISIBLE
-            // 不传回调：竖图在上面那一行之前就已经收掉了，成功 / 失败都不需要再动 `posterCard`。
-            heroBg.loadImage(backdrop, position, null)
+            // 【焦点优先】这张图落地之前，所有邻居预取一律让路：
+            // 在途大图直接 dispose，窗口详情链也一并停掉（同一个 host，抢一条就慢一截）。
+            // 图落地后的回调里再 `scheduleTmdbWindow()` 重新规划，不会漏掉预取。
+            cancelBackdropPrefetch()
+            tmdbWindowJob?.cancel()
+            tmdbWindowJob = null
+            // 不传回调会丢掉「图什么时候真正上屏」这个信号：窗口预取就挂在这个回调上，
+            // 图没上屏之前绝不启动邻居的 528KB 下载。成功 / 失败都会回调，不会漏。
+            heroBg.loadImage(backdrop, position) { scheduleTmdbWindow() }
             return
         }
 
@@ -1279,6 +1306,8 @@ class HomeViewActivity : AppCompatActivity() {
         heroBg.visibility = View.GONE
         posterCard.visibility = View.VISIBLE
         loadPosterCard(item.posterUrl)
+        // 没有横图就没有下载可等：窗口预取立刻规划，不必再等一个永远不会来的回调。
+        scheduleTmdbWindow()
     }
 
     /**
@@ -1345,39 +1374,48 @@ class HomeViewActivity : AppCompatActivity() {
     /**
      * 焦点 TMDB 请求入口（原版 `getAndSet`）：**先掐断上一条，再发当前这一条**，没有任何延时。
      *
-     * 1. `tmdbRequestJob?.cancel()` 立刻作废旧请求（不占连接、不回写、不重绘）；
-     * 2. 起当前焦点这一条；
-     * 3. 铺开 `i-2 … i+2` 的滑动窗口，左右各两张提前备好。
+     * 1. 先掐掉所有在途的大图预取 —— 焦点那张必须独占连接（见 [cancelBackdropPrefetch]）；
+     * 2. `tmdbRequestJob?.cancel()` 立刻作废旧请求（不占连接、不回写、不重绘）；
+     * 3. 起当前焦点这一条，**并且不许它自己预取大图**（`allowImagePrefetch = false`）：
+     *    焦点卡的横图由 `heroBg.loadImage()` 发**显示请求**，再预取一遍等于同一条 URL
+     *    并发下两次 528KB，这是上一版「预取比不预取还慢」的第二个根因；
+     * 4. 窗口预取**不在这里排**，由 [bindBackdrop] 挂在焦点大图的落地回调上 —— 图没上屏
+     *    就绝不启动邻居的下载（原版 `gd3.h` 的 `je2.e(...)` 也是在详情落地后才补图）。
      *
      * 结果只有 [onTmdbDetailReady] 一个落地口，且以 `posterKey` 判身份（下标会漂移）。
      */
     private fun requestFocusedTmdbDetail() {
         // 目录页没有 Hero：不为目录卡片发 TMDB 详情请求（没有地方画横图 / 艺术字）。
         if (folderStack.isNotEmpty()) return
-        // 1. 立刻掐断上一个请求
+        // 1. 焦点优先：邻居的 528KB 预取立刻让路
+        cancelBackdropPrefetch()
+        // 2. 立刻掐断上一个请求
         tmdbRequestJob?.cancel()
+        val index = focusedIndex
         tmdbRequestJob = lifecycleScope.launch(Dispatchers.IO) {
-            // 2. 发起当前新请求
-            fetchTmdbDetailForPosition(focusedIndex)
+            // 3. 发起当前新请求（焦点这张自己绝不预取大图）
+            fetchTmdbDetailForPosition(index, allowImagePrefetch = false)
         }
-        // 3. 滑动窗口 i-2 … i+2
-        updateTmdbWindow(focusedIndex)
     }
 
     /**
      * 单条 TMDB 详情拉取（**只在 IO 线程调用**，与旧实现同一条链路）：
      * 手动缓存 → 自动缓存 → 在线搜索 → 详情 → 演员 / 译文简介 / 艺术字 Logo。
      *
+     * @param allowImagePrefetch 是否允许顺手把横图下进 Coil 缓存。**焦点那条必须传 false**：
+     *        它马上就会用 `heroBg.loadImage()` 发显示请求，再预取一次就是同一条 URL 双下载；
+     *        只有窗口里的邻居（焦点还没到）才需要提前备图。
+     *
      * 结果统一交给主线程的 [onTmdbDetailReady]：非焦点条目只写缓存、不重绘。
      */
-    private suspend fun fetchTmdbDetailForPosition(position: Int) {
+    private suspend fun fetchTmdbDetailForPosition(position: Int, allowImagePrefetch: Boolean) {
         val item = items.getOrNull(position) ?: return
         // 已经有完整详情（刚停过这张 / 手动匹配拉过）：不重复请求，只补写跨页缓存。
         val existing = tmdbOverrides[item.posterKey]
         if (existing != null && existing.detail != null) {
             HeroTmdbPrefetchCache.put(item.posterKey, existing)
             // 元数据有、图不一定有（进程重启后磁盘里有元数据、图却可能被清过）。
-            prefetchBackdropImage(existing.highResBackdrop)
+            if (allowImagePrefetch) prefetchBackdropImage(existing.highResBackdrop)
             return
         }
         // 没配 Key / 该源被排除 / 没有剧名：保持源站画面，绝不发无效请求。
@@ -1385,20 +1423,22 @@ class HomeViewActivity : AppCompatActivity() {
         if (!config.isReady() || item.vod.name.orEmpty().isBlank()) return
         if (!TmdbSitePolicy.isEnabled(config, item.site.key, item.vod.id)) return
         val data = loadTmdbDetail(item, config) ?: return
-        // 【大图预取】元数据一落地，立刻把 backdropUrl 静默下进 Coil 缓存 —— **必须在切主线程之前**：
-        // 这样下载与 `onTmdbDetailReady` 的重绘并行开始，焦点真落到这张卡时 `heroBg.loadImage()`
-        // 直接命中内存 / 磁盘，不再出现「先黑一帧、图才淡入」。
+        // 【大图预取】只有邻居才预取：焦点那张马上要走显示请求，重复预取等于双下载（见方法注释）。
+        // 必须在切主线程之前入队：这样下载与 `onTmdbDetailReady` 的重绘并行，焦点真落到这张卡时
+        // `heroBg.loadImage()` 直接命中内存 / 磁盘，不再出现「先空一帧、图才淡入」。
         // `highResBackdrop` 在没有真横图时是空串（见 loadTmdbDetail），空串直接跳过。
-        prefetchBackdropImage(data.highResBackdrop)
+        if (allowImagePrefetch) prefetchBackdropImage(data.highResBackdrop)
         withContext(Dispatchers.Main) { onTmdbDetailReady(item.posterKey, data) }
     }
 
     /**
-     * 静默预取一张背景大图（原版 `je2.e(...)` 的等价机制）：**只下缓存，不碰任何 View**。
+     * 静默预取一张背景大图（原版 `je2.e(...)` + `je2.b` 去重 + `je2.d` 取消）。
      *
-     * 滑动窗口（i-2 … i+2）原来只预取了**元数据**，大图实体要等焦点真正落到那张卡、
-     * `heroBg.loadImage()` 发请求时才第一次下载，于是「焦点移过去 → 先空一帧 → 图才淡入」。
-     * 这里在元数据落地的同一刻就把图丢给 Coil，焦点移过去时直接命中缓存。
+     * 三条铁律，缺一条就会退回「预取比不预取还慢」：
+     * 1. **不预取焦点那张**：调用方用 `allowImagePrefetch` 把关（见 [fetchTmdbDetailForPosition]）；
+     * 2. **按 URL 去重**：同一张图在途（[prefetchInFlight]）或已经下过（[prefetchDone]）就不再入队；
+     * 3. **可取消**：句柄记在 [prefetchInFlight] 里，焦点一动 [cancelBackdropPrefetch] 全部 `dispose()`，
+     *    底层 OkHttp 调用当场结束，连接立刻还给焦点那张。
      *
      * 与 `HeroImageView.loadImage` 共用**同一个** data + size（[HeroImageView.prefetch]），
      * 内存缓存键天然一致；磁盘缓存键只认 URL，也一定命中。
@@ -1407,41 +1447,97 @@ class HomeViewActivity : AppCompatActivity() {
      */
     private fun prefetchBackdropImage(url: String?) {
         if (url.isNullOrBlank()) return
-        HeroImageView.prefetch(this, url)
+        synchronized(prefetchLock) {
+            if (prefetchDone.contains(url) || prefetchInFlight.containsKey(url)) return
+            // 先占位再入队：Coil 命中内存缓存时回调可能比 `enqueue` 返回还早。
+            prefetchInFlight[url] = null
+        }
+        val listener = object : ImageRequest.Listener {
+            override fun onSuccess(request: ImageRequest, result: SuccessResult) =
+                finishBackdropPrefetch(url, true)
+
+            override fun onError(request: ImageRequest, result: ErrorResult) =
+                finishBackdropPrefetch(url, false)
+        }
+        val disposable = HeroImageView.prefetch(this, url, listener)
+        if (disposable == null) {
+            synchronized(prefetchLock) { prefetchInFlight.remove(url) }
+            return
+        }
+        synchronized(prefetchLock) {
+            // 占位还在 = 正常入队；已经被取消 / 已经回调过 = 立刻把这张多余的请求掐掉。
+            if (prefetchInFlight.containsKey(url)) prefetchInFlight[url] = disposable
+            else disposable.dispose()
+        }
+    }
+
+    /** 预取落地：移出在途表；成功过的 URL 进 [prefetchDone]，同一张图不再重复下。 */
+    private fun finishBackdropPrefetch(url: String, success: Boolean) {
+        synchronized(prefetchLock) {
+            prefetchInFlight.remove(url)
+            if (!success) return
+            prefetchDone.add(url)
+            while (prefetchDone.size > PREFETCH_DONE_MAX) prefetchDone.remove(prefetchDone.first())
+        }
     }
 
     /**
-     * 原版滑动窗口 `i-2 … i+2` 的预取：**整条详情链路**（对齐原版 `gd3.g(list)` → `gd3.h(vod)`）。
+     * 掐掉所有在途的大图预取（原版 `je2.d(i2, i3)` 的加强版：原版只取消滑出窗口的那几张）。
      *
-     * 上一轮只预取「匹配」，实测仍然不够顺：焦点落到邻卡时还得现发详情 / 图片两条请求，
-     * 艺术字和横图都要晚一拍才换上去（原版之所以顺，是因为窗口内的邻居**详情已经在内存里**，
-     * `gd3.q(name)` / `gd3.r(name)` 同步就能取到）。所以这里改回整链预取，只保留三处关键约束：
-     * 1. **中心优先**：中心那张由 [tmdbRequestJob] 单独负责，这里永远不跟它抢；
-     * 2. **近优先**：邻居按 `|i - center|` 排序，先 i±1 再 i±2，用户按一下方向键就命中的是最先跑的；
-     * 3. **整批可弃**：整批共用 [tmdbWindowJob]，焦点一动立刻整批取消（原版 `v.getAndSet(Runnable)`），
-     *    并发 2（[PREFETCH_PARALLEL]）比原版 `o93.b` 的 4 线程保守，始终给中心那条留带宽。
-     *
-     * 预取结果走 [fetchTmdbDetailForPosition] 的同一个落地口：非焦点条目只写缓存、不重绘，
-     * 所以提前拉邻居**绝不会**让画面闪一下别人的艺术字。
+     * 为什么必须「焦点一动全取消」：预取和焦点那张共用**同一个 OkHttpClient** 的
+     * `maxRequestsPerHost = 5`，而每张 w1920 横图实测 528KB。焦点每动一次就留下 4 条预取，
+     * 焦点图只能排在它们后面 —— 这正是「停留 20 秒也拉不到大海报」的直接原因。
+     * 预取只是锦上添花：焦点停稳、大图上屏后 [scheduleTmdbWindow] 会重新规划。
      */
-    private fun updateTmdbWindow(centerIndex: Int) {
-        // 先掐断上一批：焦点已经动了，旧窗口的结果对当前画面没有价值。
+    private fun cancelBackdropPrefetch() {
+        val pending = synchronized(prefetchLock) {
+            val handles = prefetchInFlight.values.toList()
+            prefetchInFlight.clear()
+            handles
+        }
+        pending.forEach { handle -> runCatching { handle?.dispose() } }
+    }
+
+    /**
+     * 焦点停稳 + 焦点大图已上屏之后，才铺开 `i-2 … i+2` 的窗口预取
+     * （对齐原版 `gd3.g(list)` → `gd3.h(vod)` 的整条详情链路）。
+     *
+     * 上一版是「焦点一动立刻整批预取 4 个邻居的整链」：每按一下方向键就多出 4 条链
+     * （搜索 + 详情 + 演员 + 简介 + 艺术字 + 528KB 横图），而图片预取当时**不可取消**，
+     * 焦点走了下载还在跑；连按几下就把同一个 host 的 5 条并发全部占满。现在的约束：
+     * 1. **去抖 [PREFETCH_DEBOUNCE_MS]**（原版 `v.getAndSet(Runnable)`）：焦点还在动就一直重新计时；
+     * 2. **串行**：同一时刻最多 1 条预取链路（原版 `o93.b` 是 4 线程，但那是它自己的
+     *    `PosterCache` + 独立连接池；我们和焦点共用同一个 `OkHttpClient`，只能取 1）；
+     * 3. **近优先**：按 `|i - center|` 排序，先 i±1 再 i±2；
+     * 4. **大图只预取 i±1**：i±2 只备元数据（几十 KB 的 JSON），绝不提前占带宽；
+     * 5. **整批可弃**：整批共用 [tmdbWindowJob]，焦点一动立刻 `cancel()`，正在跑的请求当场作废。
+     *
+     * 调用点只有 [bindBackdrop]（主线程），所以 [windowTargets] 读 `items` 永远是安全的。
+     */
+    private fun scheduleTmdbWindow() {
+        val center = focusedIndex
+        val targets = windowTargets(center)
         tmdbWindowJob?.cancel()
         tmdbWindowJob = null
-        val start = (centerIndex - 2).coerceAtLeast(0)
-        val end = (centerIndex + 2).coerceAtMost(items.size - 1)
-        val targets = (start..end)
-            .filter { it != centerIndex && !hasTmdbCache(it) }
-            .sortedBy { abs(it - centerIndex) }
         if (targets.isEmpty()) return
         tmdbWindowJob = lifecycleScope.launch(Dispatchers.IO) {
-            // 分批串行 + 批内并发：任何时刻最多 [PREFETCH_PARALLEL] 条详情在跑。
-            for (chunk in targets.chunked(PREFETCH_PARALLEL)) {
-                coroutineScope {
-                    chunk.forEach { position -> launch { prefetchTmdbDetail(position) } }
-                }
+            delay(PREFETCH_DEBOUNCE_MS)
+            for (position in targets) {
+                // 焦点已经变了 / 页面退出：这一批的结果对当前画面没有价值，立刻停手。
+                if (!isActive) return@launch
+                prefetchTmdbDetail(position, abs(position - center) <= 1)
             }
         }
+    }
+
+    /** 窗口 `i-2 … i+2` 里真正需要预取的下标：去掉中心自己、去掉已有缓存的，近的排前面。 */
+    private fun windowTargets(centerIndex: Int): List<Int> {
+        val start = (centerIndex - 2).coerceAtLeast(0)
+        val end = (centerIndex + 2).coerceAtMost(items.lastIndex)
+        if (start > end) return emptyList()
+        return (start..end)
+            .filter { it != centerIndex && !hasTmdbCache(it) }
+            .sortedBy { abs(it - centerIndex) }
     }
 
     /**
@@ -1449,11 +1545,11 @@ class HomeViewActivity : AppCompatActivity() {
      *
      * 失败一律吞掉：预取只是锦上添花，绝不能影响焦点那一条，更不能把页面变成错误态
      * （`lifecycleScope` 的 `launch` 里抛出的未捕获异常会直接崩进程，所以整条链路包一层）。
-     * 协程取消照常抛出，让 [updateTmdbWindow] 的整批取消真正生效。
+     * 协程取消照常抛出，让 [scheduleTmdbWindow] 的整批取消真正生效。
      */
-    private suspend fun prefetchTmdbDetail(position: Int) {
+    private suspend fun prefetchTmdbDetail(position: Int, allowImagePrefetch: Boolean) {
         try {
-            fetchTmdbDetailForPosition(position)
+            fetchTmdbDetailForPosition(position, allowImagePrefetch)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -2045,6 +2141,7 @@ class HomeViewActivity : AppCompatActivity() {
         syncBackdrops.clear()
         tmdbWindowJob?.cancel()
         tmdbWindowJob = null
+        cancelBackdropPrefetch()
         posterProgress.visibility = View.GONE
         // 数据回来了：卡片可以接焦点了（对应原版进入目录前的 FOCUS_BLOCK_DESCENDANTS）。
         recycler.descendantFocusability = ViewGroup.FOCUS_AFTER_DESCENDANTS
@@ -2080,6 +2177,7 @@ class HomeViewActivity : AppCompatActivity() {
         syncBackdrops.clear()
         tmdbWindowJob?.cancel()
         tmdbWindowJob = null
+        cancelBackdropPrefetch()
         posterProgress.visibility = View.GONE
         posterEmpty.visibility = View.GONE
         recycler.descendantFocusability = ViewGroup.FOCUS_AFTER_DESCENDANTS
@@ -2352,12 +2450,21 @@ class HomeViewActivity : AppCompatActivity() {
         private const val TMDB_BACKDROP_WIDTH = "w1920"
 
         /**
-         * 滑动窗口预取的并发上限（整条详情链路：搜索 + 详情 + 艺术字 + 横图）。
+         * 窗口预取的去抖延时（原版 `gd3.h` 的 `v.getAndSet(Runnable)`：新任务直接顶掉旧任务）。
          *
-         * 原版是 `o93.b` 固定 4 线程；这里取 2 更保守：焦点那一条永远优先拿到连接，
-         * 预取只是让焦点落下去时邻居的详情已经在内存里，绝不允许把焦点请求挤慢。
+         * 400ms 足够让「连按方向键」期间一次预取都不跑，又不会让用户停稳后还要干等：
+         * 窗口预取只在焦点大图上屏后才开始计时，正常情况下用户看完这张图再移动，
+         * 邻居的详情 / 横图早已备好。
          */
-        private const val PREFETCH_PARALLEL = 2
+        private const val PREFETCH_DEBOUNCE_MS = 400L
+
+        /**
+         * 预取成功 URL 的去重表上限（原版 `PosterCache.b` 的 `url@tag` 集合）。
+         *
+         * 一张卡最多 1 张横图，5 张窗口来回移动 + 翻页，32 条足够覆盖；
+         * 超出按 FIFO 淘汰，避免长会话里无限增长。
+         */
+        private const val PREFETCH_DONE_MAX = 32
 
         /** 与 `HeroLogoCache`（`HeroShared.kt`）共用同一份 prefs。 */
         private const val LOGO_CACHE_PREFS = "hero_logo_cache"

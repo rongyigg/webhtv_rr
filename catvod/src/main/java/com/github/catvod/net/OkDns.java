@@ -54,6 +54,20 @@ public class OkDns implements Dns {
         return hostname;
     }
 
+    /**
+     * 只查接口配置里的 {@code hosts} 映射，<b>不发任何 DNS 请求</b>。
+     *
+     * <p>对齐原版 {@code TmdbDns}（{@code x52}）lookup 的第一步「先查配置 hosts 映射」：
+     * HeroUI 的 TMDB 多路 DoH 需要在竞速<b>之前</b>知道用户有没有把这个域名钉到某个 IP，
+     * 否则竞速会绕过用户配置，出现「接口配置写了 hosts、原版能出图、我们不行」。
+     *
+     * @param hostname 原始域名
+     * @return 命中映射时返回映射目标（IP 或域名），未命中返回原 hostname
+     */
+    public String target(String hostname) {
+        return get(hostname);
+    }
+
     @NonNull
     @Override
     public List<InetAddress> lookup(@NonNull String hostname) throws UnknownHostException {

@@ -203,24 +203,30 @@ public class HeroImageView extends ImageView {
      * Coil 的内存缓存键默认就是 `request.data`（即 URL），再叠加解码尺寸；两边尺寸一致，
      * 焦点移过来时 `loadImage` 才能直接拿到同一份已解码位图。磁盘缓存键只认 URL，同样一定命中。
      *
-     * <p>故意只 {@code enqueue} 不保存 {@link Disposable}：预取是「替缓存干活」，
-     * 用户焦点已经移走也必须让它写完，否则这张图下次还要重下。
+     * <p><b>返回值是可取消句柄，调用方必须管理它的生命周期</b>（对齐原版 `je2.d(i2, i3)`：
+     * 窗口外的下载直接 `Call.cancel()`）。上一版故意不保存 {@link Disposable}，理由是
+     * 「焦点走了也让预取写完」——实测这正是「预取比不预取还慢」的根因：焦点每动一次就留下
+     * 若干张 528KB 的 w1920 下载，它们和焦点那张**共用同一个 host 的 5 条并发**，
+     * 焦点图只能排在后面，停 20 秒也轮不到。
      *
-     * @param url 背景大图地址；空地址直接忽略
+     * @param url      背景大图地址；空地址直接忽略（返回 null）
+     * @param listener 预取结果回调（成功 / 失败 / 取消），用于维护调用方的去重表，可为 null
+     * @return 取消句柄；空地址或加载器不可用时返回 null
      */
-    public static void prefetch(Context context, String url) {
-        if (TextUtils.isEmpty(url)) return;
+    public static Disposable prefetch(Context context, String url, ImageRequest.Listener listener) {
+        if (TextUtils.isEmpty(url)) return null;
         try {
             ImageLoader loader = imageLoader(context);
-            if (loader == null) return;
-            ImageRequest request = new ImageRequest.Builder(context)
+            if (loader == null) return null;
+            ImageRequest.Builder builder = new ImageRequest.Builder(context)
                     .data(url)
-                    .size(TARGET_WIDTH, TARGET_HEIGHT)
-                    .build();
-            loader.enqueue(request);
+                    .size(TARGET_WIDTH, TARGET_HEIGHT);
+            if (listener != null) builder.listener(listener);
+            return loader.enqueue(builder.build());
         } catch (Throwable e) {
             // 预取失败绝不能影响首页：真正的显示请求还会再走一次同一条链路。
             Log.w(TAG, "prefetch failed: " + url, e);
+            return null;
         }
     }
 

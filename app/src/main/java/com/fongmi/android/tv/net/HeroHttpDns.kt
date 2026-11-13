@@ -1,5 +1,6 @@
 package com.fongmi.android.tv.net
 
+import com.fongmi.android.tv.setting.Setting
 import com.github.catvod.net.OkHttp
 import okhttp3.Dns
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
@@ -17,10 +18,14 @@ import java.util.concurrent.atomic.AtomicReference
 /**
  * 多路解析竞速，**只用于 TMDB 域名**（`tmdb.org` / `themoviedb.org`）的防污染直连。
  *
- * 严格对标原版 `defpackage/x52`（`TmdbDns`）：对命中域**同时**开跑
- * 1 路系统 DNS + [PROVIDERS] 里的每一路 DoH，用 [CountDownLatch] 等 [RACE_TIMEOUT_MS]，
- * **取最先返回的非空结果**；全部超时则回落系统 DNS（原版同样行为），再不行才交给 [OkHttp.dns]。
- * 成功结果按 [TTL_MS] 缓存，避免每次图片请求都重新解析。
+ * 严格对标原版 `defpackage/x52`（`TmdbDns`），顺序逐条一致：
+ * 1. **先查接口配置的 `hosts` 映射**（`OkHttp.dns().target(...)`，只读表不发请求）；
+ * 2. 映射到纯 IP → 直接返回（系统解析对 IP 字面量不发查询）；
+ * 3. **用户自选 DoH 优先**（设置页 / 接口配置里的 `doh`）：配了就用它解析；
+ * 4. 其余 TMDB 域名：系统 DNS + [PROVIDERS] 里的每一路 DoH **同时**开跑，
+ *    用 [CountDownLatch] 等 [RACE_TIMEOUT_MS]，**取最先返回的非空结果**；
+ * 5. 全部超时则回落系统 DNS（原版同样行为），再不行才交给 [OkHttp.dns]。
+ * 成功结果按 [TTL_MS] 缓存，避免每次图片请求都重新解析（原版不缓存，这里更强）。
  *
  * 非 TMDB 域名直接转交 [OkHttp.dns]，保证接口配置的 `hosts` 映射与用户自选 DoH 仍然生效 ——
  * 这是「原版能出图、HeroUI 出不来」最容易被忽略的一环。
@@ -46,24 +51,48 @@ object HeroHttpDns : Dns {
     }
 
     override fun lookup(hostname: String): List<InetAddress> {
+        // 【原版第一步】先查接口配置里的 `hosts` 映射（`TmdbDns.lookup` 开头就是这张表）。
+        // 只读表、不发请求：命中说明用户明确把域名钉到了某个地址，竞速绝不能覆盖它。
+        val target = runCatching { OkHttp.dns().target(hostname) }.getOrDefault(hostname)
+        // 纯 IP（映射到 IP，或本来就是个 IP）：系统解析对 IP 字面量不发查询，直接返回。
+        if (IPV4.matches(target)) return Dns.SYSTEM.lookup(target)
         // 【兼容性红线】只有 TMDB 域名走多路竞速，其余域名一律交回 catvod 的 [OkHttp.dns]。
         // 接口配置里的 `hosts` 映射（奇葩源常用：把图片/接口域名钉到指定 IP）和用户自选的 DoH
         // 都只在 OkDns 里生效；如果对所有域名都强上 DoH，就会绕过它们，出现「原版有图、我们没有」。
-        if (!needsDoh(hostname)) return OkHttp.dns().lookup(hostname)
-        val cached = cache[hostname]
+        if (!needsDoh(target)) return OkHttp.dns().lookup(hostname)
+        // 【原版第二步】用户自选 DoH 优先（`TmdbDns.d`）：它自己带 hosts 映射，成功即用。
+        // 比原版多一层兜底 —— 解析失败 / 返回空时继续走竞速，不会因为一个坏 DoH 把 TMDB 图全卡死。
+        userDoh(hostname)?.let { return it }
+        val cached = cache[target]
         if (cached != null && cached.expireAt > System.currentTimeMillis()) return cached.addresses
-        val raced = race(hostname)
+        val raced = race(target)
         if (raced.isNotEmpty()) {
-            cache[hostname] = Entry(raced, System.currentTimeMillis() + TTL_MS)
+            cache[target] = Entry(raced, System.currentTimeMillis() + TTL_MS)
             return raced
         }
         // 原版行为：全部超时 → 回落系统 DNS；系统 DNS 也解析不出来才交给 catvod
         // （那里还有 hosts 映射与用户自选 DoH 兜底）。
-        return runCatching { Dns.SYSTEM.lookup(hostname) }
+        return runCatching { Dns.SYSTEM.lookup(target) }
             .getOrNull()
             ?.takeIf { it.isNotEmpty() }
             ?: OkHttp.dns().lookup(hostname)
     }
+
+    /**
+     * 用户自选的 DoH（设置页 / 接口配置里的 `doh`）。
+     *
+     * 对齐原版 `TmdbDns.a(vf0)`：只要用户配了，就用它解析，连 TMDB 域名也优先走它。
+     * 未配置时返回 null（直接进入三路竞速）。
+     */
+    private fun userDoh(hostname: String): List<InetAddress>? {
+        if (Setting.getDoh().isNullOrBlank()) return null
+        return runCatching { OkHttp.dns().lookup(hostname) }
+            .getOrNull()
+            ?.takeIf { it.isNotEmpty() }
+    }
+
+    /** 原版 `str2.matches("^[0-9.]+$")`：IPv4 字面量。 */
+    private val IPV4 = Regex("^[0-9.]+$")
 
     /**
      * TMDB 官方域名：图床 `image.tmdb.org` / `images.tmdb.org`、接口 `api.themoviedb.org`，
