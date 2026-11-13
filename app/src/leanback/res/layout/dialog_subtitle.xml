@@ -1,70 +1,96 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+    逆向照抄：tv.apk 反编译 resources/res/layout/dialog_subtitle.xml
+    （ref_docs/UI.md L119：y63 = SubtitleDialog → dialog_subtitle，基类 vg = BottomSheet 系；
+      ref_docs/VideoActivity.java L6434-6438：U0() 里 new y63() + setSubtitleView + player + show）。
+
+    与原版逐字一致的部分（不要为了「更好看」改动）：
+    - 根节点 match_parent + gravity=center + padding=24dp，横向排列；
+    - 背景 @drawable/shape_controller：原版那层「很透明的渐变黑」+ 8dp 顶部圆角（见 10.21）；
+    - 5 个按钮 large / small / up / down / reset：
+      背景 @drawable/selector_control_circle（焦点 = 30dp 红渐变实心圆，未聚焦 = 透明），
+      padding 8dp，focusable + focusableInTouchMode，app:tint 纯白；
+    - 按钮之间**没有** margin，整排居中。
+
+    唯一新增：第 6 个 search（我们的字幕搜索入口，原版没有）。
+    调用方不传 searchAction 时 SubtitleDialog 会把它设成 GONE，
+    因此直播 / 投屏打开时仍是原版 5 个按钮；只有点播（VideoActivity / TmdbDetailActivity）
+    会多这一枚。要 100% 复刻原版就删掉这一段（轨道面板里另有搜索入口）。
+-->
 <androidx.appcompat.widget.LinearLayoutCompat xmlns:android="http://schemas.android.com/apk/res/android"
-    android:layout_width="wrap_content"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
     android:layout_height="wrap_content"
-    android:background="@drawable/shape_dialog_glass_toolbar"
+    android:background="@drawable/shape_controller"
+    android:gravity="center"
     android:orientation="horizontal"
-    android:padding="16dp">
+    android:padding="24dp">
 
     <androidx.appcompat.widget.AppCompatImageView
         android:id="@+id/large"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:background="@drawable/selector_subtitle"
+        android:background="@drawable/selector_control_circle"
         android:focusable="true"
         android:focusableInTouchMode="true"
         android:padding="8dp"
-        android:src="@drawable/ic_subtitle_large" />
+        android:src="@drawable/ic_subtitle_large"
+        app:tint="@color/white" />
 
     <androidx.appcompat.widget.AppCompatImageView
         android:id="@+id/small"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:background="@drawable/selector_subtitle"
+        android:background="@drawable/selector_control_circle"
         android:focusable="true"
         android:focusableInTouchMode="true"
         android:padding="8dp"
-        android:src="@drawable/ic_subtitle_small" />
+        android:src="@drawable/ic_subtitle_small"
+        app:tint="@color/white" />
 
     <androidx.appcompat.widget.AppCompatImageView
         android:id="@+id/up"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:background="@drawable/selector_subtitle"
+        android:background="@drawable/selector_control_circle"
         android:focusable="true"
         android:focusableInTouchMode="true"
         android:padding="8dp"
-        android:src="@drawable/ic_subtitle_up" />
+        android:src="@drawable/ic_subtitle_up"
+        app:tint="@color/white" />
 
     <androidx.appcompat.widget.AppCompatImageView
         android:id="@+id/down"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:background="@drawable/selector_subtitle"
+        android:background="@drawable/selector_control_circle"
         android:focusable="true"
         android:focusableInTouchMode="true"
         android:padding="8dp"
-        android:src="@drawable/ic_subtitle_down" />
+        android:src="@drawable/ic_subtitle_down"
+        app:tint="@color/white" />
 
     <androidx.appcompat.widget.AppCompatImageView
         android:id="@+id/reset"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:background="@drawable/selector_subtitle"
+        android:background="@drawable/selector_control_circle"
         android:focusable="true"
         android:focusableInTouchMode="true"
         android:padding="8dp"
-        android:src="@drawable/ic_subtitle_reset" />
+        android:src="@drawable/ic_subtitle_reset"
+        app:tint="@color/white" />
 
     <androidx.appcompat.widget.AppCompatImageView
         android:id="@+id/search"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:background="@drawable/selector_subtitle"
+        android:background="@drawable/selector_control_circle"
         android:contentDescription="@string/subtitle_manual_search"
         android:focusable="true"
         android:focusableInTouchMode="true"
         android:padding="8dp"
-        android:src="@drawable/ic_action_search" />
+        android:src="@drawable/ic_action_search"
+        app:tint="@color/white" />
 
 </androidx.appcompat.widget.LinearLayoutCompat>

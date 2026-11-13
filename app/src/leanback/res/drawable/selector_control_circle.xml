@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    逆向照抄：tv.apk 反编译 resources/res/drawable/selector_control_circle.xml（逐字一致）。
+
+    用途：播放页弹窗右上/头部那排圆形图标按钮（原版 dialog_track 的 choose / subtitle / offset，
+    以及 dialog_subtitle 的 large / small / up / down / reset 共用这一个皮肤）。
+
+    - 焦点：居中 30dp 红渐变实心圆（@color/red → @color/red_500，angle=315）；
+    - 选中：@drawable/shape_chip_activated（细线红框）；
+    - 常态：@drawable/shape_chip_normal（透明 + 8dp/12dp 内边距）。
+
+    注意：常态/选中档会带 8dp/12dp 内边距，按钮自身再叠 8dp padding，
+    这是原版尺寸（图标四周留白），不要为了「看起来更紧凑」把它改小。
+-->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:state_focused="true">
+        <layer-list>
+            <item
+                android:gravity="center"
+                android:height="30dp"
+                android:width="30dp">
+                <shape android:shape="oval">
+                    <gradient
+                        android:startColor="@color/red"
+                        android:endColor="@color/red_500"
+                        android:angle="315"
+                        android:type="linear" />
+                </shape>
+            </item>
+        </layer-list>
+    </item>
+    <item
+        android:state_selected="true"
+        android:drawable="@drawable/shape_chip_activated" />
+    <item android:drawable="@drawable/shape_chip_normal" />
+</selector>

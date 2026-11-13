@@ -1006,3 +1006,64 @@ e: HeroDetailStateManager.kt:703:21 Unresolved reference 'requestDetailFocus'.
 改法：`requestDetailFocus` 从 `HeroDetailActivity.kt` **原样迁到** `HeroDetailStateManager.kt`，作为 `private` 成员紧贴 `restoreFocus`，函数体一字未改（`FocusRequester` import 该文件本来就有）。详情页保持零 Compose，状态机自洽。
 
 复检方式换成「先枚举全部被删符号 → 再全局扫所有 `.kt` / `.java`，跳过注释行」：`check_round13.py` 覆盖 25 个被删符号（含 `HeroDialogShell` / `rememberHeroImageModel` / `HeroDetailAction` / `DETAIL_ACTIONS` / `POSTER_SHAPE` / `DETAIL_*` 常量等），除 `requestDetailFocus`（现定义在 StateManager）外**零代码引用**；同时确认 `HeroDetailStateManager` 有 1 处定义 + 3 处调用、`HeroDetailActivity` 无 Compose import 且仍保留 `DETAIL_ACTION_PLAY`。
+
+### 10.23 播放页「字幕」面板照抄逆向 dialog_subtitle（2026-11-13，未提交）
+
+用户要求：**播放控制栏点「字幕」后弹出的面板，按 `ref_docs` 里的逆向数据照抄一份，替换掉现在 WebHTV 的弹窗。**
+
+#### ① 逆向数据在哪里（`ref_docs` 只有索引，本体在本机反编译包）
+
+`ref_docs` 里没有 `dialog_subtitle.xml` / `y63.java` 本体，只有 3 条索引：
+
+- `ref_docs/UI.md` L119：`y63` = SubtitleDialog → `dialog_subtitle`；L143：基类 `vg` = BottomSheet 系；
+- `ref_docs/VideoActivity.java` L6434-6438：`U0()` 里 `new y63()` + `setSubtitleView(...)` + `player` + `show(...)`。
+
+真正的原件在本机反编译包（目录名是乱码，PowerShell 直接写全路径会失败，必须先用 `Get-ChildItem -Recurse -Filter <name>` 解析出 `.FullName`，再 `Get-Content -LiteralPath`）：
+
+- 布局：`C:\Users\Administrator\Desktop\fsdownload\…\decomp\resources\res\layout\dialog_subtitle.xml`
+- 类：`C:\Users\Administrator\Desktop\fsdownload\…\decomp\sources\defpackage\y63.java`
+- 皮肤：`C:\Users\Administrator\Desktop\fsdownload\…\decomp\resources\res\drawable\selector_control_circle.xml`
+
+#### ② 原版规格（逐字）
+
+| 项 | 原版值 |
+| --- | --- |
+| 根节点 | `LinearLayoutCompat`，`layout_width=match_parent`、`layout_height=wrap_content`、`gravity=center`、`orientation=horizontal`、`padding=24dp` |
+| 根背景 | `@drawable/shape_controller`（10.21 恢复的 `black_20 → black_50` 竖向渐变 + 8dp 顶圆角） |
+| 按钮 | `large` / `small` / `up` / `down` / `reset` 五个 `AppCompatImageView`，顺序与 id 一致 |
+| 按钮样式 | 背景 `@drawable/selector_control_circle`、`padding=8dp`、`focusable` + `focusableInTouchMode`、`app:tint=@color/white`、**按钮之间无 margin** |
+| 焦点皮肤 | `selector_control_circle` 的 focused 档 = 居中 30dp `oval`，`@color/red → @color/red_500`，`angle=315` linear 渐变 |
+| 常态 / 选中 | `shape_chip_normal`（透明，8dp/12dp 内边距）/ `shape_chip_activated`（细线红框） |
+| 步长 | 位置 ±`0.005f`（`SubtitleView.l`）、字号 ±`0.002f`（`SubtitleView.i`，并同步 `j = i / 0.0533f`） |
+| 重置 | `subtitle_text_size` / `subtitle_position` 各写 `0.0f`，再把 `i = 0.0533f`、`j = 1.0f`、`l = 0.0f` 后 `c()` 重绘 |
+| 落盘 | 每次点击都 `vx0.S(value, "subtitle_position" / "subtitle_text_size")`，随后 `d0()`（`tc2.c.p()`，把设置推给播放器） |
+| 窗口（`y63.F()`） | `setBackgroundDrawable(new ColorDrawable(0))`、decorView padding 清零、`width = 屏幕宽`、`height = -2`、`gravity = 80 (BOTTOM)`、`y = 0`，100ms 后再调 `f0()` |
+| 底部表（`y63.f0()`） | `design_bottom_sheet` 背景置 0、`layout_gravity = 87 (BOTTOM|CENTER_HORIZONTAL)`、`L(3)` 展开 + `I(true)` / `K = true` / `L = false` 三个标志位 + `l = Integer.MAX_VALUE`（解除 640dp 上限）；并把根 View 宽度改成屏幕宽、递归清零 padding（`e0`） |
+| 去重 | `g0()`：当前已有 `y63` 实例就不再弹第二个 |
+
+#### ③ 改法（3 个文件，只动 leanback 播放页）
+
+1. **新增 `app/src/leanback/res/drawable/selector_control_circle.xml`**：与逆向原件逐字一致（30dp 红渐变实心圆 + `shape_chip_activated` / `shape_chip_normal` 三档），文件头注释写明来源与「8dp/12dp 内边距是原版尺寸，不要改小」。
+2. **重写 `app/src/leanback/res/layout/dialog_subtitle.xml`**：根节点五个属性、5 个按钮的全部属性与逆向逐字对齐；旧的 `shape_dialog_glass_toolbar` + `selector_subtitle` + 固定 `wrap_content` 全部去掉。
+3. **`SubtitleDialog.java`**：
+   - `transparent()` 由 `isFull()` 改成 `Util.isLeanback() || isFull()`（原版 `y63.F()` 一律 `new ColorDrawable(0)`，`vg.V()` 里 `c0()` 为真时再把 `design_bottom_sheet` 刷成透明 —— 我们的 `transparent()` 钩子就是这两件事）；
+   - 新增 `fullWidth()`（仅 `Util.isLeanback()`），复用 `BaseBottomSheetDialog` 已有钩子执行 `behavior.setMaxWidth(Integer.MAX_VALUE)`，对齐 `y63.f0()` 的 `l = Integer.MAX_VALUE`；
+   - **不覆写 `stableOverlay()`**：原版基类 `vg.V()` 只做 `setSoftInputMode(16)` + 全屏时 `addFlags(1024)`，**没有** `clearFlags(FLAG_DIM_BEHIND)`（对比轨道弹窗基类 `rg.V()` 明确清了），所以字幕面板在原版里同样带 Material 默认压暗。我们的默认分支与 `vg.V()` 逐条相同（`ADJUST_RESIZE` + 全屏 `FLAG_FULLSCREEN`），保持默认即可，不为「好看」额外去掉 dim；
+   - `onResume()` 分两路：leanback 走 `MATCH_PARENT × WRAP_CONTENT` + `Gravity.BOTTOM|CENTER_HORIZONTAL` + `y = 0`（对齐 `y63.F()`）；手机端仍是原来的 `ResUtil.dp2px(isFull() ? 232 : 216)`。`BaseBottomSheetDialog` 没有额外 padding，`y63.e0()` 的递归清零不需要复刻。
+   - 点击行为**一行未改**：`POSITION_STEP = 0.005f`、`TEXT_STEP = 0.002f`、`DEFAULT_TEXT_SIZE = 0.0533f`、`onReset` 写 0 后 `subtitleView.reset()` —— 与原版 `y63.a0()` 的数值和顺序本来就一致；`isNativeSubtitleStyle()`（MPV 原生字幕，`NATIVE_POSITION_STEP = 0.05f`）是本项目既有适配，保留。
+
+#### ④ 唯一偏离：多一枚 `search` 按钮
+
+原版面板只有 5 个按钮。本项目点播页的「手动搜索字幕」入口挂在 `SubtitleDialog.search(...)` 上（`VideoActivity.onSubtitleClick()`、`TmdbDetailActivity` 两处调用方），删掉会丢功能，因此布局末尾多第 6 个 `search`（`ic_action_search`，同一套 `selector_control_circle` 皮肤），并在 `initView()` 里按 `searchAction == null` 置 `GONE`：
+
+- 直播（`LiveActivity`）/ 投屏（`CastActivity`）不传 `searchAction` → 仍是原版 5 个按钮；
+- 点播 → 6 个。
+
+布局注释已写明「删掉这一段即 100% 复刻」；若以后把搜索入口并回轨道面板，可一行删除。
+
+#### 验证与回滚
+
+- 静态（`check_round14.py` + `seldiff.py` + `layoutdiff.py`）：两个新 XML 可解析；根节点 `match_parent` / `shape_controller` / `24dp` / `center` / `horizontal` 全部命中且无 `shape_dialog_glass_toolbar` / `selector_subtitle` 残留；6 个按钮的 `selector_control_circle` / `src` / `tint` / `padding` / `focusable` 逐项通过、无 margin；`selector_control_circle.xml` 剥离注释后与逆向原件**逐行 IDENTICAL**（仅 `/>` 前空格差异）；`layoutdiff.py` 证明根属性完全相同、前 5 个子节点属性逐个相同、只多 `search`；`SubtitleDialog.java` 的 `transparent()` / `fullWidth()` 与 `onResume` 分支命中、**无 `stableOverlay()` 覆写**、手机端 `232 : 216` 保留、`onResume` 只有 1 处、括号配平、binding id 全部在布局中；引用资源（`shape_controller` / `shape_chip_*` / `ic_subtitle_*` / `ic_action_search`）与颜色（`red` / `red_500` / `white`）均存在；`git diff --check` 无空白错误。**未编译**（按用户要求只出 diff）。
+- 顺带确认：`selector_subtitle.xml` / `shape_subtitle_focused.xml` / `shape_subtitle_pressed.xml` 在本轮后已无任何引用（死资源），本轮**未删**，留作后续瘦身项。
+- 待真机验证：① 直播 / 投屏点「字幕」= 原版 5 个圆钮，点播 = 6 个；② 焦点态是 30dp 红渐变实心圆、未聚焦完全透明，按钮之间无空隙；③ 面板全宽贴底、透明渐变黑（顶部 20% 黑 → 底部 50% 黑 + 8dp 顶圆角），面板外仍是 Material 默认压暗（与原版 `vg.V()` 一致；轨道面板不同，那个基类 `rg.V()` 清了 dim）；④ 大小 / 上下 / 重置四个键的步长、重置值、落盘与重启后保持均与以前一致（MPV 原生字幕仍走 `NATIVE_POSITION_STEP`）。
+- 回滚：`git checkout -- app/src/leanback/res/layout/dialog_subtitle.xml app/src/main/java/com/fongmi/android/tv/ui/dialog/SubtitleDialog.java`，并删除 `app/src/leanback/res/drawable/selector_control_circle.xml`。

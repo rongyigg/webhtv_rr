@@ -1,8 +1,11 @@
 package com.fongmi.android.tv.ui.dialog;
 
+import android.view.Gravity;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.Window;
+import android.view.WindowManager;
 import android.widget.ImageView;
 
 import androidx.annotation.NonNull;
@@ -60,9 +63,23 @@ public final class SubtitleDialog extends BaseBottomSheetDialog {
         return Util.isFullscreen(getActivity());
     }
 
+    /**
+     * 逆向对齐 `y63.F()`：原版一律把窗口背景设成透明（`new ColorDrawable(0)`），
+     * 面板底色完全交给布局根节点的 `@drawable/shape_controller`。
+     * 手机端仍按原来的「全屏才透明」走，避免影响手机播放页那套玻璃小条。
+     */
     @Override
     protected boolean transparent() {
-        return isFull();
+        return Util.isLeanback() || isFull();
+    }
+
+    /**
+     * 逆向对齐 `y63.f0()` 的 `bottomSheetBehavior.l = Integer.MAX_VALUE`：
+     * 解除 Material3 的 640dp 宽度上限，面板才能像原版一样铺满屏幕宽度。
+     */
+    @Override
+    protected boolean fullWidth() {
+        return Util.isLeanback();
     }
 
     @Override
@@ -167,6 +184,20 @@ public final class SubtitleDialog extends BaseBottomSheetDialog {
     @Override
     public void onResume() {
         super.onResume();
-        getDialog().getWindow().setLayout(ResUtil.dp2px(isFull() ? 232 : 216), -1);
+        Window window = getDialog() == null ? null : getDialog().getWindow();
+        if (window == null) return;
+        if (Util.isLeanback()) {
+            // 逆向对齐 y63.F()：width = 屏幕宽、height = wrap_content、gravity = BOTTOM、y = 0。
+            // 原版还会把 decorView 与 design_bottom_sheet 的 padding 递归清零（y63.e0），
+            // 我们的 BaseBottomSheetDialog 没有额外 padding，这里不需要再走一遍。
+            WindowManager.LayoutParams params = window.getAttributes();
+            params.width = WindowManager.LayoutParams.MATCH_PARENT;
+            params.height = WindowManager.LayoutParams.WRAP_CONTENT;
+            params.gravity = Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL;
+            params.y = 0;
+            window.setAttributes(params);
+            return;
+        }
+        window.setLayout(ResUtil.dp2px(isFull() ? 232 : 216), -1);
     }
 }
