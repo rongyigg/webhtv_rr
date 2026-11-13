@@ -815,14 +815,27 @@ public final class TrackDialog extends BaseBottomSheetDialog implements TrackAda
         dismiss();
     }
 
+    /**
+     * 逆向对齐 `ref_docs/dialog_track.xml` + 基类 `rg.V()`：
+     * - 窗口背景透明，面板底色交给根节点的 `@drawable/shape_controller`；
+     * - 只清 `FLAG_DIM_BEHIND`、不压暗视频（与轨道面板 TrackPanelDialog 同一套约定）；
+     * - 解除 Material3 的 640dp 宽度上限，面板全宽贴底。
+     * 手机 flavor 本来就是 `transparent()/stableOverlay() == true`，行为不变；
+     * `fullWidth()` 只在电视上生效。
+     */
     @Override
     protected boolean transparent() {
-        return !Util.isLeanback();
+        return true;
     }
 
     @Override
     protected boolean stableOverlay() {
-        return !Util.isLeanback();
+        return true;
+    }
+
+    @Override
+    protected boolean fullWidth() {
+        return Util.isLeanback();
     }
 
     private final ActivityResultLauncher<Intent> launcher = registerForActivityResult(new ActivityResultContracts.StartActivityForResult(), result -> {

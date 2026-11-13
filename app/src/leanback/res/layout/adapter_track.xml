@@ -1,14 +1,32 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+    轨道 / 字幕列表行（逆向 dialog_track.xml 的行观感，与双列轨道面板 adapter_track_panel 同款）：
+    - 16sp，includeFontPadding=false + 上下 3dp，约 25dp 紧凑行高；
+    - 左侧 24dp 由 dialog_track 的 RecyclerView padding 提供，行内只留 4dp 文字内边距；
+    - 焦点（遥控器当前行）：整行统一渐变红长条 @drawable/selector_track_panel_item，
+      文字转纯白；
+    - 已选中（当前生效轨道）但未聚焦：透明背景 + 红字（@color/selector_track_text 的 activated 档）；
+    - 普通：透明背景 + 白字。
+
+    注意：TrackAdapter 用的是 setActivated(item.isSelected())，不是 setSelected，
+    所以文字颜色选择器必须写 android:state_activated。
+-->
 <com.google.android.material.textview.MaterialTextView xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools"
     android:id="@+id/text"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
-    android:background="@drawable/selector_dialog_glass_chip"
+    android:background="@drawable/selector_track_panel_item"
     android:ellipsize="marquee"
     android:focusable="true"
     android:focusableInTouchMode="true"
+    android:gravity="center_vertical"
+    android:includeFontPadding="false"
+    android:paddingStart="4dp"
+    android:paddingTop="3dp"
+    android:paddingEnd="12dp"
+    android:paddingBottom="3dp"
     android:singleLine="true"
-    android:textColor="@color/selector_dialog_glass_chip_text"
-    android:textSize="14sp"
+    android:textColor="@color/selector_track_text"
+    android:textSize="16sp"
     tools:text="中文、哥斯拉.srt" />

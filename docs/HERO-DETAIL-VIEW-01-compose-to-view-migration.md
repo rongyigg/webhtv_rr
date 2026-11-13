@@ -1067,3 +1067,36 @@ e: HeroDetailStateManager.kt:703:21 Unresolved reference 'requestDetailFocus'.
 - 顺带确认：`selector_subtitle.xml` / `shape_subtitle_focused.xml` / `shape_subtitle_pressed.xml` 在本轮后已无任何引用（死资源），本轮**未删**，留作后续瘦身项。
 - 待真机验证：① 直播 / 投屏点「字幕」= 原版 5 个圆钮，点播 = 6 个；② 焦点态是 30dp 红渐变实心圆、未聚焦完全透明，按钮之间无空隙；③ 面板全宽贴底、透明渐变黑（顶部 20% 黑 → 底部 50% 黑 + 8dp 顶圆角），面板外仍是 Material 默认压暗（与原版 `vg.V()` 一致；轨道面板不同，那个基类 `rg.V()` 清了 dim）；④ 大小 / 上下 / 重置四个键的步长、重置值、落盘与重启后保持均与以前一致（MPV 原生字幕仍走 `NATIVE_POSITION_STEP`）。
 - 回滚：`git checkout -- app/src/leanback/res/layout/dialog_subtitle.xml app/src/main/java/com/fongmi/android/tv/ui/dialog/SubtitleDialog.java`，并删除 `app/src/leanback/res/drawable/selector_control_circle.xml`。
+
+### 10.24 字幕按钮真正弹出的弹窗：轨道列表换成逆向 dialog_track（2026-11-13，未提交）
+
+10.23 提交 `c4013451a` 后用户实测反馈：**点播放控制栏「字幕」，弹出来的还是 WebHTV 原来的字幕弹窗，逆向面板没接上。**
+
+#### ① 根因：字幕按钮打开的不是 `dialog_subtitle`，而是 `dialog_track`
+
+逆向证据链：
+
+- `ref_docs/VideoActivity.java` L282-288：`t2(VideoActivity, View)` 把按钮的 `android:tag` 当轨道类型，`new ph3()`（TrackDialog）并 `g0(activity)` 注册监听；
+- `ref_docs/dialog_track.xml`：根节点 `@drawable/shape_controller`，头部有 `choose` / `subtitle` / `offset` 三个 `selector_control_circle` 圆钮，下面同时有双列 `track_content`（视频/音频）和单列 `recycler`（字幕）；
+- `ref_docs/VideoActivity.java` L6432-6439：`U0()`（`oh3` 接口，即 TrackDialog 的 `onSubtitleClick`）才 `new y63()` 弹出 5 圆钮面板。
+
+也就是说原版的层级是：**字幕按钮 → 字幕轨道列表（dialog_track）→ 头部「字幕设置」圆钮 → 5 圆钮面板（dialog_subtitle）**。我们上一轮只替换了二级的 `dialog_subtitle`，而一级的字幕列表在 leanback 用的是 `app/src/leanback/res/layout/dialog_track.xml`，还是老的玻璃卡片 + 14sp 胶囊行 + 系统压暗 + 640dp 窄卡 —— 用户点字幕看到的就是它。
+
+本项目对应代码：`VideoActivity` L4914 `osdText → onTrack(3)`；`TrackDialog` 的头部 `subtitle` 图标 → `listener::onSubtitleClick`（L572）→ `SubtitleDialog`。接线本来就与原版一致，缺的是这个列表的皮肤。
+
+#### ② 改法（只动 leanback；手机 flavor 与 AI/搜索入口全部保留）
+
+1. `app/src/leanback/res/layout/dialog_track.xml`（重写）：
+   - 根背景 `@drawable/shape_dialog_glass_panel` → **`@drawable/shape_controller`**（透明渐变黑 + 8dp 顶圆角）；
+   - 头部内边距 24/24/24/**8**dp（原版 `header` 同值）；
+   - `choose` / `search` / `ai` / `realtimeAi` / `aiRegenerate` / `subtitle` / `offset` 七个图标统一换成 **`@drawable/selector_control_circle` + 8dp padding + `app:tint=@color/white` + marginStart 16dp**（原版圆钮皮肤）；`secondary` 文字开关保留；
+   - 列表 `maxHeight` 204dp → **160dp**、`paddingBottom=24dp`（原版单列 `recycler` 同值）。
+2. `app/src/leanback/res/layout/adapter_track.xml`（重写）：行样式对齐 10.19 的双列轨道行 —— 16sp、`includeFontPadding=false` + 上下 3dp（约 25dp 紧凑行高）、行内 4dp/12dp、焦点 `@drawable/selector_track_panel_item`（统一渐变红长条）、选中红字、普通白字；去掉 `selector_dialog_glass_chip` 与 14sp。
+3. 新增 `app/src/leanback/res/color/selector_track_text.xml`：焦点白 / `state_activated` 红（`@color/osd_focus`）/ 普通白。`TrackAdapter` 用的是 `setActivated`，所以必须写 activated 档。
+4. `TrackDialog.java`：`transparent()` / `stableOverlay()` 由 `!Util.isLeanback()` 改成 **恒 `true`**（手机端本来就是 true，行为不变），新增 `fullWidth()` = `Util.isLeanback()`。效果：电视上窗口透明、不压暗视频、解除 640dp 上限，与 `TrackPanelDialog` 完全同款；原版 `rg.V()` 同样清 dim。
+
+#### 验证与回滚
+
+- 静态（`check_round15.py`）：三个 XML 可解析；`dialog_track` 根背景 = `shape_controller` 且无 `shape_dialog_glass_panel`、头部 8dp、七个圆钮全部 `selector_control_circle` + 8dp + 白 tint、`maxHeight=160dp`；`adapter_track` 为 16sp + 紧凑行高 + 渐变红焦点 + 红字选中且无 glass chip / 14sp；`selector_track_text` 三档颜色齐全；`TrackDialog` 的 `transparent()/stableOverlay()` 恒 true、`fullWidth()` 仅 leanback、括号配平、所有 `binding.*` id 都在布局中；引用 drawable / 颜色全部存在；`git diff --check` 无空白错误。**未编译**。
+- 待真机验证：① 点「字幕」→ 面板应全宽贴底、透明渐变黑、不压暗视频；② 头部一排圆形图标，焦点是 30dp 红渐变实心圆、未聚焦透明；③ 字幕行 16sp 紧凑排列，焦点整行渐变红、当前生效字幕红字；④ 点头部「字幕设置」圆钮 → 5 圆钮面板（10.23 的 `dialog_subtitle`）；⑤ 直播 / 投屏的「音轨 / 视轨」列表同样变全宽透明样式，选项切换与 AI / 搜索入口不受影响。
+- 回滚：`git checkout -- app/src/leanback/res/layout/dialog_track.xml app/src/leanback/res/layout/adapter_track.xml app/src/main/java/com/fongmi/android/tv/ui/dialog/TrackDialog.java`，并删除 `app/src/leanback/res/color/selector_track_text.xml`。

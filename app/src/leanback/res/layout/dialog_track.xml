@@ -1,11 +1,22 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+    播放页「字幕 / 音轨 / 视轨」轨道列表弹窗（逆向 ref_docs/dialog_track.xml 的单列形态）。
+    - 外壳与轨道面板同源：根节点 @drawable/shape_controller（很透明的渐变黑
+      black_20 → black_50 + 8dp 顶部圆角），全宽贴底；
+    - 头部 24dp / 24dp / 24dp / 8dp，标题 16sp 白字；
+    - 头部图标按钮统一 @drawable/selector_control_circle（焦点 30dp 红渐变实心圆、
+      未聚焦透明）+ 8dp padding + 纯白 tint，与原版 dialog_track 的 choose / subtitle / offset 一致；
+    - 列表行见 adapter_track.xml：16sp、紧凑行高、焦点渐变红长条、选中红字。
+-->
 <androidx.appcompat.widget.LinearLayoutCompat xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     xmlns:tools="http://schemas.android.com/tools"
+    android:id="@+id/root"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
-    android:background="@drawable/shape_dialog_glass_panel"
-    android:orientation="vertical">
+    android:background="@drawable/shape_controller"
+    android:orientation="vertical"
+    android:paddingBottom="0dp">
 
     <androidx.appcompat.widget.LinearLayoutCompat
         android:layout_width="match_parent"
@@ -14,7 +25,7 @@
         android:orientation="horizontal"
         android:paddingHorizontal="24dp"
         android:paddingTop="24dp"
-        android:paddingBottom="16dp">
+        android:paddingBottom="8dp">
 
         <com.google.android.material.textview.MaterialTextView
             android:id="@+id/title"
@@ -29,6 +40,7 @@
             android:id="@+id/secondary"
             android:layout_width="wrap_content"
             android:layout_height="36dp"
+            android:layout_marginStart="16dp"
             android:background="?attr/selectableItemBackgroundBorderless"
             android:focusable="true"
             android:gravity="center"
@@ -43,10 +55,13 @@
             android:id="@+id/choose"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:background="?attr/selectableItemBackgroundBorderless"
+            android:layout_marginStart="16dp"
+            android:background="@drawable/selector_control_circle"
             android:focusable="true"
+            android:padding="8dp"
             android:src="@drawable/ic_action_choose"
             android:visibility="gone"
+            app:tint="@color/white"
             tools:visibility="visible" />
 
         <androidx.appcompat.widget.AppCompatImageView
@@ -54,11 +69,13 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginStart="16dp"
-            android:background="?attr/selectableItemBackgroundBorderless"
+            android:background="@drawable/selector_control_circle"
             android:contentDescription="@string/subtitle_manual_search"
             android:focusable="true"
+            android:padding="8dp"
             android:src="@drawable/ic_action_search"
             android:visibility="gone"
+            app:tint="@color/white"
             tools:visibility="visible" />
 
         <androidx.appcompat.widget.AppCompatImageView
@@ -66,11 +83,13 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginStart="16dp"
-            android:background="?attr/selectableItemBackgroundBorderless"
+            android:background="@drawable/selector_control_circle"
             android:contentDescription="@string/subtitle_ai_translate_action"
             android:focusable="true"
+            android:padding="8dp"
             android:src="@drawable/ic_action_ai"
             android:visibility="gone"
+            app:tint="@color/white"
             tools:visibility="visible" />
 
         <androidx.appcompat.widget.AppCompatImageView
@@ -78,11 +97,13 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginStart="16dp"
-            android:background="?attr/selectableItemBackgroundBorderless"
+            android:background="@drawable/selector_control_circle"
             android:contentDescription="@string/subtitle_realtime_action"
             android:focusable="true"
+            android:padding="8dp"
             android:src="@drawable/ic_action_realtime_subtitle"
             android:visibility="gone"
+            app:tint="@color/white"
             tools:visibility="visible" />
 
         <androidx.appcompat.widget.AppCompatImageView
@@ -90,11 +111,13 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginStart="16dp"
-            android:background="?attr/selectableItemBackgroundBorderless"
+            android:background="@drawable/selector_control_circle"
             android:contentDescription="@string/subtitle_ai_regenerate_action"
             android:focusable="true"
+            android:padding="8dp"
             android:src="@drawable/ic_action_refresh"
             android:visibility="gone"
+            app:tint="@color/white"
             tools:visibility="visible" />
 
         <androidx.appcompat.widget.AppCompatImageView
@@ -102,10 +125,12 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginStart="16dp"
-            android:background="?attr/selectableItemBackgroundBorderless"
+            android:background="@drawable/selector_control_circle"
             android:focusable="true"
+            android:padding="8dp"
             android:src="@drawable/ic_action_subtitle"
             android:visibility="gone"
+            app:tint="@color/white"
             tools:visibility="visible" />
 
         <androidx.appcompat.widget.AppCompatImageView
@@ -113,10 +138,12 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginStart="16dp"
-            android:background="?attr/selectableItemBackgroundBorderless"
+            android:background="@drawable/selector_control_circle"
             android:focusable="true"
+            android:padding="8dp"
             android:src="@drawable/ic_action_offset"
             android:visibility="gone"
+            app:tint="@color/white"
             tools:visibility="visible" />
 
     </androidx.appcompat.widget.LinearLayoutCompat>
@@ -180,7 +207,7 @@
         android:paddingEnd="24dp"
         android:paddingBottom="24dp"
         app:layoutManager="androidx.recyclerview.widget.LinearLayoutManager"
-        app:maxHeight="204dp"
+        app:maxHeight="160dp"
         tools:listitem="@layout/adapter_track" />
 
 </androidx.appcompat.widget.LinearLayoutCompat>

@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    轨道 / 字幕列表文字颜色：
+    - 焦点：纯白（背景是统一渐变红长条，红底上必须用白字）；
+    - 已选中但未聚焦：红字 @color/osd_focus（= osd_red_end #E53935），与原版「选中行只有红字」一致；
+    - 普通：白字。
+    TrackAdapter 用 setActivated() 标记选中，所以这里用 state_activated。
+-->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <item
+        android:color="@color/white"
+        android:state_focused="true" />
+    <item
+        android:color="@color/osd_focus"
+        android:state_activated="true" />
+    <item android:color="@color/white" />
+</selector>
