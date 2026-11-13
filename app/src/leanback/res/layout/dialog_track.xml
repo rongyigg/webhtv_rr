@@ -4,8 +4,8 @@
     - 外壳与轨道面板同源：根节点 @drawable/shape_controller（很透明的渐变黑
       black_20 → black_50 + 8dp 顶部圆角），全宽贴底；
     - 头部 24dp / 24dp / 24dp / 8dp，标题 16sp 白字；
-    - 头部图标按钮统一 @drawable/selector_control_circle（聚焦 / 未聚焦都是透明，
-      选中才是细线红框）+ 8dp padding + 纯白 tint，与原版 dialog_track 的 choose / subtitle / offset 一致；
+    - 头部图标按钮统一 @drawable/selector_control_circle（焦点 30dp 红渐变实心圆、
+      未聚焦透明）+ 8dp padding + 纯白 tint，与原版 dialog_track 的 choose / subtitle / offset 一致；
     - 列表行见 adapter_track.xml：16sp、紧凑行高、焦点渐变红长条、选中红字。
 -->
 <androidx.appcompat.widget.LinearLayoutCompat xmlns:android="http://schemas.android.com/apk/res/android"

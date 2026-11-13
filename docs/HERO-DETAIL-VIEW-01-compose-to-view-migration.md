@@ -1238,3 +1238,73 @@ private void onOffset(View view) {
 - 静态（`check_round17.py`）：`TrackDialog.onOffset` 含 `dismiss()`；`BaseSideSheetDialog` 含 `stableOverlay()` 与 `clearFlags`/`setDimAmount(0f)` 且默认 `return false`；`OffsetDialog.SideSheet` 覆写返回 `true`；`selector_control_circle.xml` 无 `state_focused`、无 `layer-list`、无 `@color/red`，且 `state_selected` / `shape_chip_activated` / `shape_chip_normal` 都在；两个布局注释已改；三个 XML 可解析；`git diff --check` 无空白错误。**未编译**（按用户要求只出 diff）。
 - 待真机验证：① 字幕列表头部点偏移圆钮 → 字幕列表立刻消失，只剩右侧偏移面板；② 偏移面板外面视频**不压暗**（与原亮度基本一致，只剩 Material 自带的淡 scrim）；③ 关闭偏移面板回到播放页，字幕偏移生效；④ 5 圆钮面板（large / small / up / down / reset）遥控器聚焦时**没有红圈**，图标纯白、背景透明；⑤ 轨道列表头部 7 钮聚焦同样无红圈；⑥ 非播放页的其它侧边栏（若有）仍按默认压暗；⑦ 手机端偏移弹窗行为不变。
 - 回滚：`git checkout -- app/src/main/java/com/fongmi/android/tv/ui/dialog/TrackDialog.java app/src/main/java/com/fongmi/android/tv/ui/dialog/BaseSideSheetDialog.java app/src/main/java/com/fongmi/android/tv/ui/dialog/OffsetDialog.java app/src/leanback/res/drawable/selector_control_circle.xml app/src/leanback/res/layout/dialog_subtitle.xml app/src/leanback/res/layout/dialog_track.xml`。
+
+### 10.27 遮罩真凶：AppCompat 主题链在 show() 时把 dim 加回来了；聚焦回退红圆（2026-11-13，未提交）
+
+10.26 提交 `07ad7df56` 后用户实测反馈两条：
+
+> 「修改偏移遮罩还是太黑了不透明，原版几乎是透明看不到在遮罩。顶部按钮焦点现在都看不到了，返回到上一版吧。」
+
+#### ① 聚焦：10.26 的「透明」是错的，回退
+
+透明聚焦在遥控器上等于**没有焦点指示**（纯白图标 + 无背景，看不出停在哪一枚）。10.26 之所以那样改，是拿「用户实测原版聚焦透明」当依据；实测下来这条不成立，按用户要求回退到上一版（`b782c415f` 里的逆向原件）：
+
+- `selector_control_circle.xml` 恢复 focused 档：居中 30dp 红渐变实心圆（`@color/red` → `@color/red_500`，angle=315）；
+- `dialog_subtitle.xml` / `dialog_track.xml` 的头部注释恢复「焦点 = 30dp 红渐变实心圆，未聚焦 = 透明」。
+
+三个文件用 `git checkout b782c415f -- <paths>` 整份还原，不手工拼。
+
+#### ② 遮罩为什么「改了还是黑」：清 dim 的时机错了
+
+10.26 的结论（「我们额外吃了应用主题的 `backgroundDimEnabled=true`」）**不对**，真正的原因在 SideSheet 自己的主题链：
+
+```
+ThemeOverlay.Material3.SideSheetDialog            (material)
+  → Base.V14.ThemeOverlay.Material3.SideSheetDialog   windowIsFloating=false / windowBackground=transparent
+  → Base.ThemeOverlay.Material3.Dialog
+  → Base.ThemeOverlay.MaterialComponents.Dialog
+  → Base.V14.ThemeOverlay.MaterialComponents.Dialog
+  → ThemeOverlay.AppCompat.Dialog                 (appcompat)
+  → Base.ThemeOverlay.AppCompat.Dialog
+  → Base.V7.ThemeOverlay.AppCompat.Dialog         ★ android:backgroundDimEnabled = true
+```
+
+（链路由 `material-1.14.0.aar` 与 `appcompat-1.8.0.aar` 的 `res/values/values.xml` 逐层 `parent=` 解析得到。）
+
+`Dialog.show()` 的顺序是：`dispatchOnCreate` → `onStart` → `mDecor = mWindow.getDecorView()`（这里触发 `PhoneWindow.generateLayout()`）→ `addView` → `sendShowMessage()`。`generateLayout()` 末尾会读主题：
+
+```java
+if (a.getBoolean(R.styleable.Window_backgroundDimEnabled, mIsFloating)) {
+    if ((params.flags & FLAG_DIM_BEHIND) == 0) params.flags |= FLAG_DIM_BEHIND;
+    params.dimAmount = a.getFloat(R.styleable.Window_backgroundDimAmount, 0.5f);
+}
+```
+
+所以 10.26 在 `onCreateDialog` 里 `clearFlags` 之后，`generateLayout()` 又把 `FLAG_DIM_BEHIND` + `dimAmount`（Material3 dialog 主题给的是 `m3_comp_scrim_container_opacity` ≈ 0.32）加了回来 —— 表现就是「改完还是黑」。
+
+改法：**在 `show()` 之后再清一次**。
+
+1. `BaseSideSheetDialog` 抽出 `private void clearDim(Window window)`：取 `getAttributes()`，`flags &= ~FLAG_DIM_BEHIND`、`dimAmount = 0f`，再 `window.setAttributes(params)`（窗口已 attach 时 `Dialog.onWindowAttributesChanged` 会 `updateViewLayout`，立即生效，不用重建 Dialog）。
+2. `onCreateDialog` 里保留一次 `clearDim(window)`（避免首帧闪一下），并注册 `dialog.setOnShowListener(...)` 在 show 之后再来一次 —— `OnShowListener` 由 `sendShowMessage()` 在主线程 post，必定晚于 `generateLayout()` 与 `addView`。
+3. 只在 `stableOverlay()==true` 时做，默认 `false` 的侧边栏行为不变。
+
+对照逆向：原版 `ci.V()` 只有 `jx2Var.f().g = false`（不可拖拽）+ 全屏时 `window.addFlags(1024)`（`FLAG_FULLSCREEN`），从不加 dim；`y63.F()`（字幕底部面板）也只是 `setBackgroundDrawable(new ColorDrawable(0))` + 清 decor padding。所以「原版几乎没有遮罩」= 原版压根没开 dim。
+
+#### ③ 改动清单（本轮 4 个文件）
+
+| 文件 | 改动 |
+| --- | --- |
+| `app/src/leanback/res/drawable/selector_control_circle.xml` | 回退到 `b782c415f`（恢复 focused 30dp 红渐变实心圆） |
+| `app/src/leanback/res/layout/dialog_subtitle.xml` | 回退注释 |
+| `app/src/leanback/res/layout/dialog_track.xml` | 回退注释 |
+| `app/src/main/java/com/fongmi/android/tv/ui/dialog/BaseSideSheetDialog.java` | 新增 `clearDim(Window)`；`onCreateDialog` 内 `stableOverlay()` 时先清一次 + `setOnShowListener` 里再清一次 |
+
+`TrackDialog.dismiss()`、`OffsetDialog.SideSheet.stableOverlay()==true` 保留（10.26 已提交，行为正确）。
+
+**同类隐患（本轮不动）**：`BaseBottomSheetDialog` 的 `stableOverlay()` 也是在 `onCreateDialog` 里清 dim，而 `ThemeOverlay.Material3.BottomSheetDialog` 同样挂在 `Base.V7.ThemeOverlay.AppCompat.Dialog` 下面 —— 也就是说底部面板（字幕面板 / 轨道列表 / 定时 / 弹幕设置）大概率也被这层 dim 压着，只是底部面板不像全高侧边栏那样明显。要修得在 `BaseBottomSheetDialog` 的 `setOnShowListener` 里链式再清一次；影响面是全部底部面板，等用户确认侧边栏效果后再单独一轮做。
+
+#### 验证与回滚
+
+- 静态（`check_round18.py`）：`selector_control_circle.xml` 恢复 `state_focused` + `layer-list` + `@color/red`/`red_500` + `30dp` 圆，且仍有 `state_selected` → `shape_chip_activated`；`dialog_subtitle.xml` / `dialog_track.xml` 注释回到「焦点 = 30dp 红渐变实心圆」；`BaseSideSheetDialog` 有 `clearDim(Window)`、`onCreateDialog` 与 `setOnShowListener` 各调一次、`clearDim` 里同时清 flag 与 `dimAmount`、`stableOverlay()` 仍默认 `false`；`OffsetDialog.SideSheet` 仍返回 `true`；`TrackDialog.onOffset` 仍有 `dismiss()`；三个 XML 可解析；`git diff --check` 无空白错误。**未编译**（按用户要求只出 diff）。
+- 待真机验证：① 字幕列表头部点偏移圆钮 → 字幕列表消失，只剩右侧偏移面板，**面板外视频保持原亮度、看不到任何遮罩**；② 关闭侧边栏回到播放页，字幕偏移生效；③ 5 圆钮面板与轨道列表头部 7 钮聚焦时**恢复红渐变实心圆**，遥控器能看清焦点位置。
+- 回滚：`git checkout -- app/src/main/java/com/fongmi/android/tv/ui/dialog/BaseSideSheetDialog.java app/src/leanback/res/drawable/selector_control_circle.xml app/src/leanback/res/layout/dialog_subtitle.xml app/src/leanback/res/layout/dialog_track.xml`。

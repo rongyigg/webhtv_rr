@@ -8,7 +8,7 @@
     - 根节点 match_parent + gravity=center + padding=24dp，横向排列；
     - 背景 @drawable/shape_controller：原版那层「很透明的渐变黑」+ 8dp 顶部圆角（见 10.21）；
     - 5 个按钮 large / small / up / down / reset：
-      背景 @drawable/selector_control_circle（聚焦 / 未聚焦都是透明，选中才是细线红框），
+      背景 @drawable/selector_control_circle（焦点 = 30dp 红渐变实心圆，未聚焦 = 透明），
       padding 8dp，focusable + focusableInTouchMode，app:tint 纯白；
     - 按钮之间**没有** margin，整排居中。
 
