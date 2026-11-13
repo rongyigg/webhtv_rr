@@ -44,7 +44,7 @@ public abstract class BaseSideSheetDialog extends AppCompatDialogFragment {
     @NonNull
     @Override
     public Dialog onCreateDialog(Bundle savedInstanceState) {
-        SideSheetDialog dialog = new SideSheetDialog(requireContext());
+        SideSheetDialog dialog = new SideSheetDialog(requireContext(), panelTheme());
         dialog.getBehavior().setDraggable(false);
         Window window = dialog.getWindow();
         if (window == null) return dialog;
@@ -105,6 +105,19 @@ public abstract class BaseSideSheetDialog extends AppCompatDialogFragment {
             ((ViewGroup.MarginLayoutParams) params).setMargins(0, 0, 0, 0);
         }
         sheet.setLayoutParams(params);
+    }
+
+    /**
+     * 侧边栏对话框的主题覆盖（0 = 沿用 `?attr/sideSheetDialogTheme`）。
+     *
+     * 面板本体的底色不在这里改：它由 `m3_side_sheet` 的 style（`?attr/sideSheetModalStyle`，
+     * 默认 `Widget.Material3.SideSheet.Modal`，`backgroundTint=?attr/colorSurfaceContainerLow`）
+     * 决定，`SideSheetBehavior.onLayoutChild` 首次布局时才会 `child.setBackground(...)`。
+     * 想换面板底色就返回一个覆盖了 `sideSheetModalStyle` 的 ThemeOverlay，
+     * 这样从第一帧起就是目标颜色，不会被行为类覆盖，也不用碰 View 的背景。
+     */
+    protected int panelTheme() {
+        return 0;
     }
 
     private void applyWindow() {

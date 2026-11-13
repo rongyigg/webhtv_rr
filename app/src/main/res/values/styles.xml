@@ -138,6 +138,27 @@
         <item name="alertDialogStyle">@style/MaterialAlertDialog.WebHTV.NoInset</item>
     </style>
 
+    <!--
+        播放页「偏移设置」侧边栏：面板本体改成 70% 半透明玻璃（见 docs 10.28）。
+
+        逆向原版的面板底色是 100% 不透明：m3_side_sheet 的 style =
+        Widget.Material3.SideSheet.Modal，backgroundTint = ?attr/colorSurfaceContainerLow
+        = #FF1D1B20（原版与我们的 Material 1.14.0 全链一致，没有任何 alpha）。
+
+        这里按用户要求有意偏离：用 ThemeOverlay 把 sideSheetModalStyle 指到
+        @color/sheet_panel_bg（#B31D1B20，同一色相 70% 不透明）。
+        走主题覆盖而不是在 layout 之后改 View 背景，是因为面板背景由
+        SideSheetBehavior.onLayoutChild 首次布局时 child.setBackground(...) 落地，
+        布局前/布局中设的底色都会被覆盖；走主题则从第一帧起就是目标颜色。
+    -->
+    <style name="Widget.WebHTV.SideSheet.Modal.Translucent" parent="Widget.Material3.SideSheet.Modal">
+        <item name="backgroundTint">@color/sheet_panel_bg</item>
+    </style>
+
+    <style name="ThemeOverlay.WebHTV.SideSheetDialog.Translucent" parent="ThemeOverlay.Material3.SideSheetDialog">
+        <item name="sideSheetModalStyle">@style/Widget.WebHTV.SideSheet.Modal.Translucent</item>
+    </style>
+
     <style name="Widget.WebHTV" parent="@android:style/Widget" />
 
     <style name="Widget.WebHTV.LightDialog" />

@@ -35,6 +35,14 @@
     <color name="display_option_stroke_selected">#FFFFFFFF</color>
     <color name="display_option_stroke_default">#33FFFFFF</color>
     <color name="display_dialog_panel_bg">#E61F2A31</color>
+    <!--
+        播放页「偏移设置」侧边栏面板底色（有意偏离逆向，见 docs 10.28）。
+        逆向原版是 100% 不透明：m3_side_sheet 的 style = Widget.Material3.SideSheet.Modal，
+        其 backgroundTint = ?attr/colorSurfaceContainerLow = #FF1D1B20（全链无 alpha）。
+        这里取同一色相的 70% 不透明度（#B3 = 179/255），让播放画面从面板后隐约透出。
+        回滚：删掉 OffsetDialog.SideSheet.panelTheme() 覆写即可。
+    -->
+    <color name="sheet_panel_bg">#B31D1B20</color>
     <color name="site_health_good">#0B8043</color>
     <color name="site_health_warn">#B7791F</color>
     <color name="site_health_bad">#C53030</color>

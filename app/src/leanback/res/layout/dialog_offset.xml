@@ -9,6 +9,9 @@
     - 根节点**没有** background：原版没有清窗口背景（ci.V() 只 setDraggable(false)），
       面板底色由 Material3 SideSheet 自己的 surface 提供，所以这里不能再套一层
       玻璃卡片，否则会在侧边栏里多出一块紫色圆角卡片；
+      10.28 起面板本体按用户要求改成 70% 半透明（`@color/sheet_panel_bg`），
+      由 `ThemeOverlay.WebHTV.SideSheetDialog.Translucent` 覆盖 `sideSheetModalStyle` 实现
+      （布局这里仍然不加 background，不要往根节点贴 drawable）；
     - 头部 paddingTop 16dp / bottom 8dp / start&end 24dp，标题
       ?attr/textAppearanceHeadlineSmall + 纯白，Reset 是 Material3 TonalButton；
     - 两个 section 默认 gone，m52.b0() 按 type 只显示一个（1=音轨，其余=字幕），

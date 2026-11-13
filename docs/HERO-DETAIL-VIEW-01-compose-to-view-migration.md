@@ -1308,3 +1308,58 @@ if (a.getBoolean(R.styleable.Window_backgroundDimEnabled, mIsFloating)) {
 - 静态（`check_round18.py`）：`selector_control_circle.xml` 恢复 `state_focused` + `layer-list` + `@color/red`/`red_500` + `30dp` 圆，且仍有 `state_selected` → `shape_chip_activated`；`dialog_subtitle.xml` / `dialog_track.xml` 注释回到「焦点 = 30dp 红渐变实心圆」；`BaseSideSheetDialog` 有 `clearDim(Window)`、`onCreateDialog` 与 `setOnShowListener` 各调一次、`clearDim` 里同时清 flag 与 `dimAmount`、`stableOverlay()` 仍默认 `false`；`OffsetDialog.SideSheet` 仍返回 `true`；`TrackDialog.onOffset` 仍有 `dismiss()`；三个 XML 可解析；`git diff --check` 无空白错误。**未编译**（按用户要求只出 diff）。
 - 待真机验证：① 字幕列表头部点偏移圆钮 → 字幕列表消失，只剩右侧偏移面板，**面板外视频保持原亮度、看不到任何遮罩**；② 关闭侧边栏回到播放页，字幕偏移生效；③ 5 圆钮面板与轨道列表头部 7 钮聚焦时**恢复红渐变实心圆**，遥控器能看清焦点位置。
 - 回滚：`git checkout -- app/src/main/java/com/fongmi/android/tv/ui/dialog/BaseSideSheetDialog.java app/src/leanback/res/drawable/selector_control_circle.xml app/src/leanback/res/layout/dialog_subtitle.xml app/src/leanback/res/layout/dialog_track.xml`。
+
+### 10.28 偏移面板本体改半透明玻璃：逆向值先查清，再按用户决定偏离（2026-11-13，未提交）
+
+用户要求：**「修改偏移设置的面板，看下逆向数据的偏移面板的透明度照抄。」**
+
+#### ① 先查逆向：面板本体是 100% 不透明，全链无 alpha
+
+逐层翻完反编译包，结论是「照抄 = 不透明」，证据如下：
+
+| 证据 | 值 |
+| --- | --- |
+| `ref_docs/dialog_offset.xml` 根节点 | 无 `android:background`、无 `android:alpha`（全文 123 行逐行确认） |
+| `m52.java` / `ci.java` / `s8.java` / `ce0.java` | 全无 `setAlpha` / `setBackgroundDrawable` / `setDimAmount`；`ci.V()` 只有 `f().g = false` + 全屏 `addFlags(1024)` |
+| 原版 `m3_side_sheet_dialog.xml` | `<FrameLayout android:id="@+id/m3_side_sheet" style="?attr/sideSheetModalStyle" app:layout_behavior="@string/side_sheet_behavior"/>`（与我们 Material 1.14.0 的同名布局逐字一致） |
+| 面板底色来源 | `sideSheetModalStyle` → `Widget.Material3.SideSheet.Modal` → `backgroundTint=?attr/colorSurfaceContainerLow`（原版）／`@macro/m3_comp_sheet_side_docked_modal_container_color` → `?attr/colorSurfaceContainerLow`（我们 1.14.0，宏展开后完全相同） |
+| `colorSurfaceContainerLow` | `m3_sys_color_dark_surface_container_low` → `m3_ref_palette_neutral10` → **`#ff1d1b20`**，原版与我们**逐字节相同** |
+| 原版所有带 alpha 的颜色 | 51 个，全部是 Material / Leanback / Exo 的内置色（`black_20` / `mtrl_scrim_color` 等），**没有任何一个是 surface 系列** |
+| 落地方式 | `SideSheetBehavior.onLayoutChild` 首次布局 → `child.setBackground(MaterialShapeDrawable)`，`setFillColor(backgroundTint)`（`createMaterialShapeDrawableIfNeeded` 里 `shapeAppearanceModel == null` 才跳过，而 `Widget.Material3.SideSheet.Modal` 自带 `shapeAppearance`，所以一定会设） |
+
+也就是说：**原版偏移面板本身就是一块不透明 `#1D1B20`**。用户记忆里「原版几乎透明」的观感，来自原版**完全没有遮罩**（`ci.V()` 从不设 dim，10.27 已修），而不是面板半透明。
+
+#### ② 用户决定：面板本体做成半透明玻璃
+
+把上面结论摆给用户后，用户选择 **「面板改半透明玻璃（推荐）」**。这是对逆向的**有意偏离**，理由与回滚方式都写进代码注释与本节。
+
+#### ③ 改法：用 ThemeOverlay 覆盖 `sideSheetModalStyle`，不在 layout 之后改 View 背景
+
+第一版实现是「`onStart()` 里 `sheet.post(() -> ViewCompat.setBackgroundTintList(...))`」，写完就发现时机不可靠，弃用：
+
+- 面板背景由 `SideSheetBehavior.onLayoutChild` **首次布局**时 `child.setBackground(materialShapeDrawable)` 落地；
+- `View.post()` 的 runnable 排在 `Choreographer` 的 traversal 之前执行（`show()` 的 `scheduleTraversals` 是异步的），很可能在布局前就跑完，随后被 `setBackground` 整块覆盖；
+- 就算改成 `addOnLayoutChangeListener` 补刷，也是「先画一帧不透明再变半透明」，会有闪一下。
+
+改成**主题层**解决，从第一帧起就是目标颜色，且完全不碰 View：
+
+| 文件 | 改动 |
+| --- | --- |
+| `app/src/main/res/values/colors.xml` | 新增 `sheet_panel_bg` = `#B31D1B20`（`#1D1B20` 的 70% 不透明，`#B3` = 179/255），注释写明「有意偏离 + 回滚方法」 |
+| `app/src/main/res/values/styles.xml` | 新增 `Widget.WebHTV.SideSheet.Modal.Translucent`（parent `Widget.Material3.SideSheet.Modal`，只覆盖 `backgroundTint`）+ `ThemeOverlay.WebHTV.SideSheetDialog.Translucent`（parent `ThemeOverlay.Material3.SideSheetDialog`，把 `sideSheetModalStyle` 指过去） |
+| `app/src/main/java/com/fongmi/android/tv/ui/dialog/BaseSideSheetDialog.java` | `new SideSheetDialog(requireContext())` → `new SideSheetDialog(requireContext(), panelTheme())`；新增 `protected int panelTheme() { return 0; }`（默认 0 = 沿用 `?attr/sideSheetDialogTheme`，其它侧边栏行为一字不变） |
+| `app/src/main/java/com/fongmi/android/tv/ui/dialog/OffsetDialog.java` | `SideSheet` 覆写 `panelTheme()` 返回 `R.style.ThemeOverlay_WebHTV_SideSheetDialog_Translucent`；新增 `import com.fongmi.android.tv.R;` |
+| `app/src/leanback/res/layout/dialog_offset.xml` | 只改文件头注释（说明 10.28 的半透明来自主题覆盖，布局根节点仍然不许贴 drawable） |
+
+为什么走主题而不是改 View：`SideSheetDialog(Context, theme)` 的 theme 会经 `ContextThemeWrapper` 叠在 Activity 主题上，Material 自己也是把 `?attr/sideSheetDialogTheme` 指向一个 ThemeOverlay 来用的 —— 与框架用法一致，不是偏方。
+
+已验证依赖存在（`material-1.14.0.aar`）：`ThemeOverlay.Material3.SideSheetDialog`、`Base.ThemeOverlay.Material3.SideSheetDialog`、`Widget.Material3.SideSheet.Modal`、`Widget.Material3.SideSheet`、`<attr format="reference" name="sideSheetModalStyle"/>` 全部命中。
+
+范围控制：`DanmakuSettingDialog.SideSheet`（弹幕设置侧边栏）**不覆写** `panelTheme()`，仍是逆向的不透明 surface；手机端走 `OffsetDialog.BottomSheet`，完全不受影响。
+
+#### 验证与回滚
+
+- 静态（`check_round19.py`）：`styles.xml` / `colors.xml` / `dialog_offset.xml` 可解析；`sheet_panel_bg` = `#B31D1B20` 且样式里引用它；两个新样式的 parent 与 `backgroundTint` / `sideSheetModalStyle` 逐项命中；`BaseSideSheetDialog` 用 `panelTheme()` 造 Dialog、默认 `return 0`、无 `applyPanelColor` / `ColorStateList` 残留；`OffsetDialog.SideSheet` 覆写返回 `R.style.ThemeOverlay_WebHTV_SideSheetDialog_Translucent`；全仓无 `panelBackgroundColor` 残留；`dialog_offset.xml` 根节点仍无 `android:background`；10.27 的 `clearDim` + `setOnShowListener` 仍在；括号配平；`git diff --check` 无空白错误。**未编译**（按用户要求只出 diff）。
+- 待真机验证：① 字幕列表头部点偏移圆钮 → 右侧面板是**半透明玻璃**（视频从面板后隐约透出，约 70% 不透明），面板外**完全没有遮罩**；② 面板圆角、阴影、宽度（`min(320dp, 屏宽/2)`）与 10.25 一致，没有被主题覆盖改坏；③ 标题「偏移设置」、Reset 按钮、滑块与数值显示颜色/位置不变；④ 弹幕设置侧边栏仍是原来的不透明面板（未覆写 `panelTheme()`）；⑤ 手机端偏移底部面板不变。
+- 调深浅：只改 `@color/sheet_panel_bg` 的 alpha（`#B3` → `#CC` 更实、`#99` 更透），不用动 Java。
+- 回滚：删掉 `OffsetDialog.SideSheet.panelTheme()` 覆写即回到逆向原样；彻底回滚用 `git checkout -- app/src/main/java/com/fongmi/android/tv/ui/dialog/BaseSideSheetDialog.java app/src/main/java/com/fongmi/android/tv/ui/dialog/OffsetDialog.java app/src/main/res/values/styles.xml app/src/main/res/values/colors.xml app/src/leanback/res/layout/dialog_offset.xml`。

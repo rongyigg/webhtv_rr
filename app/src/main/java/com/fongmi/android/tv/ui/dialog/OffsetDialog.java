@@ -10,6 +10,7 @@ import androidx.fragment.app.FragmentActivity;
 import androidx.fragment.app.FragmentManager;
 import androidx.viewbinding.ViewBinding;
 
+import com.fongmi.android.tv.R;
 import com.fongmi.android.tv.databinding.DialogOffsetBinding;
 import com.fongmi.android.tv.player.PlayerManager;
 import com.fongmi.android.tv.utils.ResUtil;
@@ -100,6 +101,17 @@ public final class OffsetDialog {
         @Override
         protected boolean stableOverlay() {
             return true;
+        }
+
+        /**
+         * 面板本体：逆向原版是 100% 不透明（`#FF1D1B20`，来自
+         * `Widget.Material3.SideSheet.Modal` 的 `backgroundTint=?attr/colorSurfaceContainerLow`），
+         * 这里按用户要求有意偏离 —— 换一个把 `sideSheetModalStyle` 指到 70% 半透明底色的
+         * ThemeOverlay，让播放画面从面板后隐约透出。删掉这个覆写就回到逆向原样。
+         */
+        @Override
+        protected int panelTheme() {
+            return R.style.ThemeOverlay_WebHTV_SideSheetDialog_Translucent;
         }
 
         @Override
