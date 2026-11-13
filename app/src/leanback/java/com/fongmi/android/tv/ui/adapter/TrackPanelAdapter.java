@@ -25,8 +25,9 @@ import java.util.List;
  *
  * 状态矩阵（焦点与选中严格分开）：
  * - 普通：透明背景 + 白字；
- * - 焦点：加深长条 + 纯白字（背景见 selector_track_panel_item）；
- * - 选中但未聚焦（当前生效轨道）：深色长条 + 横向红渐变文字
+ * - 焦点：整行统一渐变红长条（@drawable/bg_global_focus_solid_red）+ 纯白字
+ *   （背景见 selector_track_panel_item）；
+ * - 选中但未聚焦（当前生效轨道）：透明背景 + 横向红渐变文字
  *   （Paint 的 LinearGradient 着色器，@color/osd_accent → @color/osd_accent_light，绝不写死单色红）。
  */
 public class TrackPanelAdapter extends RecyclerView.Adapter<TrackPanelAdapter.ViewHolder> {
@@ -78,7 +79,9 @@ public class TrackPanelAdapter extends RecyclerView.Adapter<TrackPanelAdapter.Vi
         Track item = mItems.get(position);
         TextView text = holder.binding.text;
         text.setText(item.getName());
-        text.setSelected(item.isSelected());
+        // 用 activated 而不是 selected 表达「当前生效」：TextView 的 marquee 在 selected
+        // 状态下会自动滚动，会让未聚焦的当前轨道在后台一直跑马灯。
+        text.setActivated(item.isSelected());
         applyTextStyle(text, item.isSelected(), text.hasFocus());
         // 焦点变化只改文字着色：选中态的红渐变在失焦后恢复，聚焦时回到纯白。
         text.setOnFocusChangeListener((view, hasFocus) -> applyTextStyle(text, item.isSelected(), hasFocus));

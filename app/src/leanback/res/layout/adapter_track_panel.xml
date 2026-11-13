@@ -1,24 +1,32 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-    轨道面板列表项：
-    - 普通 / 未选中：全透明背景、白字
-    - 有焦点（遥控器选中）：加深长条 @color/white_30、纯白字
-    - 已选中（当前生效的轨道）：长条 @color/white_20、文字用 Paint LinearGradient 红渐变
-    - 绝对直角（selector_track_panel_item 圆角固定 0dp）、字号 14sp、行高 40dp
+    轨道面板列表项（照抄逆向 dialog_track 的行观感）：
+    - 字号 16sp（与「视频轨道 / 音频轨道」标题同号），includeFontPadding=false +
+      上下 3dp，得到与原版一致的约 25dp 紧凑行高；
+    - 列内 20dp / 24dp 的左边距由 dialog_track_panel 的 RecyclerView padding 提供，
+      行内只留 4dp 文字内边距（原版实测文字起点 = 列起点 + 4dp）；
+    - 普通 / 已选中但未聚焦：全透明背景；
+    - 焦点（遥控器当前行）：整行统一渐变红长条 @drawable/bg_global_focus_solid_red
+      （@color/osd_accent → @color/osd_accent_light），文字转纯白；
+    - 已选中（当前生效轨道）但未聚焦：透明背景 + 红渐变文字
+      （TrackPanelAdapter 用 Paint 的 LinearGradient 着色器绘制，不写死单色红）。
 -->
 <com.google.android.material.textview.MaterialTextView xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools"
     android:id="@+id/text"
     android:layout_width="match_parent"
-    android:layout_height="40dp"
+    android:layout_height="wrap_content"
     android:background="@drawable/selector_track_panel_item"
-    android:ellipsize="end"
+    android:ellipsize="marquee"
     android:focusable="true"
     android:focusableInTouchMode="true"
     android:gravity="center_vertical"
-    android:paddingStart="12dp"
+    android:includeFontPadding="false"
+    android:paddingStart="4dp"
+    android:paddingTop="3dp"
     android:paddingEnd="12dp"
+    android:paddingBottom="3dp"
     android:singleLine="true"
     android:textColor="@color/selector_track_panel_text"
-    android:textSize="14sp"
+    android:textSize="16sp"
     tools:text="Japanese 5.1" />

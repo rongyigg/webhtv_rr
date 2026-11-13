@@ -835,3 +835,32 @@ appendPage(list, site, pageCount) // T1 的追加分支：空页 / 全重复 →
 - 静态（`check_round8.py`）：四个改动文件括号配平；`updateTmdbWindow` / `PREFETCH_PARALLEL` / `chunked(` / `coroutineScope` 全部无残留；`fetchTmdbDetailForPosition(index, allowImagePrefetch = false)` 存在且两处 `prefetchBackdropImage` 都带 `allowImagePrefetch` 守卫；`cancelBackdropPrefetch()` ≥ 6 个调用点（onDestroy / renderHome / renderFolder / exitFolder / requestFocusedTmdbDetail / bindBackdrop）；`heroBg.loadImage(backdrop, position) { scheduleTmdbWindow() }` 存在；`HeroImageView.prefetch` 返回 `Disposable`；`HeroHttpDns` 含 `target(hostname)` / `userDoh` / `IPV4` / `Setting.getDoh()`；`git diff --check` 无空白错误。
 - 待真机验证：① 连续快速左右移动焦点 10 次，焦点卡的 w1920 横图应在数秒内出图（不再 20 秒空转）；② 停在一张卡上不动，日志里应只有 1 条该 URL 的图片请求；③ 停稳约 0.4s 后才出现邻居详情请求，移动焦点时这些请求立刻消失；④ 配了自定义 DoH / `hosts` 的环境下 TMDB 图仍能出。
 - 回滚：`git checkout -- app/src/main/java/com/fongmi/android/tv/ui/activity/HomeViewActivity.kt app/src/main/java/com/fongmi/android/tv/ui/custom/HeroImageView.java app/src/main/java/com/fongmi/android/tv/net/HeroHttpDns.kt catvod/src/main/java/com/github/catvod/net/OkDns.java`。
+
+### 10.19 播放页轨道面板对齐原版 + 进度条滑块缩小（2026-11-13，未提交）
+
+10.18 提交后（`9bc2da4bb`）用户确认「很好 tmdb 问题解决了」，本轮转入播放页 UI：**轨道弹窗整体照抄原版**（字体大小、焦点/选中的样子），焦点与选中颜色统一改用本项目的渐变红；**播放控制栏进度条圆形滑块缩小**。
+
+#### ① 原版实测（截图 `Screenshot_20261113-102302.png` 像素采样 + `ref_docs/dialog_track.xml`）
+
+| 元素 | 原版值 | 我们改前 |
+| --- | --- | --- |
+| 「视频轨道 / 音频轨道」标题 | 16sp 白字，paddingTop 24dp / bottom 8dp，左 20dp / 24dp | 14sp，paddingTop 12dp |
+| 行文字 | 16sp，行高约 25dp（50px @ density 320） | 14sp，固定 40dp |
+| 行文字起点 | 列起点 + 4dp（视频列 x=51px、音频列 x=1019px） | 行内 paddingStart 12dp |
+| 焦点行 | 整列宽横向渐变长条：左端 30% 白（`77,77,77`）线性衰减到列尾全透明 | 平铺 `@color/white_30` |
+| 选中行（未聚焦） | 无底色，只有红字（实测 `242,103,110`） | `@color/white_20` 底色 + 红渐变字 |
+| 内容底边距 | `track_content` paddingBottom 12dp | 24dp |
+
+#### ② 改法（只动 leanback，手机 flavor 与字幕 AI 弹窗完全不受影响）
+
+1. `dialog_track_panel.xml`：双列标题 14sp → **16sp**、paddingTop 12dp → **24dp**（照抄 `track_titles`）；`track_content` paddingBottom 24dp → **12dp**；
+2. `adapter_track_panel.xml`：字号 14sp → **16sp**；固定 40dp 行高 → `wrap_content` + 上下 3dp + `includeFontPadding=false`（复现原版约 25dp 紧凑行）；行内 paddingStart 12dp → **4dp**（列内 20dp/24dp 仍由 RecyclerView padding 提供，文字落点与原版一致）；`ellipsize=end` → `marquee`（长轨道名聚焦时可滚动）；
+3. `selector_track_panel_item.xml`：焦点态从平铺 `@color/white_30` 换成 **`@drawable/bg_global_focus_solid_red`**（`@color/osd_accent → @color/osd_accent_light`，angle=0，4dp 小圆角），保留原版「整行横向长条」的形状，只把灰渐变换成统一渐变红；选中但未聚焦改为**全透明**（选中只靠红渐变文字表达，与原版一致）；
+4. `TrackPanelAdapter.java`：`text.setSelected()` → `text.setActivated()`，避免 `marquee` 在「当前生效但未聚焦」的行上后台一直滚动；选中态红渐变字（`LinearGradient`，`osd_accent → osd_accent_light`）逻辑保持不变；
+5. `view_control_seek.xml`：`DefaultTimeBar` 显式声明 `app:scrubber_enabled_size="8dp"`、`app:scrubber_dragged_size="10dp"`（原默认 12dp/16dp，滑块明显缩小，进度条 2dp 不变）。
+
+#### 验证与回滚
+
+- 静态（`check_round9.py`）：5 个 XML 全部可解析；面板标题 16sp ×3（含 header）/paddingTop 24dp ×3；`track_content` paddingBottom 12dp；`adapter_track_panel` 为 16sp + `wrap_content` + 4dp/3dp 内边距 + marquee 且无 40dp/14sp 残留；`selector_track_panel_item` 焦点引用 `bg_global_focus_solid_red` 且无 `white_30`/`white_20`；适配器为 `setActivated` 且无 `setSelected`、`LinearGradient` 保留；`view_control_seek` 含 8dp/10dp scrubber 与 2dp bar；Java 括号配平；`git diff --check` 无空白错误。
+- 待真机验证：① 播放页按「轨道」，面板应为左右双列、标题 16sp、行文字 16sp 紧凑排列；② 上下移动焦点，整行出现 `osd_accent → osd_accent_light` 横向渐变红长条、文字纯白；③ 焦点移开后，当前生效轨道只剩红渐变文字、无底色；④ 进度条白色圆形滑块明显小于原版，拖动时略大但仍小于改前。
+- 回滚：`git checkout -- app/src/leanback/res/layout/dialog_track_panel.xml app/src/leanback/res/layout/adapter_track_panel.xml app/src/leanback/res/drawable/selector_track_panel_item.xml app/src/leanback/res/color/selector_track_panel_text.xml app/src/leanback/java/com/fongmi/android/tv/ui/adapter/TrackPanelAdapter.java app/src/leanback/res/layout/view_control_seek.xml`。

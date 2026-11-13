@@ -3,7 +3,9 @@
     播放页轨道面板：结构照抄逆向 ref_docs/dialog_track.xml。
     - 外壳：整体透明，直接铺在视频画面上；已删除 shape_controller 深色圆角大外壳与弹窗遮罩
     - 左右两列：视频轨道 / 音频轨道各占 weight=1，铺满屏幕下半部分
-    - 行高 40dp、字号 14sp，行样式见 selector_track_panel_item / selector_track_panel_text
+    - 标题 16sp 白字、paddingTop 24dp / bottom 8dp（照抄逆向 track_titles）
+    - 行样式见 adapter_track_panel / selector_track_panel_item：16sp、紧凑行高、
+      焦点为统一渐变红长条（osd_accent → osd_accent_light）
     - 顶点标题行只保留双列标题，面板本身不画任何底色
 -->
 <androidx.appcompat.widget.LinearLayoutCompat xmlns:android="http://schemas.android.com/apk/res/android"
@@ -71,7 +73,7 @@
 
     </androidx.appcompat.widget.LinearLayoutCompat>
 
-    <!-- 双列标题：视频轨道 / 音频轨道，14sp 白字，左右各半屏 -->
+    <!-- 双列标题：视频轨道 / 音频轨道，16sp 白字，左右各半屏（逆向 track_titles 原尺寸） -->
     <androidx.appcompat.widget.LinearLayoutCompat
         android:id="@+id/track_titles"
         android:layout_width="match_parent"
@@ -83,22 +85,22 @@
             android:layout_height="wrap_content"
             android:layout_weight="1"
             android:paddingStart="20dp"
-            android:paddingTop="12dp"
+            android:paddingTop="24dp"
             android:paddingBottom="8dp"
             android:text="@string/play_track_video"
             android:textColor="@color/white"
-            android:textSize="14sp" />
+            android:textSize="16sp" />
 
         <com.google.android.material.textview.MaterialTextView
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
             android:paddingStart="24dp"
-            android:paddingTop="12dp"
+            android:paddingTop="24dp"
             android:paddingBottom="8dp"
             android:text="@string/play_track_audio"
             android:textColor="@color/white"
-            android:textSize="14sp" />
+            android:textSize="16sp" />
 
     </androidx.appcompat.widget.LinearLayoutCompat>
 
@@ -108,7 +110,7 @@
         android:layout_height="wrap_content"
         android:baselineAligned="false"
         android:orientation="horizontal"
-        android:paddingBottom="24dp">
+        android:paddingBottom="12dp">
 
         <com.fongmi.android.tv.ui.custom.CustomRecyclerView
             android:id="@+id/videoRecycler"

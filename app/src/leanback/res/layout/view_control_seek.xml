@@ -27,7 +27,9 @@
         android:focusableInTouchMode="true"
         android:nextFocusLeft="@id/timeBar"
         android:nextFocusRight="@id/timeBar"
-        app:bar_height="2dp" />
+        app:bar_height="2dp"
+        app:scrubber_dragged_size="10dp"
+        app:scrubber_enabled_size="8dp" />
 
     <com.google.android.material.textview.MaterialTextView
         android:id="@+id/duration"

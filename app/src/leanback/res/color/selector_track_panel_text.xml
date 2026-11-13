@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
     轨道面板文字颜色：
-    - 焦点：纯白
+    - 焦点：纯白（背景是统一渐变红长条，红底上必须用白字）
     - 其余（含选中但未聚焦）：白色基底
     选中态的横向红渐变由 TrackPanelAdapter 用 Paint 的 LinearGradient 着色器绘制，
     不再用单色红（@color/osd_focus）直接染色。

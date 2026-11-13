@@ -1,28 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
     轨道面板列表项背景（状态矩阵严格区分焦点 / 选中）：
-    - 焦点：加深的白色长条 @color/white_30
-    - 选中（正在使用但无焦点）：深色长条 @color/white_20
-    - 普通：全透明
-    绝对直角：所有状态 corners radius 固定 0dp。
+    - 焦点：整行统一渐变红长条 @drawable/bg_global_focus_solid_red
+      （@color/osd_accent → @color/osd_accent_light，横向 angle=0，4dp 小圆角），
+      与原版「焦点横向渐变长条」同形，只把原版的灰渐变换成本项目的统一渐变红；
+    - 选中但未聚焦：全透明（选中态只靠红渐变文字表达，与原版一致）；
+    - 普通：全透明。
 -->
 <selector xmlns:android="http://schemas.android.com/apk/res/android">
-    <item android:state_focused="true">
-        <shape android:shape="rectangle">
-            <solid android:color="@color/white_30" />
-            <corners android:radius="0dp" />
-        </shape>
-    </item>
-    <item android:state_selected="true">
-        <shape android:shape="rectangle">
-            <solid android:color="@color/white_20" />
-            <corners android:radius="0dp" />
-        </shape>
-    </item>
-    <item>
-        <shape android:shape="rectangle">
-            <solid android:color="@android:color/transparent" />
-            <corners android:radius="0dp" />
-        </shape>
-    </item>
+    <item
+        android:drawable="@drawable/bg_global_focus_solid_red"
+        android:state_focused="true" />
+    <item android:drawable="@android:color/transparent" />
 </selector>
