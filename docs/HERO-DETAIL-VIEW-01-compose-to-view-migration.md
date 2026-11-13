@@ -1100,3 +1100,49 @@ e: HeroDetailStateManager.kt:703:21 Unresolved reference 'requestDetailFocus'.
 - 静态（`check_round15.py`）：三个 XML 可解析；`dialog_track` 根背景 = `shape_controller` 且无 `shape_dialog_glass_panel`、头部 8dp、七个圆钮全部 `selector_control_circle` + 8dp + 白 tint、`maxHeight=160dp`；`adapter_track` 为 16sp + 紧凑行高 + 渐变红焦点 + 红字选中且无 glass chip / 14sp；`selector_track_text` 三档颜色齐全；`TrackDialog` 的 `transparent()/stableOverlay()` 恒 true、`fullWidth()` 仅 leanback、括号配平、所有 `binding.*` id 都在布局中；引用 drawable / 颜色全部存在；`git diff --check` 无空白错误。**未编译**。
 - 待真机验证：① 点「字幕」→ 面板应全宽贴底、透明渐变黑、不压暗视频；② 头部一排圆形图标，焦点是 30dp 红渐变实心圆、未聚焦透明；③ 字幕行 16sp 紧凑排列，焦点整行渐变红、当前生效字幕红字；④ 点头部「字幕设置」圆钮 → 5 圆钮面板（10.23 的 `dialog_subtitle`）；⑤ 直播 / 投屏的「音轨 / 视轨」列表同样变全宽透明样式，选项切换与 AI / 搜索入口不受影响。
 - 回滚：`git checkout -- app/src/leanback/res/layout/dialog_track.xml app/src/leanback/res/layout/adapter_track.xml app/src/main/java/com/fongmi/android/tv/ui/dialog/TrackDialog.java`，并删除 `app/src/leanback/res/color/selector_track_text.xml`。
+
+### 10.25 字幕列表头部的「偏移设置」弹窗照抄逆向 dialog_offset（2026-11-13，未提交）
+
+10.24 提交 `c28754be8` 后用户提出：**点开字幕设置里，有个「偏移设置」也会弹窗，按逆向数据照抄一个，并接入到咱们的字幕弹窗。**
+
+#### ① 逆向本体这次找到了（之前只找到布局，没找到类）
+
+上一轮只定位到 `mm3.a()` 是 `dialog_offset` 的 ViewBinding 工厂（返回合并后的 `j5`），但**调用方缺失**，所以无法确认弹窗外壳。这一轮补齐：
+
+| 逆向件 | 内容 |
+| --- | --- |
+| `ref_docs/dialog_offset.xml` | 偏移面板布局（根节点**无 background**） |
+| `m52.java` | **真正的 OffsetDialog**：`m52 extends ci`，`Y()` = `mm3.a()`（inflate `dialog_offset`），`Z()` = `min(320dp, 屏宽/2)`，`b0()` = 绑定逻辑 |
+| `ci.java` | BaseSheetDialog 系：`V()` 造 `jx2`（Material `SideSheetDialog`）+ `f().g = false`（不可拖拽）；`F()` 把 `R.id.m3_side_sheet` 宽度设为 `Z()`；**没有清窗口背景** |
+| `ph3.java` L125-152 / L175-202 / L225-251 | TrackDialog 头部三枚圆钮：`x0.l`（offset）→ `new m52(player, type)`；`x0.j`（choose）→ 选文件；`x0.n`（subtitle）→ `onSubtitleClick`。打开偏移面板后 `ph3Var.Y()` 关掉轨道列表 |
+| `m52.b0()` | 音频 `o0(audioSlider, audioValue, T0(38) ? Q0() : 0, → W0(j))`；字幕 `o0(textSlider, textValue, T0(36) ? S0() : 0, → M0(j))`；`reset.setOnClickListener(new g20(z8Var, 4))`；`(type==1 ? audioSection : textSection).setVisibility(VISIBLE)`；`(type==1 ? audioSlider : textSlider).requestFocus()` |
+| `g20.java` case 4（Reset） | `slider.setValue(0f)` + `label.setText(z8.O(0f))` + 音轨/字幕各自归零 |
+| `z8.java` `O()` / `s0()` / `o0()` | 标签 `String.format(Locale, "%+.1fs", ms/1000f)`；初值**先夹取再按 stepSize 对齐**；拖动回调 `longConsumer.accept(Math.round(snapped))`（不再额外取整） |
+
+结论：**外壳我们本来就一致** —— `OffsetDialog.SideSheet` 的 `getWidth()` 也是 `min(dp2px(320), 屏宽/2)`，`BaseSideSheetDialog` 同样走 `m3_side_sheet` + `setDraggable(false)` 且不清背景。原版 `ci` 不清背景 + 布局根节点无 background ⇒ 面板底色由 **Material3 SideSheet 自己的 surface** 提供。真正不对的是布局里多套了一层 WebHTV 的紫色玻璃卡片，以及字幕滑块的量程/步进。
+
+#### ② 改法（2 个文件）
+
+1. `app/src/leanback/res/layout/dialog_offset.xml`（按 `ref_docs/dialog_offset.xml` 逐字重写）：
+   - **删掉根节点 `android:background="@drawable/shape_dialog_glass_panel"`**（原版没有，否则侧边栏里会多一块紫色 22dp 圆角卡片 + 白描边）；
+   - 头部保持 `paddingTop 16dp / bottom 8dp / start&end 24dp`、标题 `?attr/textAppearanceHeadlineSmall` + 纯白、Reset 为 `Widget.Material3.Button.TonalButton` + 纯白字；
+   - 两个 section 默认 `gone`（由代码按 type 打开），标签行 `24dp / 4dp`、Slider `layout_marginHorizontal 12dp`、`tickVisible=false`；
+   - 音频 Slider 不变（step 100、-10000..10000）；**字幕 Slider 改成 step 1000、-300000..300000**（原版 ±300s、1s 一档）；
+   - 尾部 24dp 占位 View、去掉 `tools:` 预览属性（原版没有）；
+   - 保留原版重复写的 `paddingLeft` + `paddingHorizontal` 等冗余声明（逐字照抄，等价属性，不影响运行）。
+2. `app/src/main/java/com/fongmi/android/tv/ui/dialog/OffsetPanel.java`：
+   - 新增 `snap(Slider, float)`，逐行对齐逆向 `z8.s0()`：夹到 `[valueFrom, valueTo]` → `Math.round((v - from) / step) * step + from` → 再夹一次。**这是必须的**：字幕滑块 step 从 100 变 1000 后，历史偏移值（如 `-1234ms`）直接 `setValue` 会抛 `Value must be equal to valueFrom plus a multiple of stepSize`；
+   - 拖动回调改成 `setter.accept(Math.round(snapped))`，去掉原来的 `OFFSET_STEP_MS = 100` 二次取整（对齐逆向 `longConsumer.accept(Math.round(f))`）；
+   - 删除常量 `OFFSET_STEP_MS`；标签格式 `%+.1fs`、Reset 行为（Slider 归零 + 标签 `+0.0s` + 偏移归零）、section 显隐、初始焦点全部保持与 `m52.b0()` 一致。
+
+手机端 `app/src/mobile/res/layout/dialog_offset.xml` **未动**（仍是 `shape_player_child_sheet_panel` + ±10s/0.1s），`OffsetPanel` 的 `snap()` 对 step=100 的旧量程是恒等变换，手机行为不变。
+
+#### ③ 接入点：本来就已经接好
+
+`TrackDialog.onOffset()`（L208-210）= `OffsetDialog.create().player(player).type(type).show(requireActivity())`，与逆向 `ph3.x0.l → new m52(player, type)` 完全对应；入口就是字幕列表头部那枚 `ic_action_offset` 圆钮（`dialog_track.xml` 的 `@+id/offset`）。5 圆钮面板（`dialog_subtitle`）原版**没有**偏移按钮，本轮也不加，避免偏离原版层级。
+
+#### 验证与回滚
+
+- 静态（`check_round16.py`）：leanback `dialog_offset.xml` 可解析、根节点无 `background`、无 `shape_dialog_glass_panel`、头部 16/8dp、标题 `textAppearanceHeadlineSmall` + 白、Reset 为 TonalButton + `danmaku_reset`、音频 `100 / -10000 / 10000`、字幕 `1000 / -300000 / 300000`、两个 section 默认 `gone`、尾部 24dp 占位、无 `tools:`；`OffsetPanel` 有 `snap(`、无 `OFFSET_STEP_MS`、回调为 `Math.round(snapped)`、括号配平；`OffsetPanel` 用到的 7 个 binding id 在 **leanback 与 mobile 两个布局里都存在**（同一份共享 Java）；`OffsetDialog` 的 `SideSheet.getWidth()` 仍为 `min(dp2px(320), 屏宽/2)`；`git diff --check` 无空白错误。**未编译**（按用户要求只出 diff）。
+- 待真机验证：① 字幕列表头部点偏移圆钮 → 右侧滑出面板，底色是 Material3 侧边栏 surface（不再是紫色玻璃卡片 + 白描边）；② 标题「偏移设置」+ 右上「重置」按钮，只有一行「字幕偏移」+ 数值 + 滑块；③ 遥控器左右调滑块，数值按 1s 递增（±300s），拖动时 tooltip 显示 `+1.0s`；④ 点「重置」→ 滑块回中、数值 `+0.0s`、字幕立刻回到 0 偏移；⑤ 音轨列表打开时同一弹窗显示「音频偏移」、0.1s 一档（±10s）；⑥ 关闭侧边栏回到播放页，字幕偏移立即生效；⑦ 手机端偏移弹窗仍是底部面板 + 旧量程。
+- 回滚：`git checkout -- app/src/leanback/res/layout/dialog_offset.xml app/src/main/java/com/fongmi/android/tv/ui/dialog/OffsetPanel.java`。

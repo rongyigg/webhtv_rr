@@ -1,136 +1,145 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+    播放页「偏移设置」侧边弹窗：逐字照抄逆向 ref_docs/dialog_offset.xml
+    （反编译原件 resources/res/layout/dialog_offset.xml）。
+
+    逆向对应关系（见 docs 10.25）：
+    - m52 extends ci（= BaseSideSheetDialog 系），Z() 宽度 = min(320dp, 屏宽/2)，
+      与我们的 OffsetDialog.SideSheet.getWidth() 完全一致；
+    - 根节点**没有** background：原版没有清窗口背景（ci.V() 只 setDraggable(false)），
+      面板底色由 Material3 SideSheet 自己的 surface 提供，所以这里不能再套一层
+      玻璃卡片，否则会在侧边栏里多出一块紫色圆角卡片；
+    - 头部 paddingTop 16dp / bottom 8dp / start&end 24dp，标题
+      ?attr/textAppearanceHeadlineSmall + 纯白，Reset 是 Material3 TonalButton；
+    - 两个 section 默认 gone，m52.b0() 按 type 只显示一个（1=音轨，其余=字幕），
+      并让对应的 Slider 先拿焦点；
+    - 音频 Slider：step 100、-10000..10000（±10s，0.1s 一档）；
+      字幕 Slider：step 1000、-300000..300000（±300s，1s 一档）；
+    - 尾部 24dp 占位 View。
+
+    逐字照抄意味着保留原版重复写的 paddingLeft/paddingHorizontal 等属性，
+    它们只是等价的冗余声明，不要为了「整洁」删改。
+-->
 <androidx.appcompat.widget.LinearLayoutCompat xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
-    xmlns:tools="http://schemas.android.com/tools"
+    android:orientation="vertical"
     android:layout_width="match_parent"
-    android:layout_height="wrap_content"
-    android:background="@drawable/shape_dialog_glass_panel"
-    android:orientation="vertical">
-
+    android:layout_height="wrap_content">
     <androidx.appcompat.widget.LinearLayoutCompat
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
         android:gravity="center_vertical"
         android:orientation="horizontal"
-        android:paddingStart="24dp"
         android:paddingTop="16dp"
-        android:paddingEnd="24dp"
-        android:paddingBottom="8dp">
-
+        android:paddingBottom="8dp"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:paddingStart="24dp"
+        android:paddingEnd="24dp">
         <com.google.android.material.textview.MaterialTextView
+            android:textAppearance="?attr/textAppearanceHeadlineSmall"
+            android:textColor="@color/white"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
-            android:layout_weight="1"
             android:text="@string/offset_setting"
-            android:textAppearance="?attr/textAppearanceHeadlineSmall"
-            android:textColor="@color/white" />
-
+            android:layout_weight="1"/>
         <com.google.android.material.button.MaterialButton
+            android:textColor="@color/white"
             android:id="@+id/reset"
-            style="@style/Widget.Material3.Button.TonalButton"
+            android:focusable="true"
+            android:focusableInTouchMode="true"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:focusable="true"
-            android:focusableInTouchMode="true"
             android:text="@string/danmaku_reset"
-            android:textColor="@color/white" />
-
+            style="@style/Widget.Material3.Button.TonalButton"/>
     </androidx.appcompat.widget.LinearLayoutCompat>
-
     <androidx.appcompat.widget.LinearLayoutCompat
-        android:id="@+id/audioSection"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
         android:orientation="vertical"
+        android:id="@+id/audioSection"
         android:visibility="gone"
-        tools:visibility="visible">
-
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content">
         <androidx.appcompat.widget.LinearLayoutCompat
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
             android:gravity="center_vertical"
             android:orientation="horizontal"
+            android:paddingLeft="24dp"
+            android:paddingTop="4dp"
+            android:paddingRight="24dp"
+            android:paddingBottom="4dp"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
             android:paddingHorizontal="24dp"
             android:paddingVertical="4dp">
-
             <com.google.android.material.textview.MaterialTextView
+                android:textAppearance="?attr/textAppearanceBodyLarge"
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
-                android:layout_weight="1"
                 android:text="@string/offset_audio"
-                android:textAppearance="?attr/textAppearanceBodyLarge" />
-
+                android:layout_weight="1"/>
             <com.google.android.material.textview.MaterialTextView
+                android:textAppearance="?attr/textAppearanceBodyMedium"
+                android:textColor="@color/white"
                 android:id="@+id/audioValue"
                 android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:textAppearance="?attr/textAppearanceBodyMedium"
-                android:textColor="@color/white" />
-
+                android:layout_height="wrap_content"/>
         </androidx.appcompat.widget.LinearLayoutCompat>
-
         <com.google.android.material.slider.Slider
             android:id="@+id/audioSlider"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginHorizontal="12dp"
             android:focusable="true"
             android:focusableInTouchMode="true"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginLeft="12dp"
+            android:layout_marginRight="12dp"
             android:stepSize="100"
             android:valueFrom="-10000"
             android:valueTo="10000"
-            app:tickVisible="false" />
-
+            android:layout_marginHorizontal="12dp"
+            app:tickVisible="false"/>
     </androidx.appcompat.widget.LinearLayoutCompat>
-
     <androidx.appcompat.widget.LinearLayoutCompat
-        android:id="@+id/textSection"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
         android:orientation="vertical"
+        android:id="@+id/textSection"
         android:visibility="gone"
-        tools:visibility="visible">
-
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content">
         <androidx.appcompat.widget.LinearLayoutCompat
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
             android:gravity="center_vertical"
             android:orientation="horizontal"
-            android:paddingHorizontal="24dp"
-            android:paddingVertical="4dp">
-
-            <com.google.android.material.textview.MaterialTextView
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:text="@string/offset_text"
-                android:textAppearance="?attr/textAppearanceBodyLarge" />
-
-            <com.google.android.material.textview.MaterialTextView
-                android:id="@+id/textValue"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:textAppearance="?attr/textAppearanceBodyMedium"
-                android:textColor="@color/white" />
-
-        </androidx.appcompat.widget.LinearLayoutCompat>
-
-        <com.google.android.material.slider.Slider
-            android:id="@+id/textSlider"
+            android:paddingLeft="24dp"
+            android:paddingTop="4dp"
+            android:paddingRight="24dp"
+            android:paddingBottom="4dp"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginHorizontal="12dp"
+            android:paddingHorizontal="24dp"
+            android:paddingVertical="4dp">
+            <com.google.android.material.textview.MaterialTextView
+                android:textAppearance="?attr/textAppearanceBodyLarge"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:text="@string/offset_text"
+                android:layout_weight="1"/>
+            <com.google.android.material.textview.MaterialTextView
+                android:textAppearance="?attr/textAppearanceBodyMedium"
+                android:textColor="@color/white"
+                android:id="@+id/textValue"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"/>
+        </androidx.appcompat.widget.LinearLayoutCompat>
+        <com.google.android.material.slider.Slider
+            android:id="@+id/textSlider"
             android:focusable="true"
             android:focusableInTouchMode="true"
-            android:stepSize="100"
-            android:valueFrom="-10000"
-            android:valueTo="10000"
-            app:tickVisible="false" />
-
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginLeft="12dp"
+            android:layout_marginRight="12dp"
+            android:stepSize="1000"
+            android:valueFrom="-300000"
+            android:valueTo="300000"
+            android:layout_marginHorizontal="12dp"
+            app:tickVisible="false"/>
     </androidx.appcompat.widget.LinearLayoutCompat>
-
     <View
         android:layout_width="match_parent"
-        android:layout_height="24dp" />
-
+        android:layout_height="24dp"/>
 </androidx.appcompat.widget.LinearLayoutCompat>
