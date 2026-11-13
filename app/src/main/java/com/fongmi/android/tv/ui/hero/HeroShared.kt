@@ -14,8 +14,7 @@
  * - [HeroLogoCache]：`posterKey → logoUrl` 落盘 + 内存缓存；
  * - [clearHeroCaches]：设置页「清理缓存」的统一入口；
  * - [heroTmdbKey] / [tmdbLogoKey]：跨页一致的缓存 key 规则；
- * - [upgradeTmdbImage]：TMDB 图片地址只升不降的档位升级；
- * - [rememberHeroImageModel]：首页 / 详情页共用的 Coil 图片请求。
+ * - [upgradeTmdbImage]：TMDB 图片地址只升不降的档位升级。
  *
  * 保持同一份实现是刻意为之：key 规则或常量一旦分叉，「首页预取的东西详情页取不到」，
  * 表现为封面先空一帧再闪现。
@@ -23,12 +22,7 @@
 package com.fongmi.android.tv.ui.hero
 
 import android.content.Context
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.remember
-import androidx.compose.ui.platform.LocalContext
 import coil3.SingletonImageLoader
-import coil3.request.ImageRequest
-import coil3.request.crossfade
 import com.fongmi.android.tv.App
 import com.fongmi.android.tv.bean.TmdbItem
 import com.fongmi.android.tv.bean.TmdbPerson
@@ -272,28 +266,3 @@ internal fun upgradeTmdbImage(url: String, targetWidth: String): String {
     if (current < 0 || target < 0 || current >= target) return url
     return url.substring(0, sizeStart) + targetWidth + url.substring(sizeEnd)
 }
-
-/**
- * 统一的图片请求：首页 / 详情页所有 `AsyncImage` 都从这里拿 model。
- *
- * - 固定 [HERO_IMAGE_CROSSFADE_MS] 淡入：首载、换图、预热命中都不会硬切；
- * - `crossfadeMs = 0` 是给首页背景大图用的：它自己有一条 450ms 的 scale + alpha 动画
- *   （对齐 `HeroImageView` 的 AnimatorSet），再叠一层 Coil 淡入就会变成「两次淡入」；
- * - `remember(context, url)`：同一个 URL 重组时复用同一个请求，Coil 才能命中内存 / 磁盘缓存，
- *   否则每帧新建 ImageRequest 会被当成新请求重新读一遍；
- * - `internal`：详情页（同包）的背景 / 海报 / 演员头像复用同一份实现，
- *   保证与首页预热**参数逐字一致**，点进详情时图片已经在缓存里。
- */
-@Composable
-internal fun rememberHeroImageModel(url: String, crossfadeMs: Int = HERO_IMAGE_CROSSFADE_MS): ImageRequest {
-    val context = LocalContext.current
-    return remember(context, url, crossfadeMs) {
-        ImageRequest.Builder(context)
-            .data(url)
-            .crossfade(crossfadeMs)
-            .build()
-    }
-}
-
-/** 所有 Coil 请求的统一淡入时长：图片从透明淡到不透明，换图 / 首载都不会「啪」地硬切。 */
-private const val HERO_IMAGE_CROSSFADE_MS = 500

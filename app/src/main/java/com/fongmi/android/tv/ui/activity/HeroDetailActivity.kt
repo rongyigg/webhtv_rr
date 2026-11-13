@@ -13,13 +13,6 @@ import android.view.ViewGroup
 import android.widget.ImageView
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Shadow
-import androidx.compose.ui.unit.Dp
-import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
@@ -456,7 +449,7 @@ class HeroDetailActivity : AppCompatActivity() {
             loading -> stateText.visibility = View.GONE
             detailState == DetailState.Error -> {
                 val error = state.detailResult?.msg.orEmpty()
-                // 与 Compose 版 DETAIL_ERROR_COLOR 同值：失败提示用淡红，和普通空态区分开。
+                // 失败提示用淡红，和普通空态区分开。
                 stateText.setTextColor(0xFFFF8A80.toInt())
                 stateText.text = if (error.isBlank()) {
                     "详情加载失败，按「播放」重试"
@@ -467,7 +460,7 @@ class HeroDetailActivity : AppCompatActivity() {
             }
 
             detailState == DetailState.Empty -> {
-                // 与 Compose 版 DETAIL_META_COLOR 同值：空态是说明文字，不用告警色。
+                // 空态是说明文字，不用告警色。
                 stateText.setTextColor(0xCCFFFFFF.toInt())
                 stateText.text = state.emptyHint
                 stateText.visibility = View.VISIBLE
@@ -1175,34 +1168,6 @@ private fun Vod.hydrateInlineEpisodes(): Boolean {
 }
 
 /**
- * 在已挂载的 FocusRequester 列表里安全请求焦点：未组合的 Lazy 项会抛异常，这里降级返回 false。
- */
-internal fun requestDetailFocus(requesters: List<FocusRequester>, index: Int): Boolean {
-    val requester = requesters.getOrNull(index) ?: return false
-    return runCatching { requester.requestFocus() }.isSuccess
-}
-
-/** 按钮组的左右移动：统一走这里，成功后才更新记忆索引。 */
-private fun focusAction(requesters: List<FocusRequester>, index: Int, onFocused: (Int) -> Unit) {
-    if (requestDetailFocus(requesters, index)) onFocused(index)
-}
-
-/**
- * 演职员行移动：只负责请求焦点。
- * 记忆索引由每个条目的 `onFocusChanged` 维护（Lazy 项未组合时 request 会失败，忽略即可）。
- */
-private fun focusCast(requesters: List<FocusRequester>, index: Int) {
-    requestDetailFocus(requesters, index)
-}
-
-/** 按钮组定义：图标、图标尺寸、文案全部集中在这里，新增按钮只改这个列表。 */
-private data class HeroDetailAction(
-    val label: String,
-    val iconRes: Int,
-    val iconSize: Dp,
-)
-
-/**
  * 演职员：稳定 key + 姓名 + 头像地址。
  *
  * 真实入口下三个字段全部来自 TMDB（[HeroDetail.tmdbPersons]），[id] 由 personId + 下标拼成，
@@ -1598,16 +1563,6 @@ private val DEMO_DETAIL = HeroDetail(
     actor = "",
 )
 
-/** 按钮顺序按需求固定为 播放 | 换源 | 收藏。 */
-private val DETAIL_ACTIONS = listOf(
-    HeroDetailAction(label = "播放", iconRes = R.drawable.ic_widget_play, iconSize = 24.dp),
-    HeroDetailAction(label = "换源", iconRes = R.drawable.ic_detail_change, iconSize = 20.dp),
-    HeroDetailAction(label = "收藏", iconRes = R.drawable.ic_detail_keep_off, iconSize = 20.dp),
-)
-
-/** 全局左侧基准线：内容区左侧 padding 严格 24dp（原版详情页同值）。 */
-private val HERO_PADDING = 24.dp
-
 /** 详情页日志标签（请求 / 到达 / 起播各一条，排查「点了没反应」时先看这里）。 */
 internal const val TAG_DETAIL = "HeroDetail"
 
@@ -1619,111 +1574,3 @@ private const val DETAIL_ACTION_CHANGE_SOURCE = 1
 
 /** 「收藏」在按钮组里的固定下标（读写本地 Keep 表）。 */
 private const val DETAIL_ACTION_KEEP = 2
-
-// ---------------------------------------------------------------------------
-// 左下内容区（activity_detail.xml detailTop L62-190）
-// ---------------------------------------------------------------------------
-/** 内容区底部留白：防止最后一行演职员贴到屏幕边缘。 */
-private val CONTENT_BOTTOM_PADDING = 32.dp
-/** TMDB 艺术字 Logo：高 96dp（与首页 `HERO_LOGO_HEIGHT` 一致）、最宽 720dp。 */
-private val LOGO_HEIGHT = 96.dp
-private val LOGO_MAX_WIDTH = 720.dp
-private const val DETAIL_TITLE_SP = 32f
-private val DETAIL_TITLE_HEIGHT = 36.dp
-private val DETAIL_TITLE_META_GAP = 2.dp
-private val DETAIL_META_HEIGHT = 20.dp
-private const val DETAIL_META_SP = 14f
-private val DETAIL_META_COLOR = Color(0xCCFFFFFF)
-/** 详情请求失败提示：淡红，和普通元数据区分开。 */
-private val DETAIL_ERROR_COLOR = Color(0xFFFF8A80)
-private val DETAIL_META_DESC_GAP = 4.dp
-/** 简介最大宽度 440dp：每行约 30 个汉字，4 行刚好不喧宾夺主。 */
-private val DETAIL_DESC_MAX_WIDTH = 440.dp
-private const val DETAIL_DESC_MAX_LINES = 4
-private const val DETAIL_DESC_SP = 12f
-private const val DETAIL_DESC_LINE_HEIGHT_SP = 17f
-private val DETAIL_DESC_COLOR = Color(0xBBFFFFFF)
-private val DETAIL_ACTIONS_TOP_GAP = 12.dp
-private val DETAIL_CAST_TOP_GAP = 16.dp
-/** 真实导演 / 主演文字行：与简介同一视觉层级，字号略小于元数据。 */
-private val DETAIL_CREDIT_TOP_GAP = 8.dp
-private const val DETAIL_CREDIT_SP = 12f
-/** 详情加载态转圈：小尺寸，不抢按钮组的视觉重心。 */
-private val DETAIL_LOADING_SIZE = 16.dp
-private val DETAIL_LOADING_GAP = 8.dp
-private val DETAIL_LOADING_STROKE = 2.dp
-
-// XML 阴影参数是 px 值，Compose 的 Shadow 同样按 px 解释，因此直接照抄。
-private val DETAIL_TITLE_SHADOW = Shadow(
-    color = Color(0xCC000000),
-    offset = Offset(2f, 2f),
-    blurRadius = 12f,
-)
-private val DETAIL_META_SHADOW = Shadow(
-    color = Color(0xAA000000),
-    offset = Offset(1.5f, 1.5f),
-    blurRadius = 8f,
-)
-private val DETAIL_DESC_SHADOW = Shadow(
-    color = Color(0xAA000000),
-    offset = Offset(1.2f, 1.2f),
-    blurRadius = 6f,
-)
-
-// ---------------------------------------------------------------------------
-// 演职员区（Netflix 风格）：60dp 圆形头像 + 12sp 名字，可聚焦
-// ---------------------------------------------------------------------------
-private const val CAST_TITLE_SP = 14f
-private val CAST_TITLE_GAP = 10.dp
-private val CAST_AVATAR_SIZE = 60.dp
-private val CAST_AVATAR_BORDER = 1.dp
-private val CAST_AVATAR_BORDER_COLOR = Color(0x66FFFFFF)
-private val CAST_AVATAR_BACKGROUND = Color(0xFF2A2A2A)
-private val CAST_NAME_GAP = 6.dp
-private const val CAST_NAME_SP = 12f
-private val CAST_NAME_COLOR = Color(0xCCFFFFFF)
-private val CAST_ITEM_WIDTH = 76.dp
-private val CAST_ITEM_GAP = 12.dp
-
-/** 焦点态：2dp 红圈 + 1.08 倍放大。 */
-private val CAST_FOCUS_BORDER = 2.dp
-private const val CAST_FOCUS_SCALE = 1.08f
-
-// ---------------------------------------------------------------------------
-// 演员详情弹窗（轻量骨架）
-// ---------------------------------------------------------------------------
-private const val ACTOR_DIALOG_WIDTH_FRACTION = 0.5f
-private val ACTOR_DIALOG_AVATAR = 56.dp
-private val ACTOR_DIALOG_AVATAR_GAP = 12.dp
-private val ACTOR_DIALOG_HEADER_GAP = 16.dp
-private val ACTOR_DIALOG_SPINNER = 18.dp
-private const val ACTOR_DIALOG_NAME_SP = 18f
-private const val ACTOR_DIALOG_BODY_SP = 14f
-private const val ACTOR_DIALOG_BODY_LINE_HEIGHT = 22f
-private const val ACTOR_DIALOG_HINT_SP = 12f
-private val ACTOR_DIALOG_HINT_COLOR = Color(0x99FFFFFF)
-
-/** 假接口延迟：2 秒，用来验证 Loading 态与「不阻塞遥控器」。 */
-private const val ACTOR_PROFILE_FAKE_DELAY_MS = 2_000L
-
-// ---------------------------------------------------------------------------
-// 右上浮动海报 150dp × 210dp（activity_detail.xml posterCard L30-48）
-// ---------------------------------------------------------------------------
-private val POSTER_WIDTH = 150.dp
-private val POSTER_HEIGHT = 210.dp
-private val POSTER_TOP_GAP = 72.dp
-private val POSTER_END_GAP = 80.dp
-private val POSTER_INNER_PADDING = 4.dp
-private val POSTER_SHAPE = RoundedCornerShape(12.dp)
-private val POSTER_BACKGROUND = Color(0x33000000) // black_20
-
-// ---------------------------------------------------------------------------
-// 按钮组：高 36dp / 字号 13sp 加粗 / 间距 12dp（L125-189）
-// ---------------------------------------------------------------------------
-private val DETAIL_ACTION_HEIGHT = 36.dp
-private const val DETAIL_ACTION_SP = 13f
-private val DETAIL_ACTION_GAP = 12.dp
-private val DETAIL_ACTION_ICON_GAP = 4.dp
-private val DETAIL_ACTION_H_PADDING = 16.dp
-private val DETAIL_ACTION_SHAPE = RoundedCornerShape(4.dp)
-private val DETAIL_ACTION_IDLE_BACKGROUND = Color(0x1AFFFFFF) // white_10

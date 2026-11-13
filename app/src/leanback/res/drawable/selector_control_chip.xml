@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    播放控制栏按钮状态皮肤（原版 WebHTV 行为）：
+    - 焦点：1.5dp 白细框（@drawable/shape_control_chip_focused）；
+    - 选中（跨类 / 换源 / 反转等开关）：无底色、无边框，只靠文字颜色表达；
+    - 常态：透明 + 8dp/12dp 内边距（与焦点态同尺寸，切换时不跳字）。
+    只给 @style/Control 使用；全局 @drawable/selector_chip 的红色焦点保持不变。
+-->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:drawable="@drawable/shape_control_chip_focused" android:state_focused="true" />
+    <item android:drawable="@drawable/shape_chip_normal" />
+</selector>

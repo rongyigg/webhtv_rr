@@ -907,7 +907,7 @@ appendPage(list, site, pageCount) // T1 的追加分支：空页 / 全重复 →
 - 待真机验证：① 播放页按「轨道」，面板应**全宽**贴底、顶部 28dp 圆角、`?attr/colorSurface` 底色，视频**不再被压暗**，双列标题回到屏幕左缘 20dp / 中间 24dp 起点；② 轨道上下移动焦点、点选切换音视频轨一切照旧；③ 换源弹窗出结果后在第一个 Tab 上按 ↓，卡片拿到焦点；④ 卡片有焦点时继续有新结果/进度回调进来，焦点应停在原卡片不回跳小房子；⑤ 从卡片按 ↑ 仍回当前 Tab、按确定仍直达选集、下探 folder 与「⬅️ 返回」不受影响。
 - 回滚：`git checkout -- app/src/leanback/res/layout/dialog_track_panel.xml app/src/leanback/java/com/fongmi/android/tv/ui/dialog/TrackPanelDialog.java app/src/main/java/com/fongmi/android/tv/ui/dialog/BaseBottomSheetDialog.java app/src/main/java/com/fongmi/android/tv/ui/hero/ChangeSourceDialog.kt`。
 
-### 10.21 轨道面板换成原版「很透明的渐变黑」+ 播放控制栏焦点首尾循环（2026-11-13，未提交）
+### 10.21 轨道面板换成原版「很透明的渐变黑」+ 播放控制栏焦点首尾循环（2026-11-13，已提交 `05957ccc9`）
 
 10.20 提交 `63ee79136` 后用户反馈两点：**① 轨道弹窗呼出后是一整块不透明黑色，很难看；原版是很透明的渐变黑**（用户截不到视频画面，所以看不到原版遮罩的实际颜色）；**② 播放控制栏焦点要能循环：最左再按左回到最右，最右按右回到最左**。
 
@@ -938,3 +938,55 @@ appendPage(list, site, pageCount) // T1 的追加分支：空页 / 全重复 →
 - 静态（`check_round11.py`）：`shape_controller.xml` 含 `angle="270"` / `black_20` / `black_50` / 8dp 顶圆角且无 `colorSurface`、无 28dp；`dialog_track_panel.xml` 根背景仍为 `@drawable/shape_controller` 且 10.19 的 16sp / 24dp 标题未被破坏；`PlayerControlFocusHelper` 含 `handleHorizontalWrap` + `lastFocusable` 且 `handleKey` 原逻辑未变；`VideoActivity` 中 `handleHorizontalWrap(mBinding.osdControl.osdActions, event)` 位于 `dispatchOsdDownKey` 与 `handleKey` 之间；Java 花括号配平；`git diff --check` 无空白错误。
 - 待真机验证：① 播放页按「轨道」，面板应贴底全宽、**能透出视频画面**，顶部 20% 黑、底部 50% 黑、8dp 圆角；② 面板内上下移动焦点、切换音视频轨照旧；③ 控制栏焦点在最左「上一集」再按左 → 直接跳到最右「片尾」并自动横向滚动到该按钮；④ 最右再按右 → 回到最左「上一集」；⑤ 中间按钮左右移动顺序不变，行内不会误循环；⑥ 片头/片尾上按 ↑↓ 调时间、按 ↓ 收起控制栏等原有行为不受影响。
 - 回滚：`git checkout -- app/src/leanback/res/drawable/shape_controller.xml app/src/leanback/res/layout/dialog_track_panel.xml app/src/main/java/com/fongmi/android/tv/ui/helper/PlayerControlFocusHelper.java app/src/leanback/java/com/fongmi/android/tv/ui/activity/VideoActivity.java`。
+
+### 10.22 播放控制栏去掉红框 + Compose 残留终极清理（2026-11-13，未提交）
+
+10.21 提交 `05957ccc9` 后用户提出：**① 直播播放控制栏上的红框要去掉，这个控制栏应该是原版 WebHTV 的样式**；**② 代码库终极瘦身：删除被纯 View 替代的旧 Compose 详情页 / 搜索页 / 换源弹窗 / 选集页 / 侧边栏代码**（只删文件、不动依赖、不编译）。
+
+#### ① 播放控制栏红框：逆向证据
+
+截图里的三处红框分别是：`配置`（焦点态）、`跨类` / `换源`（`setSelected` 选中态，见 `LiveActivity` L264-266）。它们来自我们 28b479a18 / 44a488d34 两轮把全局 chip 皮肤改成红色：
+
+- `shape_chip_focused.xml`：1.5dp `@color/osd_red_end`（#E53935）红框；
+- `shape_chip_activated.xml`：1dp `@color/osd_focus`（= `osd_red_end`）红框；
+- `selector_chip.xml` 被 `@style/Control` 引用 → 直播 / 点播 / 投屏 / TMDB 详情控制栏全部中招。
+
+原版 WebHTV 同名资源（`git show 5c05ce4e2:app/src/leanback/res/drawable/...`）：
+
+- `shape_chip_focused.xml`：1.5dp `@color/white` **白框**；
+- `shape_chip_activated.xml`：**透明**（只有 8dp / 12dp 内边距，无边框）。
+
+改法：不动全局 `selector_chip`（解析线路列表等其它界面仍保留红色焦点），新增控制栏专用 `selector_control_chip.xml`（焦点 → `shape_control_chip_focused.xml` 1.5dp 白框；其余 → `shape_chip_normal` 透明），`@style/Control` 背景改为 `@drawable/selector_control_chip`。直播 / 点播 / 投屏 / TMDB 详情控制栏恢复「焦点白框、选中无框」；跨类 / 换源文字颜色仍由 `@color/text` 的 selected 状态决定，本轮未改。
+
+#### ② Compose 残留排查结论（只读，全局搜 `androidx.compose` / `setContent` / `ComposeView` / 类名）
+
+| 目标 | 结论 |
+| --- | --- |
+| 搜索页 | `HeroSearchActivity.kt` 已是纯 View（RecyclerView + `SourceSidebar` + XML），没有旧 Compose 实现或旧文件 |
+| 换源弹窗 | `ChangeSourceDialog.kt` 纯 View（10.20 刚改过），无 Compose |
+| 选集页 | 不存在 `EpisodeScreen.kt`；`EpisodeViewDialog.kt` 纯 View |
+| 侧边栏 | `SourceSidebar.kt` 纯 View（Dialog + `dialog_source_sidebar.xml`） |
+| 详情页 | `HeroDetailActivity.kt` 纯 View；旧 Compose 详情页已在此前提交删除（`da07193c0` 等） |
+
+清理前仍带 Compose 引用的只有 4 个文件：
+
+- `HeroCommonUi.kt`（3 个 `@Composable` + 2 个主题常量）→ 全局无代码引用，删除；
+- `HeroShared.kt` 的 `rememberHeroImageModel`（`@Composable`）→ 全局无引用，删除；
+- `HeroDetailActivity.kt` 的 7 条 Compose import + 一批 Compose 类型死常量 / 死函数 → 删除；
+- `HeroDetailStateManager.kt`（`mutableStateOf` / `withFrameNanos` / `FocusRequester`）→ **保留**：纯 View 详情页仍在用（`state.xxx` 20+ 处），它不是页面 / UI，删除需要重写状态订阅，超出本轮「只删废弃页面文件」的范围；Compose 依赖本轮也未动。
+
+#### ③ 删除清单（引用证据）
+
+- `app/src/main/java/com/fongmi/android/tv/ui/hero/HeroCommonUi.kt`（整文件 192 行）：`HeroDialogShell` / `HeroSectionTitle` / `HeroHomeLogoButton` / `HeroAccentColor` / `HeroFocusBrush` 全局只出现在注释里，无任何代码引用 → `git rm`。
+- `app/src/main/java/com/fongmi/android/tv/ui/hero/HeroShared.kt`：删 `rememberHeroImageModel` + `Composable` / `remember` / `LocalContext` / `ImageRequest` / `crossfade` import + 只服务它的 `HERO_IMAGE_CROSSFADE_MS`；保留 `HeroTmdbData` / `HeroTmdbPrefetchCache` / `HeroLogoCache` / `clearHeroCaches` / `heroTmdbKey` / `tmdbLogoKey` / `upgradeTmdbImage`（仍被首页 / 详情 / 历史 / 收藏 / 播放页 / `FileUtil` 使用）。
+- `app/src/main/java/com/fongmi/android/tv/ui/activity/HeroDetailActivity.kt`：删 7 条 Compose import、`requestDetailFocus` / `focusAction` / `focusCast(List<FocusRequester>, Int)`、`HeroDetailAction` + `DETAIL_ACTIONS`、`HERO_PADDING` 与文末 107 行 Compose 常量块（`CONTENT_BOTTOM_PADDING` / `LOGO_*` / `DETAIL_*` / `CAST_*` / `ACTOR_*` / `POSTER_*` / `DETAIL_ACTION_*`）；保留 `HeroCast`（`HeroDetail` 字段 + `DEMO_DETAIL` 仍用）、`DEMO_DETAIL`、`TAG_DETAIL`、`DETAIL_ACTION_PLAY/CHANGE_SOURCE/KEEP`、`MAX_PLAY_DRILL` / `PLAY_FALLBACK_WAIT_MS`（被 `HeroDetailStateManager` 使用）。
+
+未删除：`HeroDetailStateManager.kt`（见上）；`app/build.gradle` 的 compose 插件 / BOM / material3 / coil-compose 依赖按红线保留。
+
+Manifest：没有任何 Compose Activity 节点（`HeroHomeActivity` / `HeroHistoryActivity` / `HeroDetailViewPreviewActivity` 早已删除），本轮**未改** `AndroidManifest.xml`。
+
+#### 验证与回滚
+
+- 静态（`check_round12.py`）：`HeroCommonUi.kt` 不存在；`androidx.compose` 只剩 `HeroDetailStateManager.kt`；`HeroShared` 无 Compose 引用且保留核心 API；`HeroDetail` 无 Compose import / 死符号且保留 `HeroCast` / `DEMO_DETAIL` / `TAG_DETAIL` / `DETAIL_ACTION_*` / `MAX_PLAY_DRILL` / `PLAY_FALLBACK_WAIT_MS`；控制栏 `selector_control_chip` 焦点 = 1.5dp 白框、常态 / 选中 = `shape_chip_normal`，`@style/Control` 不再引用 `selector_chip`，全局红色 chip 未被改；3 个 XML 可解析；两个 Kotlin 文件花括号配平；`git diff --check` 无空白错误。**未编译**（按用户要求只出 diff）。
+- 待真机验证：① 直播控制栏焦点移到「配置」应为白色细框，不再红框；②「跨类 / 换源」选中时无边框，只保留文字颜色；③ 点播 / 投屏 / TMDB 详情控制栏同样变白框；④ 详情页 / 搜索页 / 换源 / 选集 / 侧边栏功能与视觉不变；⑤ 解析线路列表等其它界面的红色焦点保持不变。
+- 回滚：`git checkout -- app/src/leanback/res/values/styles.xml app/src/main/java/com/fongmi/android/tv/ui/activity/HeroDetailActivity.kt app/src/main/java/com/fongmi/android/tv/ui/hero/HeroShared.kt` + `git checkout HEAD -- app/src/main/java/com/fongmi/android/tv/ui/hero/HeroCommonUi.kt`，并删除 `shape_control_chip_focused.xml` / `selector_control_chip.xml`。
