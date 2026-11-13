@@ -836,7 +836,7 @@ appendPage(list, site, pageCount) // T1 的追加分支：空页 / 全重复 →
 - 待真机验证：① 连续快速左右移动焦点 10 次，焦点卡的 w1920 横图应在数秒内出图（不再 20 秒空转）；② 停在一张卡上不动，日志里应只有 1 条该 URL 的图片请求；③ 停稳约 0.4s 后才出现邻居详情请求，移动焦点时这些请求立刻消失；④ 配了自定义 DoH / `hosts` 的环境下 TMDB 图仍能出。
 - 回滚：`git checkout -- app/src/main/java/com/fongmi/android/tv/ui/activity/HomeViewActivity.kt app/src/main/java/com/fongmi/android/tv/ui/custom/HeroImageView.java app/src/main/java/com/fongmi/android/tv/net/HeroHttpDns.kt catvod/src/main/java/com/github/catvod/net/OkDns.java`。
 
-### 10.19 播放页轨道面板对齐原版 + 进度条滑块缩小（2026-11-13，未提交）
+### 10.19 播放页轨道面板对齐原版 + 进度条滑块缩小（2026-11-13，已提交 `9b7575f38`）
 
 10.18 提交后（`9bc2da4bb`）用户确认「很好 tmdb 问题解决了」，本轮转入播放页 UI：**轨道弹窗整体照抄原版**（字体大小、焦点/选中的样子），焦点与选中颜色统一改用本项目的渐变红；**播放控制栏进度条圆形滑块缩小**。
 
@@ -864,3 +864,45 @@ appendPage(list, site, pageCount) // T1 的追加分支：空页 / 全重复 →
 - 静态（`check_round9.py`）：5 个 XML 全部可解析；面板标题 16sp ×3（含 header）/paddingTop 24dp ×3；`track_content` paddingBottom 12dp；`adapter_track_panel` 为 16sp + `wrap_content` + 4dp/3dp 内边距 + marquee 且无 40dp/14sp 残留；`selector_track_panel_item` 焦点引用 `bg_global_focus_solid_red` 且无 `white_30`/`white_20`；适配器为 `setActivated` 且无 `setSelected`、`LinearGradient` 保留；`view_control_seek` 含 8dp/10dp scrubber 与 2dp bar；Java 括号配平；`git diff --check` 无空白错误。
 - 待真机验证：① 播放页按「轨道」，面板应为左右双列、标题 16sp、行文字 16sp 紧凑排列；② 上下移动焦点，整行出现 `osd_accent → osd_accent_light` 横向渐变红长条、文字纯白；③ 焦点移开后，当前生效轨道只剩红渐变文字、无底色；④ 进度条白色圆形滑块明显小于原版，拖动时略大但仍小于改前。
 - 回滚：`git checkout -- app/src/leanback/res/layout/dialog_track_panel.xml app/src/leanback/res/layout/adapter_track_panel.xml app/src/leanback/res/drawable/selector_track_panel_item.xml app/src/leanback/res/color/selector_track_panel_text.xml app/src/leanback/java/com/fongmi/android/tv/ui/adapter/TrackPanelAdapter.java app/src/leanback/res/layout/view_control_seek.xml`。
+
+### 10.20 轨道面板换回逆向遮罩 + 换源弹窗焦点不再回跳小房子（2026-11-13，未提交）
+
+10.19 提交 `9b7575f38` 后用户提出两点：**① 轨道弹窗的遮罩换成逆向样式**（我们那块太黑，见截图 `Screenshot_20261113-112754.png`）；**② 换源弹窗出结果后焦点在 Tab 栏第一个站源，按 ↓ 到卡片后有几率回跳左上角小房子**。
+
+#### ① 轨道面板遮罩：原版证据
+
+- 布局：`ref_docs/dialog_track.xml` 根节点 `android:background="@drawable/shape_controller"`、`android:layout_width="match_parent"`，只有**顶部 28dp 圆角**；我们 leanback 已有同名 `shape_controller.xml` = `?attr/colorSurface` 实心 + 28dp 顶圆角（10.19 已核对），但当时根节点用的是自造的 `bg_bottom_panel_scrim`。
+- 弹窗层：原版 `rg.V()`（`ref_docs/rg.java` L12-25）只做 `setWindowAnimations(0)` + `clearFlags(2)`，**不碰 dim**；master/fongmi 的 `BaseBottomSheetDialog` 同样不清、不设 dimAmount。
+- 像素对照（两张截图都是 1920×1080 @ density 320）：
+
+| 采样点 | 我们（11:27:54） | 原版（10:23:02） |
+| --- | --- | --- |
+| 面板横向范围 | 居中卡片 x=320..1600px（= 640dp），左右留黑 | 全宽：视频列标题 x=40px（20dp）、音频列 x=1012px（≈ 480dp + 24dp） |
+| 面板底色（中轴竖扫） | 顶 `#1C1C1C` → 底 `#030303`（`bg_bottom_panel_scrim` = `#CC222222` 叠加渐变到 `#E6000000`） | 面板区 (960,900)/(960,1000)/(100,1000) 全部 `#000000`（`shape_controller` 在黑色视频上几乎不可见） |
+| 视频是否被压暗 | OSD 白字最亮实测 `#ADADAD`（173/255）→ 系统 dim ≈ **0.32** | 无额外压暗 |
+
+结论：「遮罩太黑」不是面板颜色深，而是三件事叠出来的——① Material3 `BottomSheetBehavior` 默认 `maxWidth = material_bottom_sheet_max_width`（640dp）+ `layout_gravity=center_horizontal`，面板变成悬在屏幕中间的窄卡片，两侧全是黑；② 自造 `bg_bottom_panel_scrim` 渐变到底部近黑，面板下半截直接糊死；③ 系统 dim 0.32 又把整屏视频压暗一层。
+
+#### ② 改法（只动 leanback 播放页面板 + 共享基类的一个默认关闭的钩子）
+
+1. `dialog_track_panel.xml` 根背景 `@drawable/bg_bottom_panel_scrim` → **`@drawable/shape_controller`**（原版逐字同值：`?attr/colorSurface` + 28dp 顶部圆角）；
+2. `TrackPanelDialog.stableOverlay()` `false` → **`true`**：走 `BaseBottomSheetDialog` 已有的「清 `FLAG_DIM_BEHIND` + `setDimAmount(0f)`」分支，视频不再被压暗（与同播放页的 `TimerDialog` / `DanmakuDialog` 同一套约定）；
+3. `BaseBottomSheetDialog` 新增 `protected boolean fullWidth()`（默认 `false`，其它 BottomSheet 弹窗行为一个字节都不变）；`setBehavior()` 里 `fullWidth()` 为真时执行 `behavior.setMaxWidth(Integer.MAX_VALUE)` 解除 640dp 上限（`setMaxWidth` 为 Material 1.14.0 公开 API，已从 AAR 的 `BottomSheetBehavior.class` 反查 `public` 标志确认）；`TrackPanelDialog` 覆写为 `true`，面板变全宽，双列标题回到原版的 20dp / 24dp 起点。
+
+#### ③ 换源弹窗焦点回跳：逆向依据 + 根因
+
+- 原版 `f23.v0(Result)`（`ref_docs/f23.java` L1262-1278）首个结果到达时只做三件事：`siteLayout.setDescendantFocusability(FOCUS_AFTER_DESCENDANTS)`、**`homeBtn.setFocusable(false)` + `setFocusableInTouchMode(false)`**、`siteRecycler.postDelayed(焦点落到第 0 个 Tab, 16ms)`；只有 `I0()`（L601-608）才把 homeBtn 恢复可聚焦。原版结果列表从头到尾**没有** `notifyDataSetChanged()`，追加结果用 `notifyItemInserted`。
+- 我们 `render()` 原来**每次**都 `resultAdapter.notifyDataSetChanged()`，而 `searchProgress` 每完成一个源就回调一次（`onSearchProgress → render`）。全量重绑把正在聚焦的卡片整列 detach 再重建，焦点丢失后系统回退到窗口里第一个可聚焦控件 —— 本弹窗就是左上角小房子。这与「在 Tab 上按 ↓ 到卡片后**有几率**回跳」的时序完全吻合：必须恰好撞上一次迟到的结果 / 进度回调，所以是概率性的。
+- **不照抄 `homeBtn.setFocusable(false)`**：本工程小房子是「站点多选侧边栏」的唯一入口，结果出来后禁用会让侧边栏彻底进不去（原版没有这个多选能力）。这里改为从根因上消除焦点丢失，小房子保持可聚焦。
+
+#### ④ 改法（`ChangeSourceDialog.kt`）
+
+1. 新增 `renderedResults` 快照，`render()` 改调 `syncResultAdapter()`：只有 `visibleResults` 换了对象才通知适配器；追加（旧列表是新列表前缀）用 `notifyItemRangeInserted`，同数量换源用 `notifyItemRangeChanged`，只有缩表 / 换到条目更少的 Tab 才 `notifyDataSetChanged`。进度回调不再产生任何重绑；
+2. 新增 `focusedResultPosition`（结果卡 `setOnFocusChangeListener` 记录，`HeroPosterCard` 自身只覆写 `onFocusChanged`、没有占用该监听器，不冲突）；`syncResultAdapter()` 通知前记 `resultRecycler.hasFocus()`，通知后 `post` 检查，真丢了焦点就 `focusResult(focusedResultPosition)` 原位还焦；
+3. `focusFirstResult()` 抽出通用入口 `focusResult(position, attempt)`：任意下标落焦 + 布局未完成时重试一次（`FOCUS_RESULT_RETRY_COUNT = 1`）；`focusFirstResult()` = `focusResult(0)`，Tab 栏 ↓、下探回包后的落焦行为不变。
+
+#### 验证与回滚
+
+- 静态（`check_round10.py`）：`dialog_track_panel` 根背景 = `@drawable/shape_controller` 且不再出现 `bg_bottom_panel_scrim`、10.19 的 16sp / 24dp 标题未被破坏；`shape_controller` 仍是 `?attr/colorSurface` + 28dp；`TrackPanelDialog` 三个开关 `transparent()=true` / `stableOverlay()=true` / `fullWidth()=true`；`BaseBottomSheetDialog` 的 `fullWidth()` 默认 `false` 且接入 `setMaxWidth(Integer.MAX_VALUE)`；`ChangeSourceDialog` 的 `render()` 首行是 `syncResultAdapter()` 且函数体内无 `notifyDataSetChanged`，`syncResultAdapter` / `focusResult` / `FOCUS_RESULT_RETRY_COUNT` / `focusedResultPosition` / 丢焦还原行全部存在；三个改动文件花括号配平；`git diff --check` 无空白错误。
+- 待真机验证：① 播放页按「轨道」，面板应**全宽**贴底、顶部 28dp 圆角、`?attr/colorSurface` 底色，视频**不再被压暗**，双列标题回到屏幕左缘 20dp / 中间 24dp 起点；② 轨道上下移动焦点、点选切换音视频轨一切照旧；③ 换源弹窗出结果后在第一个 Tab 上按 ↓，卡片拿到焦点；④ 卡片有焦点时继续有新结果/进度回调进来，焦点应停在原卡片不回跳小房子；⑤ 从卡片按 ↑ 仍回当前 Tab、按确定仍直达选集、下探 folder 与「⬅️ 返回」不受影响。
+- 回滚：`git checkout -- app/src/leanback/res/layout/dialog_track_panel.xml app/src/leanback/java/com/fongmi/android/tv/ui/dialog/TrackPanelDialog.java app/src/main/java/com/fongmi/android/tv/ui/dialog/BaseBottomSheetDialog.java app/src/main/java/com/fongmi/android/tv/ui/hero/ChangeSourceDialog.kt`。

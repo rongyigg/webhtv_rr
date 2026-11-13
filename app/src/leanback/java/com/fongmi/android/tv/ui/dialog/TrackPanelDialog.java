@@ -59,16 +59,26 @@ public final class TrackPanelDialog extends BaseBottomSheetDialog implements Tra
         show(activity.getSupportFragmentManager(), null);
     }
 
-    /** 底板完全透明：直接铺在视频画面上，不再绘制深色圆角外壳。 */
+    /** 底板完全透明：面板底色由布局根节点的 `shape_controller` 自己画，弹窗容器不重复上色。 */
     @Override
     protected boolean transparent() {
         return true;
     }
 
-    /** 保留系统弹窗遮罩（FLAG_DIM_BEHIND）：面板本身透明，没有遮罩时浅色轨道文字压在亮画面上看不清。 */
+    /**
+     * 不压暗视频：原版轨道弹窗只铺一块 `shape_controller` 面板，没有额外遮罩
+     * （`rg.V()` 只清 FLAG_ALLOW_LOCK_WHILE_SCREEN_ON、设窗口动画 0，不动 dim）。
+     * 之前保留系统 dim 时整屏发黑，用户要求按逆向样式去掉。
+     */
     @Override
     protected boolean stableOverlay() {
-        return false;
+        return true;
+    }
+
+    /** 原版 `dialog_track.xml` 根节点是 `match_parent`：面板必须全宽，不能是居中的 640dp 卡片。 */
+    @Override
+    protected boolean fullWidth() {
+        return true;
     }
 
     @Override

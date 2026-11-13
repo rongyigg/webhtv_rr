@@ -74,6 +74,18 @@ public abstract class BaseBottomSheetDialog extends BottomSheetDialogFragment {
         return false;
     }
 
+    /**
+     * 是否铺满整个屏幕宽度。
+     *
+     * Material3 的 {@link BottomSheetBehavior} 默认把面板宽度限制在
+     * `material_bottom_sheet_max_width`（640dp）并水平居中，电视上会变成一块
+     * 悬在屏幕中间的窄卡片。原版播放页轨道面板（`ref_docs/dialog_track.xml`）是
+     * `match_parent` 全宽，需要它的子类把这条限制去掉。
+     */
+    protected boolean fullWidth() {
+        return false;
+    }
+
     protected void setBehavior(BottomSheetDialog dialog) {
         FrameLayout sheet = dialog.findViewById(com.google.android.material.R.id.design_bottom_sheet);
         if (sheet == null) return;
@@ -87,6 +99,8 @@ public abstract class BaseBottomSheetDialog extends BottomSheetDialogFragment {
             if (window != null) window.setBackgroundDrawableResource(android.R.color.transparent);
         }
         BottomSheetBehavior<FrameLayout> behavior = BottomSheetBehavior.from(sheet);
+        // 默认 maxWidth = 640dp（Material3），只有显式要求全宽的弹窗才解除。
+        if (fullWidth()) behavior.setMaxWidth(Integer.MAX_VALUE);
         behavior.setState(BottomSheetBehavior.STATE_EXPANDED);
         behavior.setSkipCollapsed(true);
     }

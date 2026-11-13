@@ -124,6 +124,16 @@ internal class ChangeSourceDialog private constructor(
     /** 当前展示的结果。永远只属于 [selectedSite] 这一个源。 */
     private var visibleResults: List<Vod> = emptyList()
 
+    /**
+     * 已提交给结果适配器的快照，见 [syncResultAdapter]。
+     *
+     * 初值与 [visibleResults] 是同一个 `emptyList()` 单例，首帧 `render()` 不会多发通知。
+     */
+    private var renderedResults: List<Vod> = emptyList()
+
+    /** 结果区最后聚焦的卡片下标（[RecyclerView.NO_POSITION] = 还没聚焦过）。 */
+    private var focusedResultPosition = RecyclerView.NO_POSITION
+
     /** 是否有请求在途（决定进度条 / 空态 / 列表三选一）。 */
     private var searching = false
 
@@ -444,7 +454,7 @@ internal class ChangeSourceDialog private constructor(
      * 避免「隐藏了列表但忘了收空态」这类状态残留。
      */
     private fun render() {
-        resultAdapter.notifyDataSetChanged()
+        syncResultAdapter()
         val hasResult = visibleResults.isNotEmpty()
         // 进度条只在「当前 Tab 还没有内容」时显示：已经有卡片时再盖一个转圈会挡住海报。
         progress.visibility = if (searching && !hasResult) View.VISIBLE else View.GONE
@@ -459,6 +469,32 @@ internal class ChangeSourceDialog private constructor(
         } else {
             context.getString(R.string.play_change_count, visibleResults.size)
         }
+    }
+
+    /**
+     * 只在结果集真的变了才通知适配器，并且尽量用增量通知。
+     *
+     * `searchProgress` 每完成一个源就回调一次，旧实现每次 `render()` 都无脑
+     * `notifyDataSetChanged()`：正在聚焦的卡片会被整列 detach 再重建，系统随后把焦点
+     * 回退到窗口里第一个可聚焦控件（本弹窗就是左上角小房子）——这就是「按 ↓ 到卡片后
+     * 偶尔跳回小房子」的根因。原版 `f23.v0()` 同样只用 `notifyItemInserted` 追加，
+     * 不整列重绑。
+     */
+    private fun syncResultAdapter() {
+        val items = visibleResults
+        if (items === renderedResults) return
+        val previous = renderedResults
+        renderedResults = items
+        val hadFocus = resultRecycler.hasFocus()
+        // 追加 = 旧列表是新的前缀（全局搜索只会往末尾补卡片）：插入通知不会重建已有卡片。
+        val appended = items.size > previous.size && previous.indices.all { items[it] === previous[it] }
+        when {
+            appended -> resultAdapter.notifyItemRangeInserted(previous.size, items.size - previous.size)
+            items.size == previous.size -> if (items.isNotEmpty()) resultAdapter.notifyItemRangeChanged(0, items.size)
+            else -> resultAdapter.notifyDataSetChanged()
+        }
+        // 兜底：更新后结果区确实丢了焦点（系统已经回退到小房子）就原位还回去。
+        if (hadFocus) resultRecycler.post { if (!resultRecycler.hasFocus()) focusResult(focusedResultPosition) }
     }
 
     private fun currentSite(): Site? = tabSites.getOrNull(selectedSite)
@@ -783,26 +819,27 @@ internal class ChangeSourceDialog private constructor(
     }
 
     /**
-     * 把焦点精准落到结果区的**第一张**卡片。
+     * 把焦点精准落到结果区的第 [position] 张卡片（默认第一张）。
      *
-     * Tab 栏按 ↓、下探回包后都用这一个入口：
-     * - 先 `scrollToPosition(0)`，保证第 0 张一定在可视区（否则 findViewHolder 永远拿不到）；
+     * Tab 栏按 ↓、下探回包、数据更新后的焦点还原都用这一个入口：
+     * - 先 `scrollToPosition`，保证目标卡一定在可视区（否则 findViewHolder 永远拿不到）；
      * - ViewHolder 还在布局中时补一次 post，两次都取不到才放弃，绝不把焦点留在 RecyclerView 容器上。
      */
-    private fun focusFirstResult() {
+    private fun focusResult(position: Int, attempt: Int = 0) {
         resultRecycler.post {
-            resultRecycler.scrollToPosition(0)
-            val holder = resultRecycler.findViewHolderForAdapterPosition(0)
+            if (visibleResults.isEmpty()) return@post
+            val target = position.coerceIn(0, visibleResults.lastIndex)
+            resultRecycler.scrollToPosition(target)
+            val holder = resultRecycler.findViewHolderForAdapterPosition(target)
             if (holder != null) {
                 holder.itemView.requestFocus()
-            } else {
-                resultRecycler.post {
-                    resultRecycler.scrollToPosition(0)
-                    resultRecycler.findViewHolderForAdapterPosition(0)?.itemView?.requestFocus()
-                }
+            } else if (attempt < FOCUS_RESULT_RETRY_COUNT) {
+                focusResult(target, attempt + 1)
             }
         }
     }
+
+    private fun focusFirstResult() = focusResult(0)
 
     // ------------------------------------------------------------------
     // 结果卡点击：folder 留在弹窗内下探，普通剧集直达选集
@@ -1026,6 +1063,11 @@ internal class ChangeSourceDialog private constructor(
                 // 点卡片**不再跳详情页**：folder 就地展开目录，普通剧集直接弹选集。
                 openResult(item, site)
             }
+            // 记下结果区最后聚焦的卡片：数据更新把焦点打飞时，syncResultAdapter 会原位还焦。
+            holder.card.setOnFocusChangeListener { _, hasFocus ->
+                val focused = holder.bindingAdapterPosition
+                if (hasFocus && focused != RecyclerView.NO_POSITION) focusedResultPosition = focused
+            }
             // 卡片按键全部在这里点名接管，不让系统 focus search 决定落点：
             // - ↑：精准回到**当前选中**的站点标签（下探期间站点栏隐藏，改回「⬅️ 返回」）；
             //   布局里 recycler 的 nextFocusUp 只指向 siteRecycler 容器，标签既不高亮也不滚动，
@@ -1104,6 +1146,9 @@ internal class ChangeSourceDialog private constructor(
         /** 初始焦点重试：ViewHolder 未布局完成时，焦点会停在 RecyclerView 上，标签就没有红底。 */
         private const val FOCUS_RETRY_COUNT = 6
         private const val FOCUS_RETRY_DELAY_MS = 50L
+
+        /** 结果区落焦重试次数：结果列表刚从 GONE 变 VISIBLE 时可能还没完成布局。 */
+        private const val FOCUS_RESULT_RETRY_COUNT = 1
 
         /**
          * 「焦点即选中」的请求防抖窗口（毫秒）。
