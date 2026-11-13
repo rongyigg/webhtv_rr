@@ -93,6 +93,15 @@ public final class OffsetDialog {
             return Math.min(ResUtil.dp2px(320), ResUtil.getScreenWidth() / 2);
         }
 
+        /**
+         * 播放页侧边栏不压暗视频：原版偏移面板打开时几乎看不到遮罩，
+         * 清掉 `FLAG_DIM_BEHIND` + dim=0 后，右侧滑出的面板背后就是原亮度画面。
+         */
+        @Override
+        protected boolean stableOverlay() {
+            return true;
+        }
+
         @Override
         protected ViewBinding getBinding(@NonNull LayoutInflater inflater, @Nullable ViewGroup container) {
             return binding = OffsetDialog.inflate(inflater, container);

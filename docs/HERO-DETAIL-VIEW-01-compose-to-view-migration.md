@@ -1146,3 +1146,95 @@ e: HeroDetailStateManager.kt:703:21 Unresolved reference 'requestDetailFocus'.
 - 静态（`check_round16.py`）：leanback `dialog_offset.xml` 可解析、根节点无 `background`、无 `shape_dialog_glass_panel`、头部 16/8dp、标题 `textAppearanceHeadlineSmall` + 白、Reset 为 TonalButton + `danmaku_reset`、音频 `100 / -10000 / 10000`、字幕 `1000 / -300000 / 300000`、两个 section 默认 `gone`、尾部 24dp 占位、无 `tools:`；`OffsetPanel` 有 `snap(`、无 `OFFSET_STEP_MS`、回调为 `Math.round(snapped)`、括号配平；`OffsetPanel` 用到的 7 个 binding id 在 **leanback 与 mobile 两个布局里都存在**（同一份共享 Java）；`OffsetDialog` 的 `SideSheet.getWidth()` 仍为 `min(dp2px(320), 屏宽/2)`；`git diff --check` 无空白错误。**未编译**（按用户要求只出 diff）。
 - 待真机验证：① 字幕列表头部点偏移圆钮 → 右侧滑出面板，底色是 Material3 侧边栏 surface（不再是紫色玻璃卡片 + 白描边）；② 标题「偏移设置」+ 右上「重置」按钮，只有一行「字幕偏移」+ 数值 + 滑块；③ 遥控器左右调滑块，数值按 1s 递增（±300s），拖动时 tooltip 显示 `+1.0s`；④ 点「重置」→ 滑块回中、数值 `+0.0s`、字幕立刻回到 0 偏移；⑤ 音轨列表打开时同一弹窗显示「音频偏移」、0.1s 一档（±10s）；⑥ 关闭侧边栏回到播放页，字幕偏移立即生效；⑦ 手机端偏移弹窗仍是底部面板 + 旧量程。
 - 回滚：`git checkout -- app/src/leanback/res/layout/dialog_offset.xml app/src/main/java/com/fongmi/android/tv/ui/dialog/OffsetPanel.java`。
+
+### 10.26 收尾三件事：关掉字幕列表 / 偏移弹窗不压暗 / 圆钮聚焦透明（2026-11-13，未提交）
+
+10.25 提交 `b782c415f` 后用户实测反馈三条：
+
+> 「对齐原版关掉字幕列表，偏移弹窗的遮罩太黑了，原版几乎是透明的页对齐原版吧，字幕弹窗焦点也对齐原版聚焦透明。」
+
+#### ① 关掉字幕列表（逆向 `ph3.java` case 0）
+
+`ph3.java` L133-152（轨道列表头部圆钮的 `OnClickListener`）case 0 = 偏移圆钮：
+
+```java
+case 0:
+    tc2 tc2Var = ph3Var.y0;
+    int i3 = ph3Var.z0;
+    r7 r7VarL = ph3Var.L();
+    zu0 zu0VarE1 = r7VarL.E1();
+    Iterator it = zu0VarE1.c.B().iterator();
+    while (it.hasNext()) {
+        if (((hu0) it.next()) instanceof m52) {
+            ph3Var.Y();      // ← 关掉自己（轨道列表）
+            break;
+        }
+    }
+    nm3.h(r7VarL);
+    new m52(tc2Var, i3).X(zu0VarE1);   // ← 再弹出偏移侧边栏
+```
+
+也就是原版**先判断偏移面板是否已经在栈里，在的话先关掉轨道列表，再弹偏移面板**；用户看到的结果就是「点偏移 → 字幕列表消失，只剩右侧偏移面板」。
+
+我们原来只有 `OffsetDialog.create()...show(...)`，没有 `dismiss()`，于是两层叠着。改法（1 行）：
+
+```java
+private void onOffset(View view) {
+    OffsetDialog.create().player(player).type(type).show(requireActivity());
+    // 逆向 ph3.x0.l：先 new m52(...).X(...) 弹出偏移侧边栏，再 ph3Var.Y() 关掉轨道列表
+    dismiss();
+}
+```
+
+顺序保持「先 show 偏移、再 dismiss 自己」，与逆向一致（Fragment 事务各自入栈，先后不影响结果，但保持一致便于对照）。
+
+#### ② 偏移弹窗遮罩：原版几乎是透明的
+
+先确认原版到底压不压暗：
+
+| 检查点 | 结论 |
+| --- | --- |
+| `ci.java`（`m52` 的基类）`V(Bundle)` | `new jx2(M())` + `jx2Var.f().g = false`（不可拖拽）；**没有** `clearFlags(FLAG_DIM_BEHIND)`、没有 `setDimAmount` |
+| 反编译包全量搜 `setDimAmount` / `FLAG_DIM_BEHIND` / `clearFlags(2)` | 只有 4 处命中，全部与侧边栏无关：`hv3.java:44`（`clearFlags(67108864)` = `FLAG_LAYOUT_NO_LIMITS`）、`la2.java:470`（`clearFlags(128)` = `FLAG_FULLSCREEN`）、`rg.java:17` 与 `t40.java:55`（`clearFlags(2)` = 弹幕/轨道面板基类清 dim） |
+| `styles.xml` 的 `ThemeOverlay.Material3.SideSheetDialog` | 继承 Material 的 `Base.V14.ThemeOverlay.Material3.SideSheetDialog`，**只设** `windowIsFloating=false` / `windowBackground=transparent` / 动画 / `sideSheetModalStyle`；没有改 `backgroundDimEnabled` 或 `backgroundDimAmount` |
+| `m3_side_sheet_dialog.xml` | 只有 `touch_outside` + `m3_side_sheet` 两个子 View，`touch_outside` 无背景色 ⇒ 遮罩由 **SideSheet 的 scrim 层**（`Widget.Material3.SideSheet.Modal` 的 `sideSheetDialogTheme` scrim）负责，而不是 `FLAG_DIM_BEHIND` |
+
+结论：原版**没有额外压暗**，侧边栏外面那层很淡的 scrim 是 Material 组件自带、随滑出动画淡入的那层；而我们这边除了组件自带 scrim，还额外吃了应用主题的 `android:backgroundDimEnabled=true`（`app/src/main/res/values/styles.xml` L183 / L231）叠加的窗口 dim，所以看起来「黑得明显」。
+
+改法与项目既有约定一致 —— `BaseBottomSheetDialog` 早就有 `stableOverlay()` 钩子（`clearFlags(FLAG_DIM_BEHIND)` + `setDimAmount(0f)`，`TimerDialog` / `TrackPanelDialog` / `DanmakuDialog` / `DanmakuSettingDialog` / `TitleDialog` / `TrackDialog` 都在用），给侧边栏基类补同一个钩子：
+
+1. `BaseSideSheetDialog`：新增 `protected boolean stableOverlay() { return false; }`，并在 `onCreateDialog` 拿到 `Window` 之后按需 `clearFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)` + `setDimAmount(0f)`；
+2. `OffsetDialog.SideSheet`：覆写 `stableOverlay()` 返回 `true`。
+
+默认 `false` ⇒ 其它页面（非播放页）的侧边栏行为不变；手机端 `OffsetDialog.BottomSheet` 本来就走 `BaseBottomSheetDialog.stableOverlay()==true`，两端口径统一。
+
+#### ③ 圆钮聚焦透明
+
+`selector_control_circle.xml` 之前按反编译原件逐字照抄，focused 档是「居中 30dp 红渐变实心圆（`@color/red` → `@color/red_500`，angle=315）」。但用户实测原版聚焦**是透明的**，按实测为准：
+
+- 删掉整个 `android:state_focused="true"` 的 `layer-list` 档；
+- 只剩两档：`state_selected="true"` → `@drawable/shape_chip_activated`（细线红框）、默认 → `@drawable/shape_chip_normal`（透明）；
+- 聚焦时没有 `state_selected`，自然落到默认档 = 透明。
+
+补充说明：运行时 `dl3.d()` / `dl3.s()` 会把这个 selector 换成用 theme_color 生成的实心圆皮肤（`dl3.q(R.drawable.selector_control_circle)`），按静态分析也是实心圆；但既然实测为透明，本轮以实测为准，不改 `dl3` 那套运行时皮肤逻辑（我们项目里没有对应实现，`selector_control_circle` 是纯 XML）。
+
+**影响面**：`selector_control_circle` 被两个布局共用 —— `dialog_subtitle`（5 圆钮 + 我们加的 search）与 `dialog_track`（头部 7 钮），所以两处的聚焦都变透明。若之后要「轨道面板头部保留红圈、字幕面板透明」，需要把 drawable 拆成两份（`selector_control_circle` + `selector_control_circle_plain`），本轮不做。
+
+#### ④ 改动清单（4 个代码文件 + 2 处注释）
+
+| 文件 | 改动 |
+| --- | --- |
+| `app/src/main/java/com/fongmi/android/tv/ui/dialog/TrackDialog.java` | `onOffset()` 末尾加 `dismiss()`（含逆向注释） |
+| `app/src/main/java/com/fongmi/android/tv/ui/dialog/BaseSideSheetDialog.java` | 新增 `stableOverlay()` 钩子 + `onCreateDialog` 里清 `FLAG_DIM_BEHIND` / `setDimAmount(0f)` |
+| `app/src/main/java/com/fongmi/android/tv/ui/dialog/OffsetDialog.java` | `SideSheet` 覆写 `stableOverlay()` 返回 `true` |
+| `app/src/leanback/res/drawable/selector_control_circle.xml` | 删 focused 红圆档，只剩 selected / 默认两档 |
+| `app/src/leanback/res/layout/dialog_subtitle.xml` | 文件头注释改为「聚焦 / 未聚焦都是透明，选中才是细线红框」 |
+| `app/src/leanback/res/layout/dialog_track.xml` | 同上 |
+
+`dialog_offset.xml` / `OffsetPanel.java` / 手机端布局**未动**（10.25 已提交，本轮不碰）。
+
+#### 验证与回滚
+
+- 静态（`check_round17.py`）：`TrackDialog.onOffset` 含 `dismiss()`；`BaseSideSheetDialog` 含 `stableOverlay()` 与 `clearFlags`/`setDimAmount(0f)` 且默认 `return false`；`OffsetDialog.SideSheet` 覆写返回 `true`；`selector_control_circle.xml` 无 `state_focused`、无 `layer-list`、无 `@color/red`，且 `state_selected` / `shape_chip_activated` / `shape_chip_normal` 都在；两个布局注释已改；三个 XML 可解析；`git diff --check` 无空白错误。**未编译**（按用户要求只出 diff）。
+- 待真机验证：① 字幕列表头部点偏移圆钮 → 字幕列表立刻消失，只剩右侧偏移面板；② 偏移面板外面视频**不压暗**（与原亮度基本一致，只剩 Material 自带的淡 scrim）；③ 关闭偏移面板回到播放页，字幕偏移生效；④ 5 圆钮面板（large / small / up / down / reset）遥控器聚焦时**没有红圈**，图标纯白、背景透明；⑤ 轨道列表头部 7 钮聚焦同样无红圈；⑥ 非播放页的其它侧边栏（若有）仍按默认压暗；⑦ 手机端偏移弹窗行为不变。
+- 回滚：`git checkout -- app/src/main/java/com/fongmi/android/tv/ui/dialog/TrackDialog.java app/src/main/java/com/fongmi/android/tv/ui/dialog/BaseSideSheetDialog.java app/src/main/java/com/fongmi/android/tv/ui/dialog/OffsetDialog.java app/src/leanback/res/drawable/selector_control_circle.xml app/src/leanback/res/layout/dialog_subtitle.xml app/src/leanback/res/layout/dialog_track.xml`。

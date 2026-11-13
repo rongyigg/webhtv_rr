@@ -30,6 +30,17 @@ public abstract class BaseSideSheetDialog extends AppCompatDialogFragment {
         return false;
     }
 
+    /**
+     * 是否让播放页保持原亮度（不压暗视频）。
+     *
+     * 与 {@link BaseBottomSheetDialog#stableOverlay()} 同一套语义：置 true 后清掉窗口的
+     * `FLAG_DIM_BEHIND` 并把 dim 置 0，侧边栏背后就是原样的视频，不再盖一层 Material 默认的
+     * 32% 黑色遮罩。播放页的侧边栏（偏移设置）用得到，普通页面的侧边栏保持默认压暗。
+     */
+    protected boolean stableOverlay() {
+        return false;
+    }
+
     @NonNull
     @Override
     public Dialog onCreateDialog(Bundle savedInstanceState) {
@@ -37,6 +48,10 @@ public abstract class BaseSideSheetDialog extends AppCompatDialogFragment {
         dialog.getBehavior().setDraggable(false);
         Window window = dialog.getWindow();
         if (window == null) return dialog;
+        if (stableOverlay()) {
+            window.clearFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND);
+            window.setDimAmount(0f);
+        }
         fullscreen = Util.isFullscreen(getActivity());
         if (fullscreen) {
             window.addFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN);

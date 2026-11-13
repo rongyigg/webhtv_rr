@@ -207,6 +207,9 @@ public final class TrackDialog extends BaseBottomSheetDialog implements TrackAda
 
     private void onOffset(View view) {
         OffsetDialog.create().player(player).type(type).show(requireActivity());
+        // 逆向 ph3.x0.l：先 new m52(...).X(...) 弹出偏移侧边栏，再 ph3Var.Y() 关掉轨道列表，
+        // 回到播放页时只看到偏移面板，不会再叠一层字幕列表。
+        dismiss();
     }
 
     private void onChoose(View view) {
