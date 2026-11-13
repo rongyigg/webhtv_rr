@@ -668,6 +668,17 @@ internal class HeroDetailStateManager(
     // 弹窗关闭后的焦点恢复
     // ------------------------------------------------------------------
     /**
+     * 在已挂载的 FocusRequester 列表里安全请求焦点：未组合的 Lazy 项会抛异常，这里降级返回 false。
+     *
+     * 纯 View 详情页删掉 Compose 死代码后，本函数只剩这里（[restoreFocus]）在用，
+     * 因此从 `HeroDetailActivity.kt` 迁到本文件，避免详情页继续背 Compose 依赖。
+     */
+    private fun requestDetailFocus(requesters: List<FocusRequester>, index: Int): Boolean {
+        val requester = requesters.getOrNull(index) ?: return false
+        return runCatching { requester.requestFocus() }.isSuccess
+    }
+
+    /**
      * 三个弹窗都关闭后才抢焦点：
      * - 刚关掉演员弹窗 → 回到被点的那位演员（需求：焦点必须回到刚才点击的头像）；
      * - 刚关掉换源弹窗 → 回到「换源」按钮（需求三.3）；

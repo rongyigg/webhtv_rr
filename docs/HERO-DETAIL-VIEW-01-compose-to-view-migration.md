@@ -979,7 +979,7 @@ appendPage(list, site, pageCount) // T1 的追加分支：空页 / 全重复 →
 
 - `app/src/main/java/com/fongmi/android/tv/ui/hero/HeroCommonUi.kt`（整文件 192 行）：`HeroDialogShell` / `HeroSectionTitle` / `HeroHomeLogoButton` / `HeroAccentColor` / `HeroFocusBrush` 全局只出现在注释里，无任何代码引用 → `git rm`。
 - `app/src/main/java/com/fongmi/android/tv/ui/hero/HeroShared.kt`：删 `rememberHeroImageModel` + `Composable` / `remember` / `LocalContext` / `ImageRequest` / `crossfade` import + 只服务它的 `HERO_IMAGE_CROSSFADE_MS`；保留 `HeroTmdbData` / `HeroTmdbPrefetchCache` / `HeroLogoCache` / `clearHeroCaches` / `heroTmdbKey` / `tmdbLogoKey` / `upgradeTmdbImage`（仍被首页 / 详情 / 历史 / 收藏 / 播放页 / `FileUtil` 使用）。
-- `app/src/main/java/com/fongmi/android/tv/ui/activity/HeroDetailActivity.kt`：删 7 条 Compose import、`requestDetailFocus` / `focusAction` / `focusCast(List<FocusRequester>, Int)`、`HeroDetailAction` + `DETAIL_ACTIONS`、`HERO_PADDING` 与文末 107 行 Compose 常量块（`CONTENT_BOTTOM_PADDING` / `LOGO_*` / `DETAIL_*` / `CAST_*` / `ACTOR_*` / `POSTER_*` / `DETAIL_ACTION_*`）；保留 `HeroCast`（`HeroDetail` 字段 + `DEMO_DETAIL` 仍用）、`DEMO_DETAIL`、`TAG_DETAIL`、`DETAIL_ACTION_PLAY/CHANGE_SOURCE/KEEP`、`MAX_PLAY_DRILL` / `PLAY_FALLBACK_WAIT_MS`（被 `HeroDetailStateManager` 使用）。
+- `app/src/main/java/com/fongmi/android/tv/ui/activity/HeroDetailActivity.kt`：删 7 条 Compose import、`focusAction` / `focusCast(List<FocusRequester>, Int)`、`HeroDetailAction` + `DETAIL_ACTIONS`、`HERO_PADDING` 与文末 107 行 Compose 常量块（`CONTENT_BOTTOM_PADDING` / `LOGO_*` / `DETAIL_*` / `CAST_*` / `ACTOR_*` / `POSTER_*` / `DETAIL_ACTION_*`）；`requestDetailFocus` **迁到** `HeroDetailStateManager.kt`（见 ④）；保留 `HeroCast`（`HeroDetail` 字段 + `DEMO_DETAIL` 仍用）、`DEMO_DETAIL`、`TAG_DETAIL`、`DETAIL_ACTION_PLAY/CHANGE_SOURCE/KEEP`、`MAX_PLAY_DRILL` / `PLAY_FALLBACK_WAIT_MS`（被 `HeroDetailStateManager` 使用）。
 
 未删除：`HeroDetailStateManager.kt`（见上）；`app/build.gradle` 的 compose 插件 / BOM / material3 / coil-compose 依赖按红线保留。
 
@@ -990,3 +990,19 @@ Manifest：没有任何 Compose Activity 节点（`HeroHomeActivity` / `HeroHist
 - 静态（`check_round12.py`）：`HeroCommonUi.kt` 不存在；`androidx.compose` 只剩 `HeroDetailStateManager.kt`；`HeroShared` 无 Compose 引用且保留核心 API；`HeroDetail` 无 Compose import / 死符号且保留 `HeroCast` / `DEMO_DETAIL` / `TAG_DETAIL` / `DETAIL_ACTION_*` / `MAX_PLAY_DRILL` / `PLAY_FALLBACK_WAIT_MS`；控制栏 `selector_control_chip` 焦点 = 1.5dp 白框、常态 / 选中 = `shape_chip_normal`，`@style/Control` 不再引用 `selector_chip`，全局红色 chip 未被改；3 个 XML 可解析；两个 Kotlin 文件花括号配平；`git diff --check` 无空白错误。**未编译**（按用户要求只出 diff）。
 - 待真机验证：① 直播控制栏焦点移到「配置」应为白色细框，不再红框；②「跨类 / 换源」选中时无边框，只保留文字颜色；③ 点播 / 投屏 / TMDB 详情控制栏同样变白框；④ 详情页 / 搜索页 / 换源 / 选集 / 侧边栏功能与视觉不变；⑤ 解析线路列表等其它界面的红色焦点保持不变。
 - 回滚：`git checkout -- app/src/leanback/res/values/styles.xml app/src/main/java/com/fongmi/android/tv/ui/activity/HeroDetailActivity.kt app/src/main/java/com/fongmi/android/tv/ui/hero/HeroShared.kt` + `git checkout HEAD -- app/src/main/java/com/fongmi/android/tv/ui/hero/HeroCommonUi.kt`，并删除 `shape_control_chip_focused.xml` / `selector_control_chip.xml`。
+
+#### ④ 打包失败修复：`requestDetailFocus` 仍有调用方（2026-11-13）
+
+CI 在 `:app:compileLeanbackArmeabi_v7aDebugKotlin` 报三处：
+
+```
+e: HeroDetailStateManager.kt:688:21 Unresolved reference 'requestDetailFocus'.
+e: HeroDetailStateManager.kt:697:21 Unresolved reference 'requestDetailFocus'.
+e: HeroDetailStateManager.kt:703:21 Unresolved reference 'requestDetailFocus'.
+```
+
+根因：③ 那次「全局无引用」的搜索实际只跑了 `HeroDetailActivity.kt` 单文件，漏掉同包的 `HeroDetailStateManager.restoreFocus()`（三处调用：`castRequesters` / `actionRequesters` / `DETAIL_ACTION_PLAY`）。
+
+改法：`requestDetailFocus` 从 `HeroDetailActivity.kt` **原样迁到** `HeroDetailStateManager.kt`，作为 `private` 成员紧贴 `restoreFocus`，函数体一字未改（`FocusRequester` import 该文件本来就有）。详情页保持零 Compose，状态机自洽。
+
+复检方式换成「先枚举全部被删符号 → 再全局扫所有 `.kt` / `.java`，跳过注释行」：`check_round13.py` 覆盖 25 个被删符号（含 `HeroDialogShell` / `rememberHeroImageModel` / `HeroDetailAction` / `DETAIL_ACTIONS` / `POSTER_SHAPE` / `DETAIL_*` 常量等），除 `requestDetailFocus`（现定义在 StateManager）外**零代码引用**；同时确认 `HeroDetailStateManager` 有 1 处定义 + 3 处调用、`HeroDetailActivity` 无 Compose import 且仍保留 `DETAIL_ACTION_PLAY`。
