@@ -238,11 +238,6 @@
             android:configChanges="screenSize|smallestScreenSize|screenLayout|orientation"
             android:screenOrientation="sensorLandscape" />
 
-        <activity
-            android:name=".ui.activity.SettingAiActivity"
-            android:configChanges="screenSize|smallestScreenSize|screenLayout|orientation"
-            android:screenOrientation="sensorLandscape" />
-
        <activity
            android:name=".ui.activity.SettingPersonalActivity"
            android:configChanges="screenSize|smallestScreenSize|screenLayout|orientation"

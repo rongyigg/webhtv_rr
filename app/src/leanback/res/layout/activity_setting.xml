@@ -327,15 +327,13 @@
 
             <androidx.appcompat.widget.LinearLayoutCompat
                 android:id="@+id/tmdb"
-                android:layout_width="0dp"
+                android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginEnd="16dp"
-                android:layout_weight="1"
                 android:background="@drawable/selector_item"
                 android:focusable="true"
                 android:focusableInTouchMode="true"
                 android:nextFocusLeft="@id/tmdb"
-                android:nextFocusRight="@id/ai"
+                android:nextFocusRight="@id/tmdb"
                 android:nextFocusUp="@id/ad"
                 android:nextFocusDown="@id/subtitle"
                 android:orientation="horizontal">
@@ -344,30 +342,6 @@
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:text="@string/setting_tmdb"
-                    android:textColor="@color/white"
-                    android:textSize="18sp" />
-
-            </androidx.appcompat.widget.LinearLayoutCompat>
-
-            <androidx.appcompat.widget.LinearLayoutCompat
-                android:id="@+id/ai"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_marginEnd="0dp"
-                android:layout_weight="1"
-                android:background="@drawable/selector_item"
-                android:focusable="true"
-                android:focusableInTouchMode="true"
-                android:nextFocusLeft="@id/tmdb"
-                android:nextFocusRight="@id/ai"
-                android:nextFocusUp="@id/ad"
-                android:nextFocusDown="@id/appearance"
-                android:orientation="horizontal">
-
-                <com.google.android.material.textview.MaterialTextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="@string/setting_ai"
                     android:textColor="@color/white"
                     android:textSize="18sp" />
 

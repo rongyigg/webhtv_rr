@@ -53,31 +53,17 @@ public class SettingPlaybackDefaultsTest {
     }
 
     @Test
-    public void aiSettingsLiveUnderDedicatedSettings() throws Exception {
+    public void aiSettingsPageIsRemoved() throws Exception {
         Path root = moduleRoot();
         String mobileHome = read(root.resolve(Path.of("src", "mobile", "res", "layout", "fragment_setting.xml")));
         String leanbackHome = read(root.resolve(Path.of("src", "leanback", "res", "layout", "activity_setting.xml")));
-        String mobileLayout = read(root.resolve(Path.of("src", "mobile", "res", "layout", "fragment_setting_ai.xml")));
-        String leanbackLayout = read(root.resolve(Path.of("src", "leanback", "res", "layout", "activity_setting_ai.xml")));
-        String mobilePersonal = read(root.resolve(Path.of("src", "mobile", "res", "layout", "fragment_setting_personal.xml")));
-        String leanbackPersonal = read(root.resolve(Path.of("src", "leanback", "res", "layout", "activity_setting_personal.xml")));
-        String mobileEnhance = read(root.resolve(Path.of("src", "mobile", "res", "layout", "fragment_setting_enhance.xml")));
-        String leanbackEnhance = read(root.resolve(Path.of("src", "leanback", "res", "layout", "activity_setting_enhance.xml")));
-        String mobileSubtitle = read(root.resolve(Path.of("src", "mobile", "res", "layout", "fragment_setting_subtitle.xml")));
-        String leanbackSubtitle = read(root.resolve(Path.of("src", "leanback", "res", "layout", "activity_setting_subtitle.xml")));
 
-        assertTrue(mobileHome.contains("@+id/ai"));
-        assertTrue(leanbackHome.contains("@+id/ai"));
-        for (String id : new String[]{"aiRecommendation", "personalRecommendation", "recommendationFeedback", "subtitleRealtimeModel", "subtitleAiSettings"}) {
-            assertTrue(mobileLayout.contains("@+id/" + id));
-            assertTrue(leanbackLayout.contains("@+id/" + id));
-            assertFalse(mobilePersonal.contains("@+id/" + id));
-            assertFalse(leanbackPersonal.contains("@+id/" + id));
-            assertFalse(mobileEnhance.contains("@+id/" + id));
-            assertFalse(leanbackEnhance.contains("@+id/" + id));
-            assertFalse(mobileSubtitle.contains("@+id/" + id));
-            assertFalse(leanbackSubtitle.contains("@+id/" + id));
-        }
+        assertFalse(mobileHome.contains("android:id=\"@+id/ai\""));
+        assertFalse(leanbackHome.contains("android:id=\"@+id/ai\""));
+        assertFalse(Files.exists(root.resolve(Path.of("src", "mobile", "res", "layout", "fragment_setting_ai.xml"))));
+        assertFalse(Files.exists(root.resolve(Path.of("src", "leanback", "res", "layout", "activity_setting_ai.xml"))));
+        assertFalse(Files.exists(root.resolve(Path.of("src", "mobile", "java", "com", "fongmi", "android", "tv", "ui", "fragment", "SettingAiFragment.java"))));
+        assertFalse(Files.exists(root.resolve(Path.of("src", "leanback", "java", "com", "fongmi", "android", "tv", "ui", "activity", "SettingAiActivity.java"))));
     }
 
     @Test
@@ -89,15 +75,14 @@ public class SettingPlaybackDefaultsTest {
         String leanbackManifest = read(root.resolve(Path.of("src", "leanback", "AndroidManifest.xml")));
 
         assertTrue(mobileHome.contains("case 7 -> SettingTmdbFragment.newInstance()"));
-        assertTrue(mobileHome.contains("case 8 -> SettingAiFragment.newInstance()"));
         assertTrue(mobileHome.contains("mManager.isVisible(7)"));
-        assertTrue(mobileHome.contains("mManager.isVisible(8)"));
         assertTrue(mobileSetting.contains("getRoot().change(7)"));
-        assertTrue(mobileSetting.contains("getRoot().change(8)"));
         assertTrue(leanbackSetting.contains("SettingTmdbActivity.start(this)"));
-        assertTrue(leanbackSetting.contains("SettingAiActivity.start(this)"));
         assertTrue(leanbackManifest.contains(".ui.activity.SettingTmdbActivity"));
-        assertTrue(leanbackManifest.contains(".ui.activity.SettingAiActivity"));
+        assertFalse(mobileHome.contains("SettingAiFragment"));
+        assertFalse(mobileSetting.contains("onAi"));
+        assertFalse(leanbackSetting.contains("SettingAiActivity"));
+        assertFalse(leanbackManifest.contains(".ui.activity.SettingAiActivity"));
     }
 
     @Test
@@ -164,8 +149,6 @@ public class SettingPlaybackDefaultsTest {
         String leanbackAd = read(root.resolve(Path.of("src", "leanback", "res", "layout", "activity_setting_ad.xml")));
         String mobileEnhance = read(root.resolve(Path.of("src", "mobile", "res", "layout", "fragment_setting_enhance.xml")));
         String leanbackEnhance = read(root.resolve(Path.of("src", "leanback", "res", "layout", "activity_setting_enhance.xml")));
-        String mobileAi = read(root.resolve(Path.of("src", "mobile", "res", "layout", "fragment_setting_ai.xml")));
-        String leanbackAi = read(root.resolve(Path.of("src", "leanback", "res", "layout", "activity_setting_ai.xml")));
         String mobilePlayer = read(root.resolve(Path.of("src", "mobile", "res", "layout", "fragment_setting_player.xml")));
         String leanbackPlayer = read(root.resolve(Path.of("src", "leanback", "res", "layout", "activity_setting_player.xml")));
 
@@ -175,8 +158,6 @@ public class SettingPlaybackDefaultsTest {
             assertTrue(id, leanbackAd.contains("@+id/" + id));
             assertFalse(id, mobileEnhance.contains("@+id/" + id));
             assertFalse(id, leanbackEnhance.contains("@+id/" + id));
-            assertFalse(id, mobileAi.contains("@+id/" + id));
-            assertFalse(id, leanbackAi.contains("@+id/" + id));
             assertFalse(id, mobilePlayer.contains("@+id/" + id));
             assertFalse(id, leanbackPlayer.contains("@+id/" + id));
         }

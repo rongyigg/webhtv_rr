@@ -11,19 +11,6 @@ import static org.junit.Assert.assertTrue;
 public class RecommendationFeedbackManagementLayoutTest {
 
     @Test
-    public void aiSettingsExposeFeedbackManagementAndCount() throws Exception {
-        String activity = read(findLeanbackJavaPath().resolve(Path.of("com", "fongmi", "android", "tv", "ui", "activity", "SettingAiActivity.java")));
-        String layout = read(findLeanbackResPath().resolve(Path.of("layout", "activity_setting_ai.xml")));
-
-        assertTrue(layout.contains("@+id/recommendationFeedback")
-                && layout.contains("@+id/recommendationFeedbackText")
-                && layout.contains("@string/setting_recommendation_feedback"));
-        assertTrue(activity.contains("mBinding.recommendationFeedback.setOnClickListener(this::manageRecommendationFeedback)")
-                && activity.contains("RecommendationFeedbackDialog.create()")
-                && activity.contains("RecommendationFeedbackStore.size()"));
-    }
-
-    @Test
     public void managementDialogSupportsRemoteRestoreClearAndClose() throws Exception {
         String dialog = read(findLeanbackJavaPath().resolve(Path.of("com", "fongmi", "android", "tv", "ui", "dialog", "RecommendationFeedbackDialog.java")));
         String adapter = read(findLeanbackJavaPath().resolve(Path.of("com", "fongmi", "android", "tv", "ui", "adapter", "RecommendationFeedbackAdapter.java")));
@@ -45,18 +32,11 @@ public class RecommendationFeedbackManagementLayoutTest {
     }
 
     @Test
-    public void mobileAiSettingsExposeFeedbackManagementAndDialog() throws Exception {
-        String fragment = read(findMobileJavaPath().resolve(Path.of("com", "fongmi", "android", "tv", "ui", "fragment", "SettingAiFragment.java")));
-        String layout = read(findMobileResPath().resolve(Path.of("layout", "fragment_setting_ai.xml")));
+    public void mobileRecommendationFeedbackDialogSupportsManagement() throws Exception {
         String dialog = read(findMobileJavaPath().resolve(Path.of("com", "fongmi", "android", "tv", "ui", "dialog", "RecommendationFeedbackDialog.java")));
         String dialogLayout = read(findMobileResPath().resolve(Path.of("layout", "dialog_recommendation_feedback.xml")));
         String item = read(findMobileResPath().resolve(Path.of("layout", "adapter_recommendation_feedback.xml")));
 
-        assertTrue(layout.contains("@+id/recommendationFeedback")
-                && layout.contains("@+id/recommendationFeedbackText"));
-        assertTrue(fragment.contains("mBinding.recommendationFeedback.setOnClickListener(this::manageRecommendationFeedback)")
-                && fragment.contains("RecommendationFeedbackStore.size()")
-                && fragment.contains("RecommendationFeedbackDialog.create(requireActivity())"));
         assertTrue(dialogLayout.contains("@+id/recycler")
                 && dialogLayout.contains("@+id/empty"));
         assertTrue(item.contains("@+id/title") && item.contains("@+id/meta"));

@@ -101,43 +101,33 @@ public class TrackDialogTest {
     }
 
     @Test
-    public void aiRegenerateButton_bypassesCacheAndSharesBusyState() throws Exception {
+    public void aiTrackActionsAreRemovedFromTrackDialog() throws Exception {
         Path root = moduleRoot();
         String source = read(root.resolve(Path.of("src", "main", "java", "com", "fongmi", "android", "tv", "ui", "dialog", "TrackDialog.java")));
-
-        assertTrue("track dialog must wire an AI regenerate action that is only visible for selected AI subtitles",
-                source.contains("binding.aiRegenerate.setVisibility(hasAiRegenerate() ? View.VISIBLE : View.GONE)")
-                        && source.contains("binding.aiRegenerate.setOnClickListener(this::onAiRegenerate)"));
-        assertTrue("AI regenerate must bypass the translation cache",
-                source.contains("startAiTranslation(false)") && source.contains(".useCache(useCache)"));
-        assertTrue("AI translate and regenerate actions must share the same busy state",
-                source.contains("binding.aiRegenerate.setEnabled(!translating)")
-                        && source.contains("binding.aiRegenerate.setAlpha(translating ? 0.5f : 1f)"));
-        assertTrue("leanback track dialog must expose the regenerate button",
-                read(root.resolve(Path.of("src", "leanback", "res", "layout", "dialog_track.xml"))).contains("@+id/aiRegenerate"));
-        assertTrue("mobile track dialog must expose the regenerate button",
-                read(root.resolve(Path.of("src", "mobile", "res", "layout", "dialog_track.xml"))).contains("@+id/aiRegenerate"));
-    }
-
-    @Test
-    public void realtimeLanguageCanBeChangedFromTrackDialogWithoutRebuildingPlayback() throws Exception {
-        Path root = moduleRoot();
-        String dialog = read(root.resolve(Path.of("src", "main", "java", "com", "fongmi", "android", "tv", "ui", "dialog", "TrackDialog.java")));
-        String controller = read(root.resolve(Path.of("src", "main", "java", "com", "fongmi", "android", "tv", "subtitle", "RealtimeSubtitleController.java")));
         String mobileLayout = read(root.resolve(Path.of("src", "mobile", "res", "layout", "dialog_track.xml")));
         String leanbackLayout = read(root.resolve(Path.of("src", "leanback", "res", "layout", "dialog_track.xml")));
 
-        assertTrue("track dialog must expose the realtime recognition language selector",
-                dialog.contains("binding.realtimeLanguage.setOnClickListener(this::onRealtimeLanguage")
-                        && dialog.contains("binding.realtimeLanguage.setVisibility(hasRealtimeAi() ? View.VISIBLE : View.GONE)"));
-        assertTrue("both playback layouts must expose the realtime recognition language selector",
-                mobileLayout.contains("@+id/realtimeLanguage")
-                        && mobileLayout.contains("@+id/realtimeLanguageText")
-                        && leanbackLayout.contains("@+id/realtimeLanguage")
-                        && leanbackLayout.contains("@+id/realtimeLanguageText"));
+        for (String layout : new String[]{mobileLayout, leanbackLayout}) {
+            assertFalse(layout.contains("android:id=\"@+id/ai\""));
+            assertFalse(layout.contains("@+id/realtimeAi"));
+            assertFalse(layout.contains("@+id/aiRegenerate"));
+            assertFalse(layout.contains("@+id/realtimeLanguage"));
+        }
+        assertFalse(source.contains("binding.aiRegenerate"));
+        assertFalse(source.contains("binding.realtimeAi"));
+        assertFalse(source.contains("binding.realtimeLanguage"));
+        assertFalse(source.contains("onAiTranslate") || source.contains("onAiRegenerate") || source.contains("onRealtimeAi"));
+        assertTrue("the translation pipeline must keep its cache bypass parameter",
+                source.contains("startAiTranslation(boolean useCache)") && source.contains(".useCache(useCache)"));
+    }
+
+    @Test
+    public void realtimeModelSwitchKeepsPlaybackSession() throws Exception {
+        Path root = moduleRoot();
+        String controller = read(root.resolve(Path.of("src", "main", "java", "com", "fongmi", "android", "tv", "subtitle", "RealtimeSubtitleController.java")));
+
         assertTrue("an active realtime session must switch the selected model in place",
-                dialog.contains("controller.switchModel(player)")
-                        && controller.contains("public synchronized void switchModel(PlayerManager player)"));
+                controller.contains("public synchronized void switchModel(PlayerManager player)"));
         assertTrue("model switching must invalidate old audio and subtitle timeline work",
                 controller.contains("timelineGeneration.incrementAndGet()")
                         && controller.contains("audioQueue.clear()"));

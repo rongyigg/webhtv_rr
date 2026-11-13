@@ -1362,4 +1362,56 @@ if (a.getBoolean(R.styleable.Window_backgroundDimEnabled, mIsFloating)) {
 - 静态（`check_round19.py`）：`styles.xml` / `colors.xml` / `dialog_offset.xml` 可解析；`sheet_panel_bg` = `#B31D1B20` 且样式里引用它；两个新样式的 parent 与 `backgroundTint` / `sideSheetModalStyle` 逐项命中；`BaseSideSheetDialog` 用 `panelTheme()` 造 Dialog、默认 `return 0`、无 `applyPanelColor` / `ColorStateList` 残留；`OffsetDialog.SideSheet` 覆写返回 `R.style.ThemeOverlay_WebHTV_SideSheetDialog_Translucent`；全仓无 `panelBackgroundColor` 残留；`dialog_offset.xml` 根节点仍无 `android:background`；10.27 的 `clearDim` + `setOnShowListener` 仍在；括号配平；`git diff --check` 无空白错误。**未编译**（按用户要求只出 diff）。
 - 待真机验证：① 字幕列表头部点偏移圆钮 → 右侧面板是**半透明玻璃**（视频从面板后隐约透出，约 70% 不透明），面板外**完全没有遮罩**；② 面板圆角、阴影、宽度（`min(320dp, 屏宽/2)`）与 10.25 一致，没有被主题覆盖改坏；③ 标题「偏移设置」、Reset 按钮、滑块与数值显示颜色/位置不变；④ 弹幕设置侧边栏仍是原来的不透明面板（未覆写 `panelTheme()`）；⑤ 手机端偏移底部面板不变。
 - 调深浅：只改 `@color/sheet_panel_bg` 的 alpha（`#B3` → `#CC` 更实、`#99` 更透），不用动 Java。
+
+### 10.29 播放页 AI 入口与设置「AI 服务」页整体下线（2026-11-13，未提交）
+
+用户要求：**「字幕中的原声识别语言 顶部选择音频原语言按钮 ai按钮 全部去掉。然后设置中的ai服务里的所有功能全部去掉后，设置中ai服务按钮页去掉。」**
+
+按字面拆成两件事：① 播放页轨道/字幕面板里的 AI 相关按钮与「原声识别语言」行全部移除；② 设置里的「AI 服务」页整页下线，入口一并移除。底层 AI 服务（`AiConfig` / `AiCompletionClient` / `AiSubtitleTranslationService` / `RealtimeSubtitleController` 等）仍被标题解析、推荐、广告检测、观看报告、字幕手动搜索等调用，**本轮不动**，只摘 UI。
+
+#### ① 播放页：删 3 个 AI 圆钮 + 原声识别语言行
+
+| 文件 | 改动 |
+| --- | --- |
+| `app/src/leanback/res/layout/dialog_track.xml` | 删 `@+id/ai`、`@+id/realtimeAi`、`@+id/aiRegenerate` 三个圆钮与 `@+id/realtimeLanguage` 行（含 `realtimeLanguageText`）；`@+id/aiStatus` 文本保留 |
+| `app/src/mobile/res/layout/dialog_track.xml` | 同上（手机端无 `selector_control_circle`，按钮形态不同，节点语义一致） |
+| `app/src/main/java/com/fongmi/android/tv/ui/dialog/TrackDialog.java` | 删 `initEvent` 里 4 个监听；`refreshTrackList` 删 3 处可见性与 `updateRealtimeLanguage()` / `updateRealtimeButton()`；删 `onRealtimeAi` / `showRealtimeModelSelection()` / `onRealtimeLanguage` / `showRealtimeModelSelection(boolean)` / `updateRealtimeLanguage` / `updateRealtimeButton` / `onAiTranslate` / `onAiRegenerate`；删 `realtimeState` 字段与 `onStateChanged` 里的两处刷新；删 `hasAi` / `hasRealtimeAi` / `hasAiRegenerate`；`showAppliedSubtitleTrack` 与 `setAiTranslating` 去掉对已删 View 的引用 |
+
+保留项与理由：
+
+- `@+id/aiStatus` 文本默认 `GONE`、且已无任何入口能触发，保留它是为了不牵动 `showAiStatus` / `showAiProgress` / `updateAiState` / `AiTaskState` 这一整条状态机；真要彻底删是另一轮独立改动。
+- `startAiTranslation(...)`、`progressListener`、`onAiTranslated`、`applyTranslatedAsset`、`AiTaskState` 全部保留（翻译服务层仍在，`TrackDialogTest` 也仍在测 `originalSubtitleForRegenerate` / `AiTaskState`）。
+- `enableRealtimeAi` / `startRealtimeAi` / `disableIncompatibleAudioModes` 保留但**已无 UI 可达**；它们牵涉音频直通/隧道模式兼容处理，删掉属于播放链路改动，不在本轮授权范围。
+- `stopRealtimeAi()`、`RealtimeSubtitleController` 监听、`onStateChanged` 保留：入口没了以后它们只是空转，但删监听会改动字幕/音频管线生命周期，风险大于收益。
+
+#### ② 设置：整页删除「AI 服务」
+
+| 文件 | 改动 |
+| --- | --- |
+| `app/src/leanback/java/.../ui/activity/SettingAiActivity.java` | 删除文件 |
+| `app/src/mobile/java/.../ui/fragment/SettingAiFragment.java` | 删除文件 |
+| `app/src/leanback/res/layout/activity_setting_ai.xml` | 删除文件 |
+| `app/src/mobile/res/layout/fragment_setting_ai.xml` | 删除文件 |
+| `app/src/leanback/res/layout/activity_setting.xml` | 删 `@+id/ai` 入口；`tmdb` 由「两列」改回整行（`match_parent`、去 `layout_weight` / `layout_marginEnd`），`nextFocusRight` 由 `@id/ai` 改为自身 `@id/tmdb`（与其它整行项一致） |
+| `app/src/mobile/res/layout/fragment_setting.xml` | 删 `@+id/ai` 入口，`personal` 直接接在 `tmdb` 之后 |
+| `app/src/leanback/java/.../ui/activity/SettingActivity.java` | 删 `mBinding.ai.setOnClickListener(this::onAi)` 与 `onAi()` |
+| `app/src/mobile/java/.../ui/fragment/SettingFragment.java` | 删 `mBinding.ai.setOnClickListener(this::onAi)` 与 `onAi()`（原来 `getRoot().change(8)`） |
+| `app/src/mobile/java/.../ui/activity/HomeActivity.java` | 删 `SettingAiFragment` import、`case 8 -> ...`、`isSettingSubPageVisible()` 里的 `isVisible(8)`；`case 9`（广告）保持原编号，不重排；`restorePosition()` 在 `changeFragment()` 返回 `false`（旧任务栈里残留的位置 8）时回落到设置首页（1），避免恢复出空白页 |
+| `app/src/leanback/AndroidManifest.xml` | 删 `.ui.activity.SettingAiActivity` 声明 |
+
+`case 8` 留空而不是把 9 挪到 8：所有位置都是硬编码 `getRoot().change(N)` 与 `mManager.isVisible(N)`，重排编号要同步改 `SettingFragment` / `HomeActivity` 多处，收益为零、回归面反而更大。
+
+#### ③ 同步测试
+
+| 文件 | 改动 |
+| --- | --- |
+| `app/src/test/java/.../setting/SettingPlaybackDefaultsTest.java` | `aiSettingsLiveUnderDedicatedSettings` → `aiSettingsPageIsRemoved`（断言两个首页布局无 `@+id/ai`、四个 AI 页文件不存在）；`dedicatedSettingsNavigationIsWired` 删 AI 断言并反向断言 `SettingAiFragment` / `onAi` / `SettingAiActivity` 均已消失；`adSettingsLiveUnderTheDedicatedAdPage` 删对已删布局的读取 |
+| `app/src/testMobile/java/.../dialog/TrackDialogTest.java` | `aiRegenerateButton_bypassesCacheAndSharesBusyState` → `aiTrackActionsAreRemovedFromTrackDialog`（两个布局不再含 4 个 id、源码不再含对应 `binding.*` 与 handler，翻译管线的 `useCache` 参数仍在）；`realtimeLanguageCanBeChangedFromTrackDialog...` → `realtimeModelSwitchKeepsPlaybackSession`（去掉 UI 断言，保留控制器 `switchModel` / 代际校验断言） |
+| `app/src/testMobile/java/.../dialog/RecommendationFeedbackManagementLayoutTest.java` | 删「AI 设置页暴露反馈管理」的 leanback 用例；手机端用例去掉 AI Fragment/布局断言，只留反馈管理弹窗自身断言 |
+
+#### 验证与回滚
+
+- 静态（`check_round20.py`）：两个 `dialog_track.xml`、两个设置布局、`AndroidManifest.xml` 均可解析；两个轨道布局无 `ai` / `realtimeAi` / `aiRegenerate` / `realtimeLanguage`，`aiStatus` 仍在；`TrackDialog.java` 无 `binding.ai` / `binding.realtimeAi` / `binding.aiRegenerate` / `binding.realtimeLanguage` / `realtimeState` / `hasAiRegenerate`；四个 AI 页文件已不存在；`activity_setting.xml` 无 `@+id/ai` 且 `tmdb` 为 `match_parent`、`nextFocusRight="@id/tmdb"`；`SettingActivity` / `SettingFragment` / `HomeActivity` / leanback 清单无 `SettingAi*` 残留；`HomeActivity` 仍有 `case 9` 且无 `case 8`；三个测试文件含新断言；Java 括号配平；`git diff --check` 无空白错误。**未编译**（按用户要求只出 diff，由 GitHub Actions 打包验证）。
+- 待真机验证：① 字幕面板头部只剩 `choose` / `search` / `subtitle` / `offset` 四个圆钮（点「字幕」进列表时），无 AI 图标；② 列表上方不再出现「原声识别语言」行，`aiStatus` 文案不出现；③ 音轨/视轨面板头部与之前一致；④ 设置首页「TMDB」变成整行、遥控器左右/上下焦点不丢；⑤ 手机端设置列表 TMDB 之后直接是「个性化」，无「AI 服务」；⑥ leanback 设置页同样无「AI 服务」入口；⑦ 手机端从旧任务栈恢复（原位置 8）时落到设置首页，不是空白页。
+- 回滚：`git checkout -- app/src/main/java/com/fongmi/android/tv/ui/dialog/TrackDialog.java app/src/leanback/res/layout/dialog_track.xml app/src/mobile/res/layout/dialog_track.xml app/src/leanback/res/layout/activity_setting.xml app/src/mobile/res/layout/fragment_setting.xml app/src/leanback/java/com/fongmi/android/tv/ui/activity/SettingActivity.java app/src/mobile/java/com/fongmi/android/tv/ui/fragment/SettingFragment.java app/src/mobile/java/com/fongmi/android/tv/ui/activity/HomeActivity.java app/src/leanback/AndroidManifest.xml` 并 `git checkout -- app/src/leanback/java/com/fongmi/android/tv/ui/activity/SettingAiActivity.java app/src/mobile/java/com/fongmi/android/tv/ui/fragment/SettingAiFragment.java app/src/leanback/res/layout/activity_setting_ai.xml app/src/mobile/res/layout/fragment_setting_ai.xml`。
 - 回滚：删掉 `OffsetDialog.SideSheet.panelTheme()` 覆写即回到逆向原样；彻底回滚用 `git checkout -- app/src/main/java/com/fongmi/android/tv/ui/dialog/BaseSideSheetDialog.java app/src/main/java/com/fongmi/android/tv/ui/dialog/OffsetDialog.java app/src/main/res/values/styles.xml app/src/main/res/values/colors.xml app/src/leanback/res/layout/dialog_offset.xml`。

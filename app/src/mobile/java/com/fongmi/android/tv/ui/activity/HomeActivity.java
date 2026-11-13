@@ -43,7 +43,6 @@ import com.fongmi.android.tv.ui.base.BaseActivity;
 import com.fongmi.android.tv.ui.custom.FragmentStateManager;
 import com.fongmi.android.tv.ui.fragment.SettingEnhanceFragment;
 import com.fongmi.android.tv.ui.fragment.SettingAdFragment;
-import com.fongmi.android.tv.ui.fragment.SettingAiFragment;
 import com.fongmi.android.tv.ui.fragment.SettingTmdbFragment;
 import com.fongmi.android.tv.ui.fragment.SettingDanmakuFragment;
 import com.fongmi.android.tv.ui.fragment.SettingFragment;
@@ -166,7 +165,6 @@ public class HomeActivity extends BaseActivity implements NavigationBarView.OnIt
             case 5 -> SettingPersonalFragment.newInstance();
             case 6 -> SettingSubtitleFragment.newInstance();
             case 7 -> SettingTmdbFragment.newInstance();
-            case 8 -> SettingAiFragment.newInstance();
             case 9 -> SettingAdFragment.newInstance();
             default -> null;
         });
@@ -177,7 +175,9 @@ public class HomeActivity extends BaseActivity implements NavigationBarView.OnIt
     private void restorePosition(int position) {
         setNavigation();
         syncNavigationSelection();
-        changeFragment(position <= 0 ? 0 : position);
+        // 已下线的设置子页（如原来的位置 8 = AI 服务）可能还留在旧的任务栈状态里，
+        // 此时工厂返回 null、change() 返回 false，回落到设置首页，避免恢复出空白页。
+        if (!changeFragment(position <= 0 ? 0 : position)) changeFragment(1);
     }
 
     private void initConfig() {
@@ -338,7 +338,7 @@ public class HomeActivity extends BaseActivity implements NavigationBarView.OnIt
     }
 
     private boolean isSettingSubPageVisible() {
-        return mManager.isVisible(2) || mManager.isVisible(3) || mManager.isVisible(4) || mManager.isVisible(5) || mManager.isVisible(6) || mManager.isVisible(7) || mManager.isVisible(8) || mManager.isVisible(9);
+        return mManager.isVisible(2) || mManager.isVisible(3) || mManager.isVisible(4) || mManager.isVisible(5) || mManager.isVisible(6) || mManager.isVisible(7) || mManager.isVisible(9);
     }
 
     private void refreshWebHomeChromeLayout() {
