@@ -865,7 +865,7 @@ appendPage(list, site, pageCount) // T1 的追加分支：空页 / 全重复 →
 - 待真机验证：① 播放页按「轨道」，面板应为左右双列、标题 16sp、行文字 16sp 紧凑排列；② 上下移动焦点，整行出现 `osd_accent → osd_accent_light` 横向渐变红长条、文字纯白；③ 焦点移开后，当前生效轨道只剩红渐变文字、无底色；④ 进度条白色圆形滑块明显小于原版，拖动时略大但仍小于改前。
 - 回滚：`git checkout -- app/src/leanback/res/layout/dialog_track_panel.xml app/src/leanback/res/layout/adapter_track_panel.xml app/src/leanback/res/drawable/selector_track_panel_item.xml app/src/leanback/res/color/selector_track_panel_text.xml app/src/leanback/java/com/fongmi/android/tv/ui/adapter/TrackPanelAdapter.java app/src/leanback/res/layout/view_control_seek.xml`。
 
-### 10.20 轨道面板换回逆向遮罩 + 换源弹窗焦点不再回跳小房子（2026-11-13，未提交）
+### 10.20 轨道面板换回逆向遮罩 + 换源弹窗焦点不再回跳小房子（2026-11-13，已提交 `63ee79136`）
 
 10.19 提交 `9b7575f38` 后用户提出两点：**① 轨道弹窗的遮罩换成逆向样式**（我们那块太黑，见截图 `Screenshot_20261113-112754.png`）；**② 换源弹窗出结果后焦点在 Tab 栏第一个站源，按 ↓ 到卡片后有几率回跳左上角小房子**。
 
@@ -906,3 +906,35 @@ appendPage(list, site, pageCount) // T1 的追加分支：空页 / 全重复 →
 - 静态（`check_round10.py`）：`dialog_track_panel` 根背景 = `@drawable/shape_controller` 且不再出现 `bg_bottom_panel_scrim`、10.19 的 16sp / 24dp 标题未被破坏；`shape_controller` 仍是 `?attr/colorSurface` + 28dp；`TrackPanelDialog` 三个开关 `transparent()=true` / `stableOverlay()=true` / `fullWidth()=true`；`BaseBottomSheetDialog` 的 `fullWidth()` 默认 `false` 且接入 `setMaxWidth(Integer.MAX_VALUE)`；`ChangeSourceDialog` 的 `render()` 首行是 `syncResultAdapter()` 且函数体内无 `notifyDataSetChanged`，`syncResultAdapter` / `focusResult` / `FOCUS_RESULT_RETRY_COUNT` / `focusedResultPosition` / 丢焦还原行全部存在；三个改动文件花括号配平；`git diff --check` 无空白错误。
 - 待真机验证：① 播放页按「轨道」，面板应**全宽**贴底、顶部 28dp 圆角、`?attr/colorSurface` 底色，视频**不再被压暗**，双列标题回到屏幕左缘 20dp / 中间 24dp 起点；② 轨道上下移动焦点、点选切换音视频轨一切照旧；③ 换源弹窗出结果后在第一个 Tab 上按 ↓，卡片拿到焦点；④ 卡片有焦点时继续有新结果/进度回调进来，焦点应停在原卡片不回跳小房子；⑤ 从卡片按 ↑ 仍回当前 Tab、按确定仍直达选集、下探 folder 与「⬅️ 返回」不受影响。
 - 回滚：`git checkout -- app/src/leanback/res/layout/dialog_track_panel.xml app/src/leanback/java/com/fongmi/android/tv/ui/dialog/TrackPanelDialog.java app/src/main/java/com/fongmi/android/tv/ui/dialog/BaseBottomSheetDialog.java app/src/main/java/com/fongmi/android/tv/ui/hero/ChangeSourceDialog.kt`。
+
+### 10.21 轨道面板换成原版「很透明的渐变黑」+ 播放控制栏焦点首尾循环（2026-11-13，未提交）
+
+10.20 提交 `63ee79136` 后用户反馈两点：**① 轨道弹窗呼出后是一整块不透明黑色，很难看；原版是很透明的渐变黑**（用户截不到视频画面，所以看不到原版遮罩的实际颜色）；**② 播放控制栏焦点要能循环：最左再按左回到最右，最右按右回到最左**。
+
+#### ① 轨道面板遮罩：逆向证据链
+
+- `ref_docs/dialog_track.xml` 根节点背景是 `@drawable/shape_controller`（逆向包里没有单独导出这个 shape 文件，只有引用），10.20 因此误以为它等于我们 leanback 里同名的 `?attr/colorSurface` 实心 + 28dp 圆角。
+- 真正的原版定义在本仓库历史里可查：`git show 21c05506b:app/src/leanback/res/drawable/shape_controller.xml`（WebHTV 5.4.9 基线，Fongmi 同源资源）就是**渐变黑**：
+
+  ```xml
+  <gradient android:angle="270"
+      android:endColor="@color/black_50"
+      android:startColor="@color/black_20" />
+  <corners android:topLeftRadius="8dp" android:topRightRadius="8dp" />
+  ```
+
+  `black_20 = #33000000`（20% 黑）、`black_50 = #80000000`（50% 黑），即「顶部 20% 黑 → 底部 50% 黑」的竖向渐变 + 8dp 顶部圆角。这与用户描述的「很透明的渐变黑」完全一致，也和主 res 里现成的 `shape_controller_scrim.xml`（播放覆盖层 / TMDB 详情底部面板在用的同名渐变）逐字相同。
+- 结论：10.20 把根背景指到 `shape_controller` 的方向是对的（与逆向布局同名），错的是这个同名资源的内容被改成了 Material3 不透明深色 `?attr/colorSurface`（`#1C1B1F`）。恢复原版渐变即可，不需要新增 drawable。
+
+#### ② 改法
+
+1. `app/src/leanback/res/drawable/shape_controller.xml`：`?attr/colorSurface` 实心 + 28dp → **原版渐变 `black_20 → black_50`（angle=270）+ 8dp 顶部圆角**，并在文件头注释里写明来源（`ref_docs/dialog_track.xml` + `21c05506b` 同名资源）与「不要改回 colorSurface」的原因；
+2. `app/src/leanback/res/layout/dialog_track_panel.xml`：只更新头部注释（根背景仍是 `@drawable/shape_controller`，值变成透明渐变黑）；布局结构、16sp / 24dp / 双列、焦点渐变红全部不动；
+3. `PlayerControlFocusHelper`：新增 `handleHorizontalWrap(ViewGroup row, KeyEvent event)` —— 仅当方向键是左右、焦点在本行内、且 `focusSearch` 在该方向**没有行内邻居**（返回空或行外控件）时，才把焦点循环到行首/行尾（左→`lastFocusable`、右→`firstFocusable`），并新增与 `firstFocusable` 对称的 `lastFocusable`；行内正常移动仍返回 `false` 交给系统 `focusSearch`，不改变原有顺序；
+4. `VideoActivity.dispatchKeyEvent()`：在 `dispatchOsdDownKey` 之后、`PlayerControlFocusHelper.handleKey` 之前调用 `handleHorizontalWrap(mBinding.osdControl.osdActions, event)`，只作用于播放控制栏按钮行（`osdActions` 的 14 个按钮）。焦点落到行尾时 `HorizontalScrollView` 会按标准焦点滚动逻辑把目标按钮滚进可视区。
+
+#### 验证与回滚
+
+- 静态（`check_round11.py`）：`shape_controller.xml` 含 `angle="270"` / `black_20` / `black_50` / 8dp 顶圆角且无 `colorSurface`、无 28dp；`dialog_track_panel.xml` 根背景仍为 `@drawable/shape_controller` 且 10.19 的 16sp / 24dp 标题未被破坏；`PlayerControlFocusHelper` 含 `handleHorizontalWrap` + `lastFocusable` 且 `handleKey` 原逻辑未变；`VideoActivity` 中 `handleHorizontalWrap(mBinding.osdControl.osdActions, event)` 位于 `dispatchOsdDownKey` 与 `handleKey` 之间；Java 花括号配平；`git diff --check` 无空白错误。
+- 待真机验证：① 播放页按「轨道」，面板应贴底全宽、**能透出视频画面**，顶部 20% 黑、底部 50% 黑、8dp 圆角；② 面板内上下移动焦点、切换音视频轨照旧；③ 控制栏焦点在最左「上一集」再按左 → 直接跳到最右「片尾」并自动横向滚动到该按钮；④ 最右再按右 → 回到最左「上一集」；⑤ 中间按钮左右移动顺序不变，行内不会误循环；⑥ 片头/片尾上按 ↑↓ 调时间、按 ↓ 收起控制栏等原有行为不受影响。
+- 回滚：`git checkout -- app/src/leanback/res/drawable/shape_controller.xml app/src/leanback/res/layout/dialog_track_panel.xml app/src/main/java/com/fongmi/android/tv/ui/helper/PlayerControlFocusHelper.java app/src/leanback/java/com/fongmi/android/tv/ui/activity/VideoActivity.java`。

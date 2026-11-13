@@ -1,9 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
     播放页轨道面板：结构照抄逆向 ref_docs/dialog_track.xml。
-    - 外壳：根节点底色就是原版的 @drawable/shape_controller（?attr/colorSurface +
-      28dp 顶部圆角），全宽铺在屏幕底部；弹窗容器本身透明、不压暗视频
-      （TrackPanelDialog: transparent()=true / stableOverlay()=true / fullWidth()=true）
+    - 外壳：根节点底色就是原版的 @drawable/shape_controller（很透明的渐变黑
+      black_20 → black_50 + 8dp 顶部圆角），全宽铺在屏幕底部；弹窗容器本身透明、
+      不压暗视频（TrackPanelDialog: transparent()=true / stableOverlay()=true / fullWidth()=true）
     - 左右两列：视频轨道 / 音频轨道各占 weight=1，铺满屏幕下半部分
     - 标题 16sp 白字、paddingTop 24dp / bottom 8dp（照抄逆向 track_titles）
     - 行样式见 adapter_track_panel / selector_track_panel_item：16sp、紧凑行高、

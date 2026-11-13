@@ -8348,6 +8348,8 @@ private boolean runtimeSourceOnly;
             setR1Callback();
             if (dispatchOpeningEndingAdjust(event)) return true;
             if (dispatchOsdDownKey(event)) return true;
+            // 播放控制栏按钮行首尾循环：最左再按左 → 最右，最右再按右 → 最左。
+            if (PlayerControlFocusHelper.handleHorizontalWrap(mBinding.osdControl.osdActions, event)) return true;
             if (PlayerControlFocusHelper.handleKey(mBinding.osdControl.getRoot(), getFocus2(), event)) return true;
             if (PlayerControlFocusHelper.containsFocus(mBinding.osdControl.getRoot())) mFocus2 = getCurrentFocus();
         }

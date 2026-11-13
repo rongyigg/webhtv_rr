@@ -31,6 +31,24 @@ public final class PlayerControlFocusHelper {
         return false;
     }
 
+    /**
+     * 横向按钮行首尾循环：焦点已经在最左再按左 → 跳到最右，已经在最右再按右 → 跳到最左。
+     * 只有「该方向已经没有行内邻居」（focusSearch 返回空或行外控件）时才循环，
+     * 行内正常移动仍交给系统 focusSearch，不改变原有焦点顺序。
+     * 返回 true 表示这次按键已经被循环逻辑消费。
+     */
+    public static boolean handleHorizontalWrap(ViewGroup row, KeyEvent event) {
+        if (!isVisible(row) || event == null || event.getAction() != KeyEvent.ACTION_DOWN) return false;
+        int direction = direction(event);
+        if (direction != View.FOCUS_LEFT && direction != View.FOCUS_RIGHT) return false;
+        View focus = row.findFocus();
+        if (!isFocusable(focus) || !isDescendant(row, focus)) return false;
+        View next = focus.focusSearch(direction);
+        if (next != null && next != focus && isDescendant(row, next)) return false;
+        View target = direction == View.FOCUS_LEFT ? lastFocusable(row) : firstFocusable(row);
+        return target != null && target != focus && target.requestFocus();
+    }
+
     public static boolean containsFocus(View root) {
         if (!isVisible(root)) return false;
         View focus = root.findFocus();
@@ -52,6 +70,17 @@ public final class PlayerControlFocusHelper {
         if (!(view instanceof ViewGroup group)) return null;
         for (int i = 0; i < group.getChildCount(); i++) {
             View child = firstFocusable(group.getChildAt(i));
+            if (child != null) return child;
+        }
+        return null;
+    }
+
+    private static View lastFocusable(View view) {
+        if (!isVisible(view) || !view.isEnabled()) return null;
+        if (view.isFocusable()) return view;
+        if (!(view instanceof ViewGroup group)) return null;
+        for (int i = group.getChildCount() - 1; i >= 0; i--) {
+            View child = lastFocusable(group.getChildAt(i));
             if (child != null) return child;
         }
         return null;

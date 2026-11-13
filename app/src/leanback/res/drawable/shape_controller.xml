@@ -1,11 +1,21 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+    逆向 ref_docs/dialog_track.xml 根节点引用的 @drawable/shape_controller。
+    原版同名资源（WebHTV 5.4.9 基线，git 21c05506b）是一层「很透明的渐变黑」：
+    顶部 @color/black_20（#33000000）→ 底部 @color/black_50（#80000000），8dp 顶部圆角。
+    不要改回 ?attr/colorSurface（Material3 不透明深色 #1C1B1F），
+    否则轨道面板会变成一整块不透明黑板，把视频画面完全盖住。
+-->
 <shape xmlns:android="http://schemas.android.com/apk/res/android"
     android:shape="rectangle">
 
-    <solid android:color="?attr/colorSurface" />
+    <gradient
+        android:angle="270"
+        android:endColor="@color/black_50"
+        android:startColor="@color/black_20" />
 
     <corners
-        android:topLeftRadius="28dp"
-        android:topRightRadius="28dp" />
+        android:topLeftRadius="8dp"
+        android:topRightRadius="8dp" />
 
 </shape>
