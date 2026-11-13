@@ -1392,7 +1392,7 @@ if (a.getBoolean(R.styleable.Window_backgroundDimEnabled, mIsFloating)) {
 | `app/src/mobile/java/.../ui/fragment/SettingAiFragment.java` | 删除文件 |
 | `app/src/leanback/res/layout/activity_setting_ai.xml` | 删除文件 |
 | `app/src/mobile/res/layout/fragment_setting_ai.xml` | 删除文件 |
-| `app/src/leanback/res/layout/activity_setting.xml` | 删 `@+id/ai` 入口；`tmdb` 由「两列」改回整行（`match_parent`、去 `layout_weight` / `layout_marginEnd`），`nextFocusRight` 由 `@id/ai` 改为自身 `@id/tmdb`（与其它整行项一致） |
+| `app/src/leanback/res/layout/activity_setting.xml` | 删 `@+id/ai` 入口；`tmdb` 由「两列」改回整行（`match_parent`、去 `layout_weight` / `layout_marginEnd`），`nextFocusRight` 由 `@id/ai` 改为自身 `@id/tmdb`（与其它整行项一致）；下一行 `appearance` / `personal` 的 `nextFocusUp="@id/ai"` 一并改为 `@id/tmdb`（否则资源链接期报 `resource id/ai not found`） |
 | `app/src/mobile/res/layout/fragment_setting.xml` | 删 `@+id/ai` 入口，`personal` 直接接在 `tmdb` 之后 |
 | `app/src/leanback/java/.../ui/activity/SettingActivity.java` | 删 `mBinding.ai.setOnClickListener(this::onAi)` 与 `onAi()` |
 | `app/src/mobile/java/.../ui/fragment/SettingFragment.java` | 删 `mBinding.ai.setOnClickListener(this::onAi)` 与 `onAi()`（原来 `getRoot().change(8)`） |
@@ -1400,6 +1400,8 @@ if (a.getBoolean(R.styleable.Window_backgroundDimEnabled, mIsFloating)) {
 | `app/src/leanback/AndroidManifest.xml` | 删 `.ui.activity.SettingAiActivity` 声明 |
 
 `case 8` 留空而不是把 9 挪到 8：所有位置都是硬编码 `getRoot().change(N)` 与 `mManager.isVisible(N)`，重排编号要同步改 `SettingFragment` / `HomeActivity` 多处，收益为零、回归面反而更大。
+
+**打包报错修复（同一轮）**：第一版漏了同一文件里 `appearance` / `personal` 两行的 `nextFocusUp="@id/ai"`，AAPT 在 `processLeanbackArmeabi_v7aDebugResources` 报 `resource id/ai not found`（`activity_setting.xml:428` / `:451`）。已把两处改为 `@id/tmdb`，`check_round20.py` 也新增了「整份布局不得出现 `@id/ai`（含引用形式）」的断言，避免只查 `@+id/ai` 定义而漏掉引用。
 
 #### ③ 同步测试
 

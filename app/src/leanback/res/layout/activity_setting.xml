@@ -423,7 +423,7 @@
                 android:focusableInTouchMode="true"
                 android:nextFocusLeft="@id/subtitle"
                 android:nextFocusRight="@id/personal"
-                android:nextFocusUp="@id/ai"
+                android:nextFocusUp="@id/tmdb"
                 android:nextFocusDown="@id/doh"
                 android:orientation="horizontal">
 
@@ -446,7 +446,7 @@
                 android:focusableInTouchMode="true"
                 android:nextFocusLeft="@id/appearance"
                 android:nextFocusRight="@id/personal"
-                android:nextFocusUp="@id/ai"
+                android:nextFocusUp="@id/tmdb"
                 android:nextFocusDown="@id/doh"
                 android:orientation="horizontal">
 
