@@ -16,18 +16,15 @@ import com.fongmi.android.tv.bean.ComicSourceConfig;
 import com.fongmi.android.tv.bean.NovelSourceConfig;
 import com.fongmi.android.tv.setting.Setting;
 import com.fongmi.android.tv.databinding.FragmentSettingEnhanceBinding;
-import com.fongmi.android.tv.setting.CustomCspSetting;
 import com.fongmi.android.tv.setting.ProxySetting;
 import com.fongmi.android.tv.ui.activity.FileActivity;
 import com.fongmi.android.tv.ui.base.BaseFragment;
 import com.fongmi.android.tv.ui.dialog.ComicSourceDialog;
 import com.fongmi.android.tv.ui.dialog.NovelSourceDialog;
-import com.fongmi.android.tv.ui.dialog.CustomCspDialog;
 import com.fongmi.android.tv.ui.dialog.DebugLogDialog;
 import com.fongmi.android.tv.ui.dialog.OneKeySyncDialog;
 import com.fongmi.android.tv.ui.dialog.ShellProxyDialog;
 import com.fongmi.android.tv.utils.Notify;
-import com.fongmi.android.tv.utils.PermissionUtil;
 import com.github.catvod.crawler.SpiderDebug;
 
 public class SettingEnhanceFragment extends BaseFragment {
@@ -76,18 +73,12 @@ public class SettingEnhanceFragment extends BaseFragment {
         mBinding.shellProxy.setOnClickListener(view -> ShellProxyDialog.show(this, this::setText));
         mBinding.shellProxy.setOnLongClickListener(v -> false);
         mBinding.shellProxyConfig.setVisibility(View.GONE);
-        mBinding.customCsp.setOnClickListener(view -> PermissionUtil.requestFile(this, granted -> {
-            if (!isAdded() || isStateSaved() || getActivity() == null) return;
-            if (granted) CustomCspDialog.show(this, this::setText);
-            else Notify.show(R.string.setting_custom_csp_permission_required);
-        }));
         mBinding.oneKeySync.setOnClickListener(v -> OneKeySyncDialog.create().show(requireActivity()));
     }
 
     private void reorderItems() {
-        ViewGroup parent = (ViewGroup) mBinding.customCsp.getParent();
+        ViewGroup parent = (ViewGroup) mBinding.oneKeySync.getParent();
         View[] order = {
-                mBinding.customCsp,
                 mBinding.oneKeySync,
                 mBinding.shellProxy,
                 mBinding.shellProxyConfig,
@@ -105,7 +96,6 @@ public class SettingEnhanceFragment extends BaseFragment {
         safeSet("comicSource", mBinding.comicSourceText, () -> getSwitch(!ComicSourceConfig.get().getDisplayRules().isEmpty()));
         safeSet("debugLog", mBinding.debugLogText, () -> getSwitch(Setting.isDebugLog()));
         setShellProxyText();
-        setCustomCspText();
     }
 
     private boolean canSetText() {
@@ -121,18 +111,6 @@ public class SettingEnhanceFragment extends BaseFragment {
             setError(mBinding.shellProxyText);
             setError(mBinding.shellProxyConfigText);
         });
-    }
-
-    private void setCustomCspText() {
-        safeRun("customCsp", () -> {
-            CustomCspSetting.Status status = CustomCspSetting.status();
-            if (!status.available()) {
-                setError(mBinding.customCspText);
-                return;
-            }
-            CustomCspSetting.Count count = status.count();
-            mBinding.customCspText.setText(getSwitch(status.enabled()) + " · " + getString(R.string.setting_custom_csp_count, count.active(), count.enabled()));
-        }, () -> setError(mBinding.customCspText));
     }
 
     private void safeSet(String name, TextView view, TextSupplier supplier) {

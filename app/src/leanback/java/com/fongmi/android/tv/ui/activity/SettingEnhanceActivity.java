@@ -13,15 +13,12 @@ import androidx.viewbinding.ViewBinding;
 import com.fongmi.android.tv.R;
 import com.fongmi.android.tv.setting.Setting;
 import com.fongmi.android.tv.databinding.ActivitySettingEnhanceBinding;
-import com.fongmi.android.tv.setting.CustomCspSetting;
 import com.fongmi.android.tv.setting.ProxySetting;
 import com.fongmi.android.tv.ui.base.BaseActivity;
-import com.fongmi.android.tv.ui.dialog.CustomCspDialog;
 import com.fongmi.android.tv.ui.dialog.DebugLogDialog;
 import com.fongmi.android.tv.ui.dialog.OneKeySyncDialog;
 import com.fongmi.android.tv.ui.dialog.ShellProxyDialog;
 import com.fongmi.android.tv.utils.Notify;
-import com.fongmi.android.tv.utils.PermissionUtil;
 import com.github.catvod.crawler.SpiderDebug;
 
 public class SettingEnhanceActivity extends BaseActivity {
@@ -47,7 +44,7 @@ public class SettingEnhanceActivity extends BaseActivity {
     @Override
     protected void initView(Bundle savedInstanceState) {
         reorderItems();
-        mBinding.customCsp.requestFocus();
+        mBinding.oneKeySync.requestFocus();
         setText();
     }
 
@@ -59,18 +56,12 @@ public class SettingEnhanceActivity extends BaseActivity {
         mBinding.shellProxy.setOnClickListener(view -> ShellProxyDialog.show(this, this::setText));
         mBinding.shellProxy.setOnLongClickListener(v -> false);
         mBinding.shellProxyConfig.setVisibility(View.GONE);
-        mBinding.customCsp.setOnClickListener(view -> PermissionUtil.requestFile(this, granted -> {
-            if (isFinishing() || isDestroyed() || getSupportFragmentManager().isStateSaved()) return;
-            if (granted) CustomCspDialog.show(this, this::setText);
-            else Notify.show(R.string.setting_custom_csp_permission_required);
-        }));
         mBinding.oneKeySync.setOnClickListener(v -> OneKeySyncDialog.create().show(this));
     }
 
     private void reorderItems() {
-        ViewGroup parent = (ViewGroup) mBinding.customCsp.getParent();
+        ViewGroup parent = (ViewGroup) mBinding.oneKeySync.getParent();
         View[] order = {
-                mBinding.customCsp,
                 mBinding.oneKeySync,
                 mBinding.shellProxy,
                 mBinding.shellProxyConfig,
@@ -84,7 +75,6 @@ public class SettingEnhanceActivity extends BaseActivity {
         if (!canSetText()) return;
         safeSet("debugLog", mBinding.debugLogText, () -> getSwitch(Setting.isDebugLog()));
         setShellProxyText();
-        setCustomCspText();
     }
 
     private boolean canSetText() {
@@ -100,18 +90,6 @@ public class SettingEnhanceActivity extends BaseActivity {
             setError(mBinding.shellProxyText);
             setError(mBinding.shellProxyConfigText);
         });
-    }
-
-    private void setCustomCspText() {
-        safeRun("customCsp", () -> {
-            CustomCspSetting.Status status = CustomCspSetting.status();
-            if (!status.available()) {
-                setError(mBinding.customCspText);
-                return;
-            }
-            CustomCspSetting.Count count = status.count();
-            mBinding.customCspText.setText(getSwitch(status.enabled()) + " · " + getString(R.string.setting_custom_csp_count, count.active(), count.enabled()));
-        }, () -> setError(mBinding.customCspText));
     }
 
     private void safeSet(String name, TextView view, TextSupplier supplier) {

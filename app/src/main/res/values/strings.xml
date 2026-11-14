@@ -517,7 +517,6 @@
     <string name="setting_custom_csp_sort_move_to">Move to position</string>
     <string name="setting_custom_csp_sort_move_to_title">Move to position</string>
     <string name="setting_custom_csp_sort_move_to_hint">Position 1-%1$d</string>
-    <string name="setting_custom_csp_count">%1$d/%2$d active</string>
     <string name="setting_custom_csp_api">api</string>
     <string name="setting_custom_csp_code">Code</string>
     <string name="setting_custom_csp_down">Move down</string>

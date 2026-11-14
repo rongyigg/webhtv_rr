@@ -514,7 +514,6 @@
     <string name="setting_custom_csp_sort_move_to">移动到指定位置</string>
     <string name="setting_custom_csp_sort_move_to_title">移动到指定位置</string>
     <string name="setting_custom_csp_sort_move_to_hint">位置 1-%1$d</string>
-    <string name="setting_custom_csp_count">%1$d/%2$d 可用</string>
     <string name="setting_custom_csp_api">api</string>
     <string name="setting_custom_csp_code">代码</string>
     <string name="setting_custom_csp_down">下移</string>
