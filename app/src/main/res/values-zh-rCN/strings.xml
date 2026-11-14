@@ -382,14 +382,6 @@
     <string name="setting_web_home_theme_recovery_success">主题版本已更新</string>
     <string name="setting_web_home_theme_recovery_failed">无法更新主题版本</string>
     <string name="setting_web_home_fullscreen">WebHome 主页全屏</string>
-    <string name="setting_csp_warmup">CSP预热</string>
-    <string name="setting_csp_warmup_default">默认</string>
-    <string name="setting_csp_warmup_custom">自定义</string>
-    <string name="setting_csp_warmup_custom_count">自定义 · %1$d 个</string>
-    <string name="setting_csp_warmup_select_site">选择 CSP 站点</string>
-    <string name="setting_csp_warmup_no_site">没有可用的 Jar CSP 站点</string>
-    <string name="setting_csp_warmup_select_required">请至少选择一个 CSP 站点</string>
-    <string name="setting_playback_artwork_wall">播放界面剧照</string>
     <string name="playback_remote_sync">远端同步</string>
     <string name="playback_webhook">Webhook 上报</string>
     <string name="playback_webhook_back">返回</string>
@@ -1278,7 +1270,6 @@
     <string name="debug_log_copy_url">复制地址</string>
     <string name="debug_log_no_browser">未找到可打开网页的应用，请使用局域网地址访问</string>
     <string name="debug_log_url_copied">调试日志地址已复制</string>
-    <string name="manage_page_web">浏览器页面</string>
     <string name="manage_page_dialog_message">管理页面已启动。\n\n局域网地址：\n%1$s\n\n本机地址：\n%2$s\n\n管理文件或设置时请保持页面打开。浏览器页面关闭一段时间后服务会自动停止，也可以手动停止。</string>
     <string name="manage_page_open_browser">打开浏览器</string>
     <string name="manage_page_copy_url">复制地址</string>

@@ -385,14 +385,6 @@
     <string name="setting_web_home_theme_recovery_success">Theme version updated</string>
     <string name="setting_web_home_theme_recovery_failed">Unable to update the theme version</string>
     <string name="setting_web_home_fullscreen">WebHome homepage fullscreen</string>
-    <string name="setting_csp_warmup">CSP warmup</string>
-    <string name="setting_csp_warmup_default">Default</string>
-    <string name="setting_csp_warmup_custom">Custom</string>
-    <string name="setting_csp_warmup_custom_count">Custom · %1$d sites</string>
-    <string name="setting_csp_warmup_select_site">Select CSP sites</string>
-    <string name="setting_csp_warmup_no_site">No jar CSP site available</string>
-    <string name="setting_csp_warmup_select_required">Select at least one CSP site</string>
-    <string name="setting_playback_artwork_wall">Playback stills</string>
     <string name="playback_remote_sync">Remote sync</string>
     <string name="playback_webhook">Webhook reporting</string>
     <string name="playback_webhook_back">Back</string>
@@ -1309,7 +1301,6 @@
     <string name="debug_log_copy_url">Copy URL</string>
     <string name="debug_log_no_browser">No browser app found. Use the LAN URL from another device.</string>
     <string name="debug_log_url_copied">Debug log URL copied</string>
-    <string name="manage_page_web">Web page</string>
     <string name="manage_page_dialog_message">Management page is running.\n\nLAN URL:\n%1$s\n\nLocal URL:\n%2$s\n\nKeep this page open while managing files or settings. The service stops automatically after the browser page is closed for a while, or you can stop it manually.</string>
     <string name="manage_page_open_browser">Open browser</string>
     <string name="manage_page_copy_url">Copy URL</string>

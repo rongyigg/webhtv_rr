@@ -676,7 +676,7 @@ private final Task.Scope mPersonalRecommendationTasks = new Task.Scope(Task.reco
 
     public static void start(Activity activity, String key, String id, String name, String pic, String mark, boolean collect, com.fongmi.android.tv.bean.TmdbItem tmdbItem, String wallPic, String content, String searchKeyword) {
         ImgUtil.preload(activity, pic);
-        if (Setting.isPlaybackArtworkWall() && !TextUtils.isEmpty(wallPic) && !TextUtils.equals(wallPic, pic)) ImgUtil.preload(activity, wallPic);
+        if (!TextUtils.isEmpty(wallPic) && !TextUtils.equals(wallPic, pic)) ImgUtil.preload(activity, wallPic);
         if (dispatchToContentHandler(activity, key, id, name, pic, mark)) return;
         startSkippingDispatch(activity, key, id, name, pic, mark, collect, tmdbItem, wallPic, content, searchKeyword);
     }
@@ -5612,11 +5612,8 @@ private final Task.Scope mPersonalRecommendationTasks = new Task.Scope(Task.reco
     }
 
     private void setContextWall(String url, boolean skipLock) {
-        if (!Setting.isPlaybackArtworkWall() && !isRuntimeFusionMode() && !shouldUseTmdbBackdropSurface()) {
-            mContextWallUrl = "";
-            hideContextWall();
-            return;
-        }
+        // 原条件 `!Setting.isPlaybackArtworkWall() && !isRuntimeFusionMode() && !shouldUseTmdbBackdropSurface()`
+        // 在播放界面剧照恒为开启后永远为 false，该提前返回分支已移除；Fusion / TMDB 背景联动行为保持不变。
         // 轮播场景（原生增强/Fusion 的 backdrop 变化）需要跳过锁定，否则永远只显示第一张
         String wall = skipLock ? Objects.toString(url, "") : lockContextWall(url);
         if (TextUtils.isEmpty(wall)) {
@@ -5662,7 +5659,8 @@ private final Task.Scope mPersonalRecommendationTasks = new Task.Scope(Task.reco
     }
 
     private void restoreContextWall() {
-        if (!Setting.isPlaybackArtworkWall() && !isRuntimeFusionMode() && !shouldUseTmdbBackdropSurface()) return;
+        // 原提前返回条件 `!Setting.isPlaybackArtworkWall() && !isRuntimeFusionMode() && !shouldUseTmdbBackdropSurface()`
+        // 在播放界面剧照恒为开启后永远为 false，已移除；Fusion / TMDB 背景联动行为保持不变。
         String wall = getContextWall();
         if (TextUtils.isEmpty(wall)) {
             hideContextWall();

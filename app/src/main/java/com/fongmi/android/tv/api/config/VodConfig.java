@@ -7,7 +7,6 @@ import androidx.appcompat.app.AlertDialog;
 import com.fongmi.android.tv.App;
 import com.fongmi.android.tv.R;
 import com.fongmi.android.tv.api.CatSource;
-import com.fongmi.android.tv.api.CspWarmup;
 import com.fongmi.android.tv.api.Decoder;
 import com.fongmi.android.tv.api.TmdbSourceCredentialIngress;
 import com.fongmi.android.tv.api.loader.BaseLoader;
@@ -217,13 +216,7 @@ public class VodConfig extends BaseConfig {
     }
 
     @Override
-    protected void beforeLoad() {
-        CspWarmup.reset();
-    }
-
-    @Override
     protected void onLoadSuccess() {
-        CspWarmup.schedule("vod-config-loaded");
         InterfaceAdRuleLearningService.schedule(getConfig().getDesc(), getConfig().getUrl(), getAds(), getRules());
     }
 

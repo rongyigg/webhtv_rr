@@ -721,7 +721,7 @@ private boolean runtimeSourceOnly;
         long launch = System.currentTimeMillis();
         SpiderDebug.log("video-flow", "launch request key=%s id=%s name=%s collect=%s cast=%s", key, id, name, collect, cast);
         ImgUtil.preload(activity, pic);
-        if (Setting.isPlaybackArtworkWall() && !TextUtils.isEmpty(wallPic) && !TextUtils.equals(wallPic, pic)) ImgUtil.preload(activity, wallPic);
+        if (!TextUtils.isEmpty(wallPic) && !TextUtils.equals(wallPic, pic)) ImgUtil.preload(activity, wallPic);
         if (dispatchToContentHandler(activity, key, id, name, pic, mark, cast)) {
             SpiderDebug.log("video-flow", "dispatched to content handler key=%s", key);
             return;
@@ -976,7 +976,7 @@ private boolean runtimeSourceOnly;
         intent.putExtra("pic", pic);
         String wallPic = item == null ? "" : item.getBackdropUrl();
         if (!TextUtils.isEmpty(wallPic)) intent.putExtra("wallPic", wallPic);
-        if (Setting.isPlaybackArtworkWall() && !TextUtils.isEmpty(wallPic)) ImgUtil.preload(activity, wallPic);
+        if (!TextUtils.isEmpty(wallPic)) ImgUtil.preload(activity, wallPic);
         intent.putExtra("key", key);
         intent.putExtra("id", id);
         intent.putExtra(EXTRA_RESUME_FROM_HISTORY, resumeHistory != null);
@@ -5538,11 +5538,6 @@ private boolean runtimeSourceOnly;
         // TMDB 背景幻灯片激活时，contextWall 让位于底层跟随 TMDB 条目更新的 slideshow，
         // 不再翻回顶层遮挡（否则背景固定为进入页时的 wallPic，切换条目不生效）。
         if (mBackdropSlideshowActive) return;
-        if (!Setting.isPlaybackArtworkWall()) {
-            mContextWallUrl = "";
-            hideContextWall();
-            return;
-        }
         String wall = lockContextWall(url);
         if (TextUtils.isEmpty(wall)) {
             mContextWallUrl = "";

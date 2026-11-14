@@ -29,10 +29,8 @@ import com.fongmi.android.tv.ui.dialog.AudioSourceDialog;
 import com.fongmi.android.tv.ui.dialog.ComicSourceDialog;
 import com.fongmi.android.tv.ui.dialog.NovelSourceDialog;
 import com.fongmi.android.tv.ui.dialog.ShortDramaSourceDialog;
-import com.fongmi.android.tv.ui.dialog.CspWarmupDialog;
 import com.fongmi.android.tv.ui.dialog.CustomCspDialog;
 import com.fongmi.android.tv.ui.dialog.DebugLogDialog;
-import com.fongmi.android.tv.ui.dialog.ManagePageDialog;
 import com.fongmi.android.tv.ui.dialog.OneKeySyncDialog;
 import com.fongmi.android.tv.ui.dialog.ShellProxyDialog;
 import com.fongmi.android.tv.ui.dialog.SiteHealthDialog;
@@ -98,9 +96,6 @@ public class SettingEnhanceFragment extends BaseFragment {
         mBinding.webHomeExtension.setOnLongClickListener(this::clearWebHomeExtension);
         mBinding.webHomeTheme.setOnClickListener(view -> WebHomeThemeDialog.show(requireActivity(), this::setText));
         mBinding.webHomeFullscreen.setOnClickListener(this::setWebHomeFullscreen);
-        mBinding.cspWarmup.setOnClickListener(this::setCspWarmup);
-        mBinding.playbackArtworkWall.setOnClickListener(this::setPlaybackArtworkWall);
-        mBinding.managePage.setOnClickListener(view -> ManagePageDialog.show(this));
         mBinding.shellProxy.setOnClickListener(view -> ShellProxyDialog.show(this, this::setText));
         mBinding.shellProxy.setOnLongClickListener(v -> false);
         mBinding.shellProxyConfig.setVisibility(View.GONE);
@@ -120,11 +115,8 @@ public class SettingEnhanceFragment extends BaseFragment {
                 mBinding.oneKeySync,
                 mBinding.shellProxy,
                 mBinding.shellProxyConfig,
-                mBinding.managePage,
                 mBinding.webHomeTheme,
                 mBinding.webHomeFullscreen,
-                mBinding.cspWarmup,
-                mBinding.playbackArtworkWall,
                 mBinding.driveCheck,
                 mBinding.siteName,
                 mBinding.localReader,
@@ -154,9 +146,6 @@ public class SettingEnhanceFragment extends BaseFragment {
         });
         safeSet("webHomeTheme", mBinding.webHomeThemeText, () -> WebHomeThemeDialog.summary(requireContext()));
         safeSet("webHomeFullscreen", mBinding.webHomeFullscreenText, () -> getSwitch(Setting.isWebHomeFullscreen()));
-        safeSet("cspWarmup", mBinding.cspWarmupText, this::getCspWarmupText);
-        safeSet("playbackArtworkWall", mBinding.playbackArtworkWallText, () -> getSwitch(Setting.isPlaybackArtworkWall()));
-        safeSet("managePage", mBinding.managePageText, () -> getString(R.string.manage_page_web));
         setShellProxyText();
         setCustomCspText();
     }
@@ -258,11 +247,6 @@ public class SettingEnhanceFragment extends BaseFragment {
         return state + " · " + getString(R.string.site_health_report_setting_summary, summary.siteCount, summary.sampleCount);
     }
 
-    private void setPlaybackArtworkWall(View view) {
-        Setting.putPlaybackArtworkWall(!Setting.isPlaybackArtworkWall());
-        mBinding.playbackArtworkWallText.setText(getSwitch(Setting.isPlaybackArtworkWall()));
-    }
-
     private void setWebHomeFullscreen(View view) {
         Setting.putWebHomeFullscreen(!Setting.isWebHomeFullscreen());
         mBinding.webHomeFullscreenText.setText(getSwitch(Setting.isWebHomeFullscreen()));
@@ -274,16 +258,6 @@ public class SettingEnhanceFragment extends BaseFragment {
             }
             activity.refreshWebHomeChromeState();
         }
-    }
-
-    private void setCspWarmup(View view) {
-        CspWarmupDialog.show(this, this::setText);
-    }
-
-    private String getCspWarmupText() {
-        int mode = Setting.getCspWarmupMode();
-        if (mode == Setting.CSP_WARMUP_CUSTOM) return getString(R.string.setting_csp_warmup_custom_count, Setting.getCspWarmupSites().size());
-        return getString(mode == Setting.CSP_WARMUP_DEFAULT ? R.string.setting_csp_warmup_default : R.string.setting_disable);
     }
 
     private boolean clearSiteHealth(View view) {
