@@ -34,12 +34,9 @@ import com.fongmi.android.tv.ui.dialog.OneKeySyncDialog;
 import com.fongmi.android.tv.ui.dialog.ShellProxyDialog;
 import com.fongmi.android.tv.ui.dialog.SiteHealthDialog;
 import com.fongmi.android.tv.ui.dialog.SiteNameDialog;
-import com.fongmi.android.tv.ui.dialog.WebHomeExtensionDialog;
-import com.fongmi.android.tv.ui.dialog.WebHomeThemeDialog;
 import com.fongmi.android.tv.utils.Notify;
 import com.fongmi.android.tv.utils.PermissionUtil;
 import com.github.catvod.crawler.SpiderDebug;
-import com.fongmi.android.tv.web.ext.WebHomeExtensionRegistry;
 
 public class SettingEnhanceFragment extends BaseFragment {
 
@@ -89,9 +86,6 @@ public class SettingEnhanceFragment extends BaseFragment {
         mBinding.debugLog.setOnClickListener(this::setDebugLog);
         mBinding.siteHealthSort.setOnClickListener(view -> SiteHealthDialog.show(this, this::setText));
         mBinding.siteHealthSort.setOnLongClickListener(this::clearSiteHealth);
-        mBinding.webHomeExtension.setOnClickListener(view -> WebHomeExtensionDialog.show(this, this::setText));
-        mBinding.webHomeExtension.setOnLongClickListener(this::clearWebHomeExtension);
-        mBinding.webHomeTheme.setOnClickListener(view -> WebHomeThemeDialog.show(requireActivity(), this::setText));
         mBinding.shellProxy.setOnClickListener(view -> ShellProxyDialog.show(this, this::setText));
         mBinding.shellProxy.setOnLongClickListener(v -> false);
         mBinding.shellProxyConfig.setVisibility(View.GONE);
@@ -107,11 +101,9 @@ public class SettingEnhanceFragment extends BaseFragment {
         ViewGroup parent = (ViewGroup) mBinding.customCsp.getParent();
         View[] order = {
                 mBinding.customCsp,
-                mBinding.webHomeExtension,
                 mBinding.oneKeySync,
                 mBinding.shellProxy,
                 mBinding.shellProxyConfig,
-                mBinding.webHomeTheme,
                 mBinding.siteName,
                 mBinding.localReader,
                 mBinding.novelSource,
@@ -133,11 +125,6 @@ public class SettingEnhanceFragment extends BaseFragment {
         safeSet("shortDramaSource", mBinding.shortDramaSourceText, () -> getSwitch(!ShortDramaConfig.objectFrom(Setting.getShortDramaConfig()).getDisplayRules().isEmpty()));
         safeSet("debugLog", mBinding.debugLogText, () -> getSwitch(Setting.isDebugLog()));
         safeSet("siteHealthSort", mBinding.siteHealthSortText, this::getSiteHealthText);
-        safeSet("webHomeExtension", mBinding.webHomeExtensionText, () -> {
-            WebHomeExtensionRegistry.Snapshot webHomeExtension = WebHomeExtensionRegistry.get().snapshot();
-            return getSwitch(Setting.isWebHomeExtension()) + " · " + webHomeExtension.readyCount + "/" + webHomeExtension.installedCount;
-        });
-        safeSet("webHomeTheme", mBinding.webHomeThemeText, () -> WebHomeThemeDialog.summary(requireContext()));
         setShellProxyText();
         setCustomCspText();
     }
@@ -237,12 +224,6 @@ public class SettingEnhanceFragment extends BaseFragment {
     private boolean clearSiteHealth(View view) {
         SiteHealthStore.clear();
         Notify.show(R.string.site_health_clear_done);
-        return true;
-    }
-
-    private boolean clearWebHomeExtension(View view) {
-        WebHomeExtensionRegistry.get().clear();
-        Notify.show(R.string.web_home_extension_clear_done);
         return true;
     }
 

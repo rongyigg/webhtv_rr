@@ -367,7 +367,6 @@
     <string name="site_health_reason_search_failed">搜索失败</string>
     <string name="site_health_reason_detail_failed">详情失败</string>
     <string name="site_health_reason_play_failed">播放失败</string>
-    <string name="setting_web_home_extension">WebHome 扩展</string>
     <string name="setting_web_home_theme">全局 WebHome 皮肤</string>
     <string name="setting_web_home_theme_eclipse">Eclipse（内置）</string>
     <string name="setting_web_home_theme_custom">自定义网址</string>

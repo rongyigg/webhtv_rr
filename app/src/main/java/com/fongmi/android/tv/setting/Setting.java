@@ -532,7 +532,9 @@ public class Setting {
     }
 
     public static boolean isWebHomeThemeEnabled() {
-        return Prefers.getBoolean("web_home_theme_enabled");
+        // 增强设置入口已移除，全局 WebHome 皮肤固定为关闭（原 `Prefers.getBoolean("web_home_theme_enabled")`）。
+        // WebHomeTarget 走站点自带 homePage 分支，全局 URL 与安全校验分支保留但不可达。
+        return false;
     }
 
     public static void putWebHomeThemeEnabled(boolean enabled) {

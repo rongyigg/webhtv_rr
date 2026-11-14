@@ -370,7 +370,6 @@
     <string name="site_health_reason_search_failed">Search failed</string>
     <string name="site_health_reason_detail_failed">Detail failed</string>
     <string name="site_health_reason_play_failed">Playback failed</string>
-    <string name="setting_web_home_extension">WebHome extensions</string>
     <string name="setting_web_home_theme">Global WebHome theme</string>
     <string name="setting_web_home_theme_eclipse">Eclipse (built-in)</string>
     <string name="setting_web_home_theme_custom">Custom URL</string>

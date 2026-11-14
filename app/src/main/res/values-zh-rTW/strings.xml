@@ -339,7 +339,6 @@
     <string name="site_health_reason_search_failed">搜尋失敗</string>
     <string name="site_health_reason_detail_failed">詳情失敗</string>
     <string name="site_health_reason_play_failed">播放失敗</string>
-    <string name="setting_web_home_extension">WebHome 擴展</string>
     <string name="setting_web_home_theme">全域 WebHome 主題</string>
     <string name="setting_web_home_theme_eclipse">Eclipse（內建）</string>
     <string name="setting_web_home_theme_custom">自訂網址</string>
