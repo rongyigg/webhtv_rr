@@ -565,7 +565,6 @@
     <string name="setting_local_reader">本地小說漫畫閱讀</string>
     <string name="setting_local_reader_summary">支援多種格式</string>
     <string name="setting_site_name">站源名稱與分組</string>
-    <string name="setting_site_name_summary">已自訂 %1$d 個</string>
     <string name="site_name_custom">自訂名稱</string>
     <string name="site_name_original">原始名稱：%1$s</string>
     <string name="site_name_key">站源 Key：%1$s</string>

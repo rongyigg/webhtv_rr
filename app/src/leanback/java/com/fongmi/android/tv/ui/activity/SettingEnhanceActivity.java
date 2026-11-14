@@ -15,13 +15,11 @@ import com.fongmi.android.tv.setting.Setting;
 import com.fongmi.android.tv.databinding.ActivitySettingEnhanceBinding;
 import com.fongmi.android.tv.setting.CustomCspSetting;
 import com.fongmi.android.tv.setting.ProxySetting;
-import com.fongmi.android.tv.setting.SiteNameStore;
 import com.fongmi.android.tv.ui.base.BaseActivity;
 import com.fongmi.android.tv.ui.dialog.CustomCspDialog;
 import com.fongmi.android.tv.ui.dialog.DebugLogDialog;
 import com.fongmi.android.tv.ui.dialog.OneKeySyncDialog;
 import com.fongmi.android.tv.ui.dialog.ShellProxyDialog;
-import com.fongmi.android.tv.ui.dialog.SiteNameDialog;
 import com.fongmi.android.tv.utils.Notify;
 import com.fongmi.android.tv.utils.PermissionUtil;
 import com.github.catvod.crawler.SpiderDebug;
@@ -57,7 +55,6 @@ public class SettingEnhanceActivity extends BaseActivity {
     protected void initEvent() {
         mBinding.githubRepo.setOnClickListener(view -> openRepo(URL_GITHUB));
         mBinding.cnbRepo.setOnClickListener(view -> openRepo(URL_CNB));
-        mBinding.siteName.setOnClickListener(this::setSiteName);
         mBinding.debugLog.setOnClickListener(this::setDebugLog);
         mBinding.shellProxy.setOnClickListener(view -> ShellProxyDialog.show(this, this::setText));
         mBinding.shellProxy.setOnLongClickListener(v -> false);
@@ -77,7 +74,6 @@ public class SettingEnhanceActivity extends BaseActivity {
                 mBinding.oneKeySync,
                 mBinding.shellProxy,
                 mBinding.shellProxyConfig,
-                mBinding.siteName,
                 mBinding.debugLog
         };
         for (View view : order) parent.removeView(view);
@@ -86,7 +82,6 @@ public class SettingEnhanceActivity extends BaseActivity {
 
     private void setText() {
         if (!canSetText()) return;
-        safeSet("siteName", mBinding.siteNameText, () -> getString(R.string.setting_site_name_summary, SiteNameStore.count()));
         safeSet("debugLog", mBinding.debugLogText, () -> getSwitch(Setting.isDebugLog()));
         setShellProxyText();
         setCustomCspText();
@@ -149,10 +144,6 @@ public class SettingEnhanceActivity extends BaseActivity {
         mBinding.debugLogText.setText(getSwitch(Setting.isDebugLog()));
         if (!Setting.isDebugLog()) return;
         DebugLogDialog.show(this);
-    }
-
-    private void setSiteName(View view) {
-        SiteNameDialog.create(this).onChanged(this::setText).show();
     }
 
     private void openRepo(String url) {

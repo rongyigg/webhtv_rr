@@ -609,7 +609,6 @@
     <string name="setting_local_reader">本地小说漫画阅读</string>
     <string name="setting_local_reader_summary">支持多种格式</string>
     <string name="setting_site_name">站源名称与分组</string>
-    <string name="setting_site_name_summary">已自定义 %1$d 个</string>
     <string name="site_name_custom">自定义名称</string>
     <string name="site_name_original">原始名称：%1$s</string>
     <string name="site_name_key">站源 Key：%1$s</string>

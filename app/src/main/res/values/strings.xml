@@ -612,7 +612,6 @@
     <string name="setting_local_reader">Local novel and comic reader</string>
     <string name="setting_local_reader_summary">Multiple formats supported</string>
     <string name="setting_site_name">Site names and groups</string>
-    <string name="setting_site_name_summary">%1$d customized</string>
     <string name="site_name_custom">Custom name</string>
     <string name="site_name_original">Original: %1$s</string>
     <string name="site_name_key">Key: %1$s</string>

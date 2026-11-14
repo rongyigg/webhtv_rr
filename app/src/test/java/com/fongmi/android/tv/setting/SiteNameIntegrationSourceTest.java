@@ -6,6 +6,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
 public class SiteNameIntegrationSourceTest {
@@ -24,9 +25,9 @@ public class SiteNameIntegrationSourceTest {
     }
 
     @Test
-    public void bothSettingPagesExposeSiteNameManagement() throws Exception {
-        assertTrue(read("app/src/mobile/java/com/fongmi/android/tv/ui/fragment/SettingEnhanceFragment.java").contains("SiteNameDialog"));
-        assertTrue(read("app/src/leanback/java/com/fongmi/android/tv/ui/activity/SettingEnhanceActivity.java").contains("SiteNameDialog"));
+    public void settingPagesNoLongerExposeSiteNameManagement() throws Exception {
+        assertFalse(read("app/src/mobile/java/com/fongmi/android/tv/ui/fragment/SettingEnhanceFragment.java").contains("SiteNameDialog"));
+        assertFalse(read("app/src/leanback/java/com/fongmi/android/tv/ui/activity/SettingEnhanceActivity.java").contains("SiteNameDialog"));
     }
 
     @Test

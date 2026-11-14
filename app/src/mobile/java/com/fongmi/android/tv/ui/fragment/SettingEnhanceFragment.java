@@ -18,7 +18,6 @@ import com.fongmi.android.tv.setting.Setting;
 import com.fongmi.android.tv.databinding.FragmentSettingEnhanceBinding;
 import com.fongmi.android.tv.setting.CustomCspSetting;
 import com.fongmi.android.tv.setting.ProxySetting;
-import com.fongmi.android.tv.setting.SiteNameStore;
 import com.fongmi.android.tv.ui.activity.FileActivity;
 import com.fongmi.android.tv.ui.base.BaseFragment;
 import com.fongmi.android.tv.ui.dialog.ComicSourceDialog;
@@ -27,7 +26,6 @@ import com.fongmi.android.tv.ui.dialog.CustomCspDialog;
 import com.fongmi.android.tv.ui.dialog.DebugLogDialog;
 import com.fongmi.android.tv.ui.dialog.OneKeySyncDialog;
 import com.fongmi.android.tv.ui.dialog.ShellProxyDialog;
-import com.fongmi.android.tv.ui.dialog.SiteNameDialog;
 import com.fongmi.android.tv.utils.Notify;
 import com.fongmi.android.tv.utils.PermissionUtil;
 import com.github.catvod.crawler.SpiderDebug;
@@ -71,7 +69,6 @@ public class SettingEnhanceFragment extends BaseFragment {
             }
             return false;
         });
-        mBinding.siteName.setOnClickListener(this::setSiteName);
         mBinding.localReader.setOnClickListener(this::setLocalReader);
         mBinding.novelSource.setOnClickListener(this::setNovelSource);
         mBinding.comicSource.setOnClickListener(this::setComicSource);
@@ -94,7 +91,6 @@ public class SettingEnhanceFragment extends BaseFragment {
                 mBinding.oneKeySync,
                 mBinding.shellProxy,
                 mBinding.shellProxyConfig,
-                mBinding.siteName,
                 mBinding.localReader,
                 mBinding.novelSource,
                 mBinding.comicSource,
@@ -105,7 +101,6 @@ public class SettingEnhanceFragment extends BaseFragment {
 
     private void setText() {
         if (!canSetText()) return;
-        safeSet("siteName", mBinding.siteNameText, () -> getString(R.string.setting_site_name_summary, SiteNameStore.count()));
         safeSet("novelSource", mBinding.novelSourceText, () -> getSwitch(!NovelSourceConfig.get().getDisplayRules().isEmpty()));
         safeSet("comicSource", mBinding.comicSourceText, () -> getSwitch(!ComicSourceConfig.get().getDisplayRules().isEmpty()));
         safeSet("debugLog", mBinding.debugLogText, () -> getSwitch(Setting.isDebugLog()));
@@ -170,10 +165,6 @@ public class SettingEnhanceFragment extends BaseFragment {
         mBinding.debugLogText.setText(getSwitch(Setting.isDebugLog()));
         if (!Setting.isDebugLog()) return;
         DebugLogDialog.show(this);
-    }
-
-    private void setSiteName(View view) {
-        SiteNameDialog.create(requireActivity()).onChanged(this::setText).show();
     }
 
     private void setLocalReader(View view) {
