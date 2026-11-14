@@ -1386,39 +1386,26 @@ public class HomeActivity extends BaseActivity implements ExitConfirmDialog.List
 
     @Override
     public void setToolbar(boolean visible) {
-        if (!Setting.isWebHomeFullscreen()) {
-            applyTvChrome(TV_NORMAL);
-            return;
-        }
+        // 原条件 `!Setting.isWebHomeFullscreen()` 为真时强制 TV_NORMAL，恒为开启后该分支已移除。
         applyTvChrome(visible ? webDefaultChromeMode : TV_TOOLBAR_HIDDEN);
     }
 
     @Override
     public void applyDefaultChrome(Site site) {
-        if (!Setting.isWebHomeFullscreen()) {
-            webDefaultChromeMode = TV_NORMAL;
-            applyTvChrome(TV_NORMAL);
-            return;
-        }
+        // 原条件 `!Setting.isWebHomeFullscreen()` 为真时强制 TV_NORMAL，恒为开启后该分支已移除。
         webDefaultChromeMode = tvDefaultMode(site == null ? "" : site.getChromeMode());
         applyTvChrome(webDefaultChromeMode);
     }
 
     @Override
     public void setChrome(JsonObject payload) {
-        if (!Setting.isWebHomeFullscreen()) {
-            applyTvChrome(TV_NORMAL);
-            return;
-        }
+        // 原条件 `!Setting.isWebHomeFullscreen()` 为真时强制 TV_NORMAL，恒为开启后该分支已移除。
         applyTvChrome(tvRuntimeMode(Json.safeString(payload, "mode")));
     }
 
     @Override
     public void restoreChrome() {
-        if (!Setting.isWebHomeFullscreen()) {
-            applyTvChrome(TV_NORMAL);
-            return;
-        }
+        // 原条件 `!Setting.isWebHomeFullscreen()` 为真时强制 TV_NORMAL，恒为开启后该分支已移除。
         applyTvChrome(webDefaultChromeMode);
     }
 

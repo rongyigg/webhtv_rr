@@ -381,7 +381,6 @@
     <string name="setting_web_home_theme_retry_message">重试已回退的主题版本？如果首次加载再次失败，将自动恢复稳定版本。</string>
     <string name="setting_web_home_theme_recovery_success">主题版本已更新</string>
     <string name="setting_web_home_theme_recovery_failed">无法更新主题版本</string>
-    <string name="setting_web_home_fullscreen">WebHome 主页全屏</string>
     <string name="playback_remote_sync">远端同步</string>
     <string name="playback_webhook">Webhook 上报</string>
     <string name="playback_webhook_back">返回</string>
@@ -605,7 +604,6 @@
     <string name="setting_one_key_sync">一键同步</string>
     <string name="setting_incognito">无痕模式</string>
     <string name="setting_touch_optimization">触屏优化</string>
-    <string name="setting_drive_check">网盘检测</string>
     <string name="setting_audio_source">音频源配置</string>
     <string name="setting_novel_source">小说源配置</string>
     <string name="setting_comic_source">漫画源配置</string>

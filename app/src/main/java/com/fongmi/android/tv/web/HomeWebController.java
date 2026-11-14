@@ -36,7 +36,6 @@ import com.fongmi.android.tv.api.config.VodConfig;
 import com.fongmi.android.tv.bean.Site;
 import com.fongmi.android.tv.bean.Vod;
 import com.fongmi.android.tv.server.Server;
-import com.fongmi.android.tv.setting.Setting;
 import com.fongmi.android.tv.utils.KeyUtil;
 import com.fongmi.android.tv.utils.Notify;
 import com.fongmi.android.tv.utils.Task;
@@ -567,8 +566,8 @@ public class HomeWebController {
         invalidateRemoteSession();
         webView.removeJavascriptInterface(BRIDGE);
         bridgeKey = "";
-        if (Setting.isWebHomeFullscreen()) listener.applyDefaultChrome(site);
-        else listener.setChrome(normalChrome());
+        // 原分支 `if (Setting.isWebHomeFullscreen()) … else listener.setChrome(normalChrome())`，全屏恒开启后取首支。
+        listener.applyDefaultChrome(site);
         Server.get().start();
         int token = ++manifestLoadToken;
         int generation;
@@ -781,8 +780,8 @@ public class HomeWebController {
                 pageHost.updateContext(site, resolved, route);
             }
         }
-        if (Setting.isWebHomeFullscreen()) listener.applyDefaultChrome(site);
-        else listener.setChrome(normalChrome());
+        // 原分支 `if (Setting.isWebHomeFullscreen()) … else listener.setChrome(normalChrome())`，全屏恒开启后取首支。
+        listener.applyDefaultChrome(site);
         Server.get().start();
         if (!configureBridge(resolved, reload)) {
             logRuntime(WebThemeRuntimeDiagnostics.Event.FALLBACK,
@@ -1073,33 +1072,18 @@ public class HomeWebController {
     }
 
     public void setToolbar(boolean visible) {
-        if (!Setting.isWebHomeFullscreen()) {
-            listener.setChrome(normalChrome());
-            return;
-        }
+        // 原条件 `!Setting.isWebHomeFullscreen()` 为真时强制 normal chrome，恒为开启后该分支已移除。
         listener.setToolbar(visible);
     }
 
     public void setChrome(JsonObject payload) {
-        if (!Setting.isWebHomeFullscreen()) {
-            listener.setChrome(normalChrome());
-            return;
-        }
+        // 原条件 `!Setting.isWebHomeFullscreen()` 为真时强制 normal chrome，恒为开启后该分支已移除。
         listener.setChrome(payload);
     }
 
     public void restoreChrome() {
-        if (!Setting.isWebHomeFullscreen()) {
-            listener.setChrome(normalChrome());
-            return;
-        }
+        // 原条件 `!Setting.isWebHomeFullscreen()` 为真时强制 normal chrome，恒为开启后该分支已移除。
         listener.restoreChrome();
-    }
-
-    private JsonObject normalChrome() {
-        JsonObject object = new JsonObject();
-        object.addProperty("mode", WebHomeChrome.NORMAL);
-        return object;
     }
 
     public String getViewportJson() {

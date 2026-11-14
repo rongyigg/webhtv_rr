@@ -384,7 +384,6 @@
     <string name="setting_web_home_theme_retry_message">Retry the rolled-back theme version? If its first load fails again, the stable version will be restored automatically.</string>
     <string name="setting_web_home_theme_recovery_success">Theme version updated</string>
     <string name="setting_web_home_theme_recovery_failed">Unable to update the theme version</string>
-    <string name="setting_web_home_fullscreen">WebHome homepage fullscreen</string>
     <string name="playback_remote_sync">Remote sync</string>
     <string name="playback_webhook">Webhook reporting</string>
     <string name="playback_webhook_back">Back</string>
@@ -608,7 +607,6 @@
     <string name="setting_one_key_sync">One-key sync</string>
     <string name="setting_incognito">Incognito mode</string>
     <string name="setting_touch_optimization">Touch optimization</string>
-    <string name="setting_drive_check">Drive link check</string>
     <string name="setting_audio_source">Audio source config</string>
     <string name="setting_novel_source">Novel source config</string>
     <string name="setting_comic_source">Comic source config</string>

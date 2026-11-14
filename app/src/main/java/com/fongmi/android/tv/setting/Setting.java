@@ -482,11 +482,9 @@ public class Setting {
     }
 
     public static boolean isDriveCheck() {
-        return Prefers.getBoolean("drive_check", true);
-    }
-
-    public static void putDriveCheck(boolean driveCheck) {
-        Prefers.put("drive_check", driveCheck);
+        // 增强设置入口已移除，网盘检测固定为开启（原 `Prefers.getBoolean("drive_check", true)`）。
+        // DriveCheck 路由与 HomeWebBridge 能力位继续按“已开启”工作，逻辑不变。
+        return true;
     }
 
     public static int getSiteColumn() {
@@ -560,14 +558,6 @@ public class Setting {
 
     public static void putWebHomeThemeTrustedUrl(String url) {
         Prefers.put("web_home_theme_trusted_url", url);
-    }
-
-    public static boolean isWebHomeFullscreen() {
-        return Prefers.getBoolean("web_home_fullscreen", true);
-    }
-
-    public static void putWebHomeFullscreen(boolean fullscreen) {
-        Prefers.put("web_home_fullscreen", fullscreen);
     }
 
     public static boolean isDebugLog() {

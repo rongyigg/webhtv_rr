@@ -66,7 +66,6 @@ public class SettingEnhanceActivity extends BaseActivity {
     protected void initEvent() {
         mBinding.githubRepo.setOnClickListener(view -> openRepo(URL_GITHUB));
         mBinding.cnbRepo.setOnClickListener(view -> openRepo(URL_CNB));
-        mBinding.driveCheck.setOnClickListener(this::setDriveCheck);
         mBinding.siteName.setOnClickListener(this::setSiteName);
         mBinding.audioSource.setOnClickListener(this::setAudioSource);
         mBinding.shortDramaSource.setOnClickListener(this::setShortDramaSource);
@@ -76,7 +75,6 @@ public class SettingEnhanceActivity extends BaseActivity {
         mBinding.webHomeExtension.setOnClickListener(view -> WebHomeExtensionDialog.show(this, this::setText));
         mBinding.webHomeExtension.setOnLongClickListener(this::clearWebHomeExtension);
         mBinding.webHomeTheme.setOnClickListener(view -> WebHomeThemeDialog.show(this, this::setText));
-        mBinding.webHomeFullscreen.setOnClickListener(this::setWebHomeFullscreen);
         mBinding.shellProxy.setOnClickListener(view -> ShellProxyDialog.show(this, this::setText));
         mBinding.shellProxy.setOnLongClickListener(v -> false);
         mBinding.shellProxyConfig.setVisibility(View.GONE);
@@ -97,8 +95,6 @@ public class SettingEnhanceActivity extends BaseActivity {
                 mBinding.shellProxy,
                 mBinding.shellProxyConfig,
                 mBinding.webHomeTheme,
-                mBinding.webHomeFullscreen,
-                mBinding.driveCheck,
                 mBinding.siteName,
                 mBinding.audioSource,
                 mBinding.shortDramaSource,
@@ -111,7 +107,6 @@ public class SettingEnhanceActivity extends BaseActivity {
 
     private void setText() {
         if (!canSetText()) return;
-        safeSet("driveCheck", mBinding.driveCheckText, () -> getSwitch(Setting.isDriveCheck()));
         safeSet("siteName", mBinding.siteNameText, () -> getString(R.string.setting_site_name_summary, SiteNameStore.count()));
         safeSet("audioSource", mBinding.audioSourceText, () -> getSwitch(!AudioConfig.objectFrom(Setting.getAudioConfig()).getDisplayRules().isEmpty()));
         safeSet("shortDramaSource", mBinding.shortDramaSourceText, () -> getSwitch(!ShortDramaConfig.objectFrom(Setting.getShortDramaConfig()).getDisplayRules().isEmpty()));
@@ -122,7 +117,6 @@ public class SettingEnhanceActivity extends BaseActivity {
             return getSwitch(Setting.isWebHomeExtension()) + " · " + webHomeExtension.readyCount + "/" + webHomeExtension.installedCount;
         });
         safeSet("webHomeTheme", mBinding.webHomeThemeText, () -> WebHomeThemeDialog.summary(this));
-        safeSet("webHomeFullscreen", mBinding.webHomeFullscreenText, () -> getSwitch(Setting.isWebHomeFullscreen()));
         setShellProxyText();
         setCustomCspText();
     }
@@ -179,11 +173,6 @@ public class SettingEnhanceActivity extends BaseActivity {
         CharSequence get();
     }
 
-    private void setDriveCheck(View view) {
-        Setting.putDriveCheck(!Setting.isDriveCheck());
-        mBinding.driveCheckText.setText(getSwitch(Setting.isDriveCheck()));
-    }
-
     private void setDebugLog(View view) {
         Setting.putDebugLog(!Setting.isDebugLog());
         mBinding.debugLogText.setText(getSwitch(Setting.isDebugLog()));
@@ -208,11 +197,6 @@ public class SettingEnhanceActivity extends BaseActivity {
         String state = getSwitch(Setting.isSiteHealthSort());
         if (summary.siteCount <= 0) return state;
         return state + " · " + getString(R.string.site_health_report_setting_summary, summary.siteCount, summary.sampleCount);
-    }
-
-    private void setWebHomeFullscreen(View view) {
-        Setting.putWebHomeFullscreen(!Setting.isWebHomeFullscreen());
-        mBinding.webHomeFullscreenText.setText(getSwitch(Setting.isWebHomeFullscreen()));
     }
 
     private boolean clearSiteHealth(View view) {

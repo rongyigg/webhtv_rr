@@ -5,7 +5,6 @@ import android.text.TextUtils;
 import com.fongmi.android.tv.App;
 import com.fongmi.android.tv.bean.Config;
 import com.fongmi.android.tv.bean.Site;
-import com.fongmi.android.tv.setting.Setting;
 import com.github.catvod.utils.Json;
 import com.github.catvod.utils.Prefers;
 import com.google.gson.JsonObject;
@@ -21,7 +20,7 @@ public final class WebHomeChromeStartup {
     }
 
     public static JsonObject restore(Config config) {
-        if (!Setting.isWebHomeFullscreen()) return null;
+        // 原提前返回条件 `!Setting.isWebHomeFullscreen()` 在 WebHome 全屏恒为开启后永远为 false，已移除。
         if (!matches(config)) return null;
         JsonObject object = parse(Prefers.getString(KEY_CHROME));
         String mode = WebHomeChrome.normalize(Json.safeString(object, "mode"), WebHomeChrome.EDGE);
@@ -29,10 +28,7 @@ public final class WebHomeChromeStartup {
     }
 
     public static void remember(Config config, Site site) {
-        if (!Setting.isWebHomeFullscreen()) {
-            clear();
-            return;
-        }
+        // 原条件 `!Setting.isWebHomeFullscreen()` 为真时 clear 并返回，恒为开启后该分支已移除。
         if (config == null || TextUtils.isEmpty(config.getUrl()) || site == null || !site.hasHomePage()) {
             clear();
             return;
@@ -42,10 +38,7 @@ public final class WebHomeChromeStartup {
     }
 
     public static void remember(Config config, Site site, JsonObject chrome) {
-        if (!Setting.isWebHomeFullscreen()) {
-            clear();
-            return;
-        }
+        // 原条件 `!Setting.isWebHomeFullscreen()` 为真时 clear 并返回，恒为开启后该分支已移除。
         if (config == null || TextUtils.isEmpty(config.getUrl()) || site == null || !site.hasHomePage() || chrome == null) return;
         JsonObject object = chrome.deepCopy();
         String mode = WebHomeChrome.normalize(Json.safeString(object, "mode"), WebHomeChrome.EDGE);
@@ -55,7 +48,7 @@ public final class WebHomeChromeStartup {
     }
 
     public static JsonObject resolve(Config config, Site site) {
-        if (!Setting.isWebHomeFullscreen()) return normal();
+        // 原提前返回 `normal()` 的条件 `!Setting.isWebHomeFullscreen()` 恒为 false，已移除。
         if (site == null) return new JsonObject();
         if (matches(config) && Prefers.getBoolean(KEY_USER)) return parse(Prefers.getString(KEY_CHROME));
         return chromeFromSite(site);
@@ -65,12 +58,6 @@ public final class WebHomeChromeStartup {
         JsonObject object = site.getWebHomeChrome();
         String mode = WebHomeChrome.normalize(site.getChromeMode(), WebHomeChrome.EDGE);
         if (!object.has("mode")) object.addProperty("mode", mode);
-        return object;
-    }
-
-    private static JsonObject normal() {
-        JsonObject object = new JsonObject();
-        object.addProperty("mode", WebHomeChrome.NORMAL);
         return object;
     }
 

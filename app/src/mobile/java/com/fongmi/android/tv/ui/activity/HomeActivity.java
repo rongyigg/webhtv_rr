@@ -350,18 +350,12 @@ public class HomeActivity extends BaseActivity implements NavigationBarView.OnIt
     }
 
     public void applyWebHomeDefaultChrome(Site site) {
-        if (!Setting.isWebHomeFullscreen()) {
-            if (mChrome != null) mChrome.setChrome(normalWebHomeChrome());
-            return;
-        }
+        // 原条件 `!Setting.isWebHomeFullscreen()` 为真时强制 normal chrome，恒为开启后该分支已移除。
         if (mChrome != null) mChrome.applyDefault(WebHomeChromeStartup.resolve(VodConfig.get().getConfig(), site));
     }
 
     public void setWebHomeChrome(JsonObject payload) {
-        if (!Setting.isWebHomeFullscreen()) {
-            if (mChrome != null) mChrome.setChrome(normalWebHomeChrome());
-            return;
-        }
+        // 原条件 `!Setting.isWebHomeFullscreen()` 为真时强制 normal chrome，恒为开启后该分支已移除。
         if (isStartupChrome(payload)) WebHomeChromeStartup.remember(VodConfig.get().getConfig(), VodConfig.get().getHome(), payload);
         if (mChrome != null) mChrome.setChrome(payload);
     }
@@ -375,29 +369,17 @@ public class HomeActivity extends BaseActivity implements NavigationBarView.OnIt
     }
 
     public void restoreWebHomeChrome() {
-        if (!Setting.isWebHomeFullscreen()) {
-            if (mChrome != null) mChrome.setChrome(normalWebHomeChrome());
-            return;
-        }
+        // 原条件 `!Setting.isWebHomeFullscreen()` 为真时强制 normal chrome，恒为开启后该分支已移除。
         if (mChrome != null) mChrome.restore();
     }
 
     public void setWebHomeLegacyToolbar(boolean visible) {
-        if (!Setting.isWebHomeFullscreen()) {
-            if (mChrome != null) mChrome.setChrome(normalWebHomeChrome());
-            return;
-        }
+        // 原条件 `!Setting.isWebHomeFullscreen()` 为真时强制 normal chrome，恒为开启后该分支已移除。
         if (mChrome != null) mChrome.setLegacyToolbar(visible);
     }
 
     public void refreshWebHomeChromeState() {
         onWebHomeChromeChanged(getWebHomeChromeMode());
-    }
-
-    private JsonObject normalWebHomeChrome() {
-        JsonObject object = new JsonObject();
-        object.addProperty("mode", "normal");
-        return object;
     }
 
     public void openVod() {

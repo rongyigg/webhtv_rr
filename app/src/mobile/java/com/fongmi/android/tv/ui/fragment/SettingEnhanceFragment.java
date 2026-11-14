@@ -23,7 +23,6 @@ import com.fongmi.android.tv.setting.ProxySetting;
 import com.fongmi.android.tv.setting.SiteHealthStore;
 import com.fongmi.android.tv.setting.SiteNameStore;
 import com.fongmi.android.tv.ui.activity.FileActivity;
-import com.fongmi.android.tv.ui.activity.HomeActivity;
 import com.fongmi.android.tv.ui.base.BaseFragment;
 import com.fongmi.android.tv.ui.dialog.AudioSourceDialog;
 import com.fongmi.android.tv.ui.dialog.ComicSourceDialog;
@@ -41,7 +40,6 @@ import com.fongmi.android.tv.utils.Notify;
 import com.fongmi.android.tv.utils.PermissionUtil;
 import com.github.catvod.crawler.SpiderDebug;
 import com.fongmi.android.tv.web.ext.WebHomeExtensionRegistry;
-import com.google.gson.JsonObject;
 
 public class SettingEnhanceFragment extends BaseFragment {
 
@@ -82,7 +80,6 @@ public class SettingEnhanceFragment extends BaseFragment {
             }
             return false;
         });
-        mBinding.driveCheck.setOnClickListener(this::setDriveCheck);
         mBinding.siteName.setOnClickListener(this::setSiteName);
         mBinding.localReader.setOnClickListener(this::setLocalReader);
         mBinding.novelSource.setOnClickListener(this::setNovelSource);
@@ -95,7 +92,6 @@ public class SettingEnhanceFragment extends BaseFragment {
         mBinding.webHomeExtension.setOnClickListener(view -> WebHomeExtensionDialog.show(this, this::setText));
         mBinding.webHomeExtension.setOnLongClickListener(this::clearWebHomeExtension);
         mBinding.webHomeTheme.setOnClickListener(view -> WebHomeThemeDialog.show(requireActivity(), this::setText));
-        mBinding.webHomeFullscreen.setOnClickListener(this::setWebHomeFullscreen);
         mBinding.shellProxy.setOnClickListener(view -> ShellProxyDialog.show(this, this::setText));
         mBinding.shellProxy.setOnLongClickListener(v -> false);
         mBinding.shellProxyConfig.setVisibility(View.GONE);
@@ -116,8 +112,6 @@ public class SettingEnhanceFragment extends BaseFragment {
                 mBinding.shellProxy,
                 mBinding.shellProxyConfig,
                 mBinding.webHomeTheme,
-                mBinding.webHomeFullscreen,
-                mBinding.driveCheck,
                 mBinding.siteName,
                 mBinding.localReader,
                 mBinding.novelSource,
@@ -132,7 +126,6 @@ public class SettingEnhanceFragment extends BaseFragment {
 
     private void setText() {
         if (!canSetText()) return;
-        safeSet("driveCheck", mBinding.driveCheckText, () -> getSwitch(Setting.isDriveCheck()));
         safeSet("siteName", mBinding.siteNameText, () -> getString(R.string.setting_site_name_summary, SiteNameStore.count()));
         safeSet("novelSource", mBinding.novelSourceText, () -> getSwitch(!NovelSourceConfig.get().getDisplayRules().isEmpty()));
         safeSet("comicSource", mBinding.comicSourceText, () -> getSwitch(!ComicSourceConfig.get().getDisplayRules().isEmpty()));
@@ -145,7 +138,6 @@ public class SettingEnhanceFragment extends BaseFragment {
             return getSwitch(Setting.isWebHomeExtension()) + " · " + webHomeExtension.readyCount + "/" + webHomeExtension.installedCount;
         });
         safeSet("webHomeTheme", mBinding.webHomeThemeText, () -> WebHomeThemeDialog.summary(requireContext()));
-        safeSet("webHomeFullscreen", mBinding.webHomeFullscreenText, () -> getSwitch(Setting.isWebHomeFullscreen()));
         setShellProxyText();
         setCustomCspText();
     }
@@ -202,11 +194,6 @@ public class SettingEnhanceFragment extends BaseFragment {
         CharSequence get();
     }
 
-    private void setDriveCheck(View view) {
-        Setting.putDriveCheck(!Setting.isDriveCheck());
-        mBinding.driveCheckText.setText(getSwitch(Setting.isDriveCheck()));
-    }
-
     private void setDebugLog(View view) {
         Setting.putDebugLog(!Setting.isDebugLog());
         mBinding.debugLogText.setText(getSwitch(Setting.isDebugLog()));
@@ -245,19 +232,6 @@ public class SettingEnhanceFragment extends BaseFragment {
         String state = getSwitch(Setting.isSiteHealthSort());
         if (summary.siteCount <= 0) return state;
         return state + " · " + getString(R.string.site_health_report_setting_summary, summary.siteCount, summary.sampleCount);
-    }
-
-    private void setWebHomeFullscreen(View view) {
-        Setting.putWebHomeFullscreen(!Setting.isWebHomeFullscreen());
-        mBinding.webHomeFullscreenText.setText(getSwitch(Setting.isWebHomeFullscreen()));
-        if (requireActivity() instanceof HomeActivity activity) {
-            if (!Setting.isWebHomeFullscreen()) {
-                JsonObject object = new JsonObject();
-                object.addProperty("mode", "normal");
-                activity.setWebHomeChrome(object);
-            }
-            activity.refreshWebHomeChromeState();
-        }
     }
 
     private boolean clearSiteHealth(View view) {
