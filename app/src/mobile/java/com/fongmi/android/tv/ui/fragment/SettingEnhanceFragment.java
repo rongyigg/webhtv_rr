@@ -12,10 +12,8 @@ import androidx.annotation.Nullable;
 import androidx.viewbinding.ViewBinding;
 
 import com.fongmi.android.tv.R;
-import com.fongmi.android.tv.bean.AudioConfig;
 import com.fongmi.android.tv.bean.ComicSourceConfig;
 import com.fongmi.android.tv.bean.NovelSourceConfig;
-import com.fongmi.android.tv.bean.ShortDramaConfig;
 import com.fongmi.android.tv.setting.Setting;
 import com.fongmi.android.tv.databinding.FragmentSettingEnhanceBinding;
 import com.fongmi.android.tv.setting.CustomCspSetting;
@@ -24,10 +22,8 @@ import com.fongmi.android.tv.setting.SiteHealthStore;
 import com.fongmi.android.tv.setting.SiteNameStore;
 import com.fongmi.android.tv.ui.activity.FileActivity;
 import com.fongmi.android.tv.ui.base.BaseFragment;
-import com.fongmi.android.tv.ui.dialog.AudioSourceDialog;
 import com.fongmi.android.tv.ui.dialog.ComicSourceDialog;
 import com.fongmi.android.tv.ui.dialog.NovelSourceDialog;
-import com.fongmi.android.tv.ui.dialog.ShortDramaSourceDialog;
 import com.fongmi.android.tv.ui.dialog.CustomCspDialog;
 import com.fongmi.android.tv.ui.dialog.DebugLogDialog;
 import com.fongmi.android.tv.ui.dialog.OneKeySyncDialog;
@@ -81,8 +77,6 @@ public class SettingEnhanceFragment extends BaseFragment {
         mBinding.localReader.setOnClickListener(this::setLocalReader);
         mBinding.novelSource.setOnClickListener(this::setNovelSource);
         mBinding.comicSource.setOnClickListener(this::setComicSource);
-        mBinding.audioSource.setOnClickListener(this::setAudioSource);
-        mBinding.shortDramaSource.setOnClickListener(this::setShortDramaSource);
         mBinding.debugLog.setOnClickListener(this::setDebugLog);
         mBinding.siteHealthSort.setOnClickListener(view -> SiteHealthDialog.show(this, this::setText));
         mBinding.siteHealthSort.setOnLongClickListener(this::clearSiteHealth);
@@ -108,8 +102,6 @@ public class SettingEnhanceFragment extends BaseFragment {
                 mBinding.localReader,
                 mBinding.novelSource,
                 mBinding.comicSource,
-                mBinding.audioSource,
-                mBinding.shortDramaSource,
                 mBinding.siteHealthSort,
                 mBinding.debugLog        };
         for (View view : order) parent.removeView(view);
@@ -121,8 +113,6 @@ public class SettingEnhanceFragment extends BaseFragment {
         safeSet("siteName", mBinding.siteNameText, () -> getString(R.string.setting_site_name_summary, SiteNameStore.count()));
         safeSet("novelSource", mBinding.novelSourceText, () -> getSwitch(!NovelSourceConfig.get().getDisplayRules().isEmpty()));
         safeSet("comicSource", mBinding.comicSourceText, () -> getSwitch(!ComicSourceConfig.get().getDisplayRules().isEmpty()));
-        safeSet("audioSource", mBinding.audioSourceText, () -> getSwitch(!AudioConfig.objectFrom(Setting.getAudioConfig()).getDisplayRules().isEmpty()));
-        safeSet("shortDramaSource", mBinding.shortDramaSourceText, () -> getSwitch(!ShortDramaConfig.objectFrom(Setting.getShortDramaConfig()).getDisplayRules().isEmpty()));
         safeSet("debugLog", mBinding.debugLogText, () -> getSwitch(Setting.isDebugLog()));
         safeSet("siteHealthSort", mBinding.siteHealthSortText, this::getSiteHealthText);
         setShellProxyText();
@@ -198,20 +188,12 @@ public class SettingEnhanceFragment extends BaseFragment {
         startActivity(intent);
     }
 
-    private void setAudioSource(View view) {
-        AudioSourceDialog.create(requireActivity()).onDismiss(this::setText).show();
-    }
-
     private void setNovelSource(View view) {
         NovelSourceDialog.create(requireActivity()).onDismiss(this::setText).show();
     }
 
     private void setComicSource(View view) {
         ComicSourceDialog.create(requireActivity()).onDismiss(this::setText).show();
-    }
-
-    private void setShortDramaSource(View view) {
-        ShortDramaSourceDialog.create(requireActivity()).onDismiss(this::setText).show();
     }
 
     private String getSiteHealthText() {

@@ -11,8 +11,6 @@ import android.widget.TextView;
 import androidx.viewbinding.ViewBinding;
 
 import com.fongmi.android.tv.R;
-import com.fongmi.android.tv.bean.AudioConfig;
-import com.fongmi.android.tv.bean.ShortDramaConfig;
 import com.fongmi.android.tv.setting.Setting;
 import com.fongmi.android.tv.databinding.ActivitySettingEnhanceBinding;
 import com.fongmi.android.tv.setting.CustomCspSetting;
@@ -20,8 +18,6 @@ import com.fongmi.android.tv.setting.ProxySetting;
 import com.fongmi.android.tv.setting.SiteHealthStore;
 import com.fongmi.android.tv.setting.SiteNameStore;
 import com.fongmi.android.tv.ui.base.BaseActivity;
-import com.fongmi.android.tv.ui.dialog.AudioSourceDialog;
-import com.fongmi.android.tv.ui.dialog.ShortDramaSourceDialog;
 import com.fongmi.android.tv.ui.dialog.CustomCspDialog;
 import com.fongmi.android.tv.ui.dialog.DebugLogDialog;
 import com.fongmi.android.tv.ui.dialog.OneKeySyncDialog;
@@ -64,8 +60,6 @@ public class SettingEnhanceActivity extends BaseActivity {
         mBinding.githubRepo.setOnClickListener(view -> openRepo(URL_GITHUB));
         mBinding.cnbRepo.setOnClickListener(view -> openRepo(URL_CNB));
         mBinding.siteName.setOnClickListener(this::setSiteName);
-        mBinding.audioSource.setOnClickListener(this::setAudioSource);
-        mBinding.shortDramaSource.setOnClickListener(this::setShortDramaSource);
         mBinding.debugLog.setOnClickListener(this::setDebugLog);
         mBinding.siteHealthSort.setOnClickListener(view -> SiteHealthDialog.show(this, this::setText));
         mBinding.siteHealthSort.setOnLongClickListener(this::clearSiteHealth);
@@ -88,8 +82,6 @@ public class SettingEnhanceActivity extends BaseActivity {
                 mBinding.shellProxy,
                 mBinding.shellProxyConfig,
                 mBinding.siteName,
-                mBinding.audioSource,
-                mBinding.shortDramaSource,
                 mBinding.siteHealthSort,
                 mBinding.debugLog
         };
@@ -100,8 +92,6 @@ public class SettingEnhanceActivity extends BaseActivity {
     private void setText() {
         if (!canSetText()) return;
         safeSet("siteName", mBinding.siteNameText, () -> getString(R.string.setting_site_name_summary, SiteNameStore.count()));
-        safeSet("audioSource", mBinding.audioSourceText, () -> getSwitch(!AudioConfig.objectFrom(Setting.getAudioConfig()).getDisplayRules().isEmpty()));
-        safeSet("shortDramaSource", mBinding.shortDramaSourceText, () -> getSwitch(!ShortDramaConfig.objectFrom(Setting.getShortDramaConfig()).getDisplayRules().isEmpty()));
         safeSet("debugLog", mBinding.debugLogText, () -> getSwitch(Setting.isDebugLog()));
         safeSet("siteHealthSort", mBinding.siteHealthSortText, this::getSiteHealthText);
         setShellProxyText();
@@ -169,14 +159,6 @@ public class SettingEnhanceActivity extends BaseActivity {
 
     private void setSiteName(View view) {
         SiteNameDialog.create(this).onChanged(this::setText).show();
-    }
-
-    private void setAudioSource(View view) {
-        AudioSourceDialog.create(this).onDismiss(this::setText).show();
-    }
-
-    private void setShortDramaSource(View view) {
-        ShortDramaSourceDialog.create(this).onDismiss(this::setText).show();
     }
 
     private String getSiteHealthText() {
