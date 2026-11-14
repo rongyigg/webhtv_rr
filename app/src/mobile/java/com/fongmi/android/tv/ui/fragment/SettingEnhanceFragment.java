@@ -18,7 +18,6 @@ import com.fongmi.android.tv.setting.Setting;
 import com.fongmi.android.tv.databinding.FragmentSettingEnhanceBinding;
 import com.fongmi.android.tv.setting.CustomCspSetting;
 import com.fongmi.android.tv.setting.ProxySetting;
-import com.fongmi.android.tv.setting.SiteHealthStore;
 import com.fongmi.android.tv.setting.SiteNameStore;
 import com.fongmi.android.tv.ui.activity.FileActivity;
 import com.fongmi.android.tv.ui.base.BaseFragment;
@@ -28,7 +27,6 @@ import com.fongmi.android.tv.ui.dialog.CustomCspDialog;
 import com.fongmi.android.tv.ui.dialog.DebugLogDialog;
 import com.fongmi.android.tv.ui.dialog.OneKeySyncDialog;
 import com.fongmi.android.tv.ui.dialog.ShellProxyDialog;
-import com.fongmi.android.tv.ui.dialog.SiteHealthDialog;
 import com.fongmi.android.tv.ui.dialog.SiteNameDialog;
 import com.fongmi.android.tv.utils.Notify;
 import com.fongmi.android.tv.utils.PermissionUtil;
@@ -78,8 +76,6 @@ public class SettingEnhanceFragment extends BaseFragment {
         mBinding.novelSource.setOnClickListener(this::setNovelSource);
         mBinding.comicSource.setOnClickListener(this::setComicSource);
         mBinding.debugLog.setOnClickListener(this::setDebugLog);
-        mBinding.siteHealthSort.setOnClickListener(view -> SiteHealthDialog.show(this, this::setText));
-        mBinding.siteHealthSort.setOnLongClickListener(this::clearSiteHealth);
         mBinding.shellProxy.setOnClickListener(view -> ShellProxyDialog.show(this, this::setText));
         mBinding.shellProxy.setOnLongClickListener(v -> false);
         mBinding.shellProxyConfig.setVisibility(View.GONE);
@@ -102,7 +98,6 @@ public class SettingEnhanceFragment extends BaseFragment {
                 mBinding.localReader,
                 mBinding.novelSource,
                 mBinding.comicSource,
-                mBinding.siteHealthSort,
                 mBinding.debugLog        };
         for (View view : order) parent.removeView(view);
         for (View view : order) parent.addView(view);
@@ -114,7 +109,6 @@ public class SettingEnhanceFragment extends BaseFragment {
         safeSet("novelSource", mBinding.novelSourceText, () -> getSwitch(!NovelSourceConfig.get().getDisplayRules().isEmpty()));
         safeSet("comicSource", mBinding.comicSourceText, () -> getSwitch(!ComicSourceConfig.get().getDisplayRules().isEmpty()));
         safeSet("debugLog", mBinding.debugLogText, () -> getSwitch(Setting.isDebugLog()));
-        safeSet("siteHealthSort", mBinding.siteHealthSortText, this::getSiteHealthText);
         setShellProxyText();
         setCustomCspText();
     }
@@ -194,19 +188,6 @@ public class SettingEnhanceFragment extends BaseFragment {
 
     private void setComicSource(View view) {
         ComicSourceDialog.create(requireActivity()).onDismiss(this::setText).show();
-    }
-
-    private String getSiteHealthText() {
-        SiteHealthStore.Summary summary = SiteHealthStore.summary();
-        String state = getSwitch(Setting.isSiteHealthSort());
-        if (summary.siteCount <= 0) return state;
-        return state + " · " + getString(R.string.site_health_report_setting_summary, summary.siteCount, summary.sampleCount);
-    }
-
-    private boolean clearSiteHealth(View view) {
-        SiteHealthStore.clear();
-        Notify.show(R.string.site_health_clear_done);
-        return true;
     }
 
     private void openRepo(String url) {

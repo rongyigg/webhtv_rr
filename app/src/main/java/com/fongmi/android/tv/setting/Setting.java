@@ -508,7 +508,9 @@ public class Setting {
     }
 
     public static boolean isSiteHealthSort() {
-        return Prefers.getBoolean("site_health_sort", true);
+        // 增强设置入口已移除，站点健康排序固定为关闭（原 `Prefers.getBoolean("site_health_sort", true)`）。
+        // 所有排序读取点经 SiteHealthStore 的开关守卫退化为原序，采集与报告不受影响。
+        return false;
     }
 
     public static void putSiteHealthSort(boolean sort) {
@@ -516,7 +518,8 @@ public class Setting {
     }
 
     public static boolean isSiteHealthDialogSort() {
-        return Prefers.getBoolean("site_health_dialog_sort");
+        // 增强设置入口已移除，站点列表健康排序固定为关闭（原 `Prefers.getBoolean("site_health_dialog_sort")`，与原默认一致）。
+        return false;
     }
 
     public static void putSiteHealthDialogSort(boolean sort) {

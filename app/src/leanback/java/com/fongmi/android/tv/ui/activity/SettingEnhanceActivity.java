@@ -15,14 +15,12 @@ import com.fongmi.android.tv.setting.Setting;
 import com.fongmi.android.tv.databinding.ActivitySettingEnhanceBinding;
 import com.fongmi.android.tv.setting.CustomCspSetting;
 import com.fongmi.android.tv.setting.ProxySetting;
-import com.fongmi.android.tv.setting.SiteHealthStore;
 import com.fongmi.android.tv.setting.SiteNameStore;
 import com.fongmi.android.tv.ui.base.BaseActivity;
 import com.fongmi.android.tv.ui.dialog.CustomCspDialog;
 import com.fongmi.android.tv.ui.dialog.DebugLogDialog;
 import com.fongmi.android.tv.ui.dialog.OneKeySyncDialog;
 import com.fongmi.android.tv.ui.dialog.ShellProxyDialog;
-import com.fongmi.android.tv.ui.dialog.SiteHealthDialog;
 import com.fongmi.android.tv.ui.dialog.SiteNameDialog;
 import com.fongmi.android.tv.utils.Notify;
 import com.fongmi.android.tv.utils.PermissionUtil;
@@ -61,8 +59,6 @@ public class SettingEnhanceActivity extends BaseActivity {
         mBinding.cnbRepo.setOnClickListener(view -> openRepo(URL_CNB));
         mBinding.siteName.setOnClickListener(this::setSiteName);
         mBinding.debugLog.setOnClickListener(this::setDebugLog);
-        mBinding.siteHealthSort.setOnClickListener(view -> SiteHealthDialog.show(this, this::setText));
-        mBinding.siteHealthSort.setOnLongClickListener(this::clearSiteHealth);
         mBinding.shellProxy.setOnClickListener(view -> ShellProxyDialog.show(this, this::setText));
         mBinding.shellProxy.setOnLongClickListener(v -> false);
         mBinding.shellProxyConfig.setVisibility(View.GONE);
@@ -82,7 +78,6 @@ public class SettingEnhanceActivity extends BaseActivity {
                 mBinding.shellProxy,
                 mBinding.shellProxyConfig,
                 mBinding.siteName,
-                mBinding.siteHealthSort,
                 mBinding.debugLog
         };
         for (View view : order) parent.removeView(view);
@@ -93,7 +88,6 @@ public class SettingEnhanceActivity extends BaseActivity {
         if (!canSetText()) return;
         safeSet("siteName", mBinding.siteNameText, () -> getString(R.string.setting_site_name_summary, SiteNameStore.count()));
         safeSet("debugLog", mBinding.debugLogText, () -> getSwitch(Setting.isDebugLog()));
-        safeSet("siteHealthSort", mBinding.siteHealthSortText, this::getSiteHealthText);
         setShellProxyText();
         setCustomCspText();
     }
@@ -159,19 +153,6 @@ public class SettingEnhanceActivity extends BaseActivity {
 
     private void setSiteName(View view) {
         SiteNameDialog.create(this).onChanged(this::setText).show();
-    }
-
-    private String getSiteHealthText() {
-        SiteHealthStore.Summary summary = SiteHealthStore.summary();
-        String state = getSwitch(Setting.isSiteHealthSort());
-        if (summary.siteCount <= 0) return state;
-        return state + " · " + getString(R.string.site_health_report_setting_summary, summary.siteCount, summary.sampleCount);
-    }
-
-    private boolean clearSiteHealth(View view) {
-        SiteHealthStore.clear();
-        Notify.show(R.string.site_health_clear_done);
-        return true;
     }
 
     private void openRepo(String url) {
